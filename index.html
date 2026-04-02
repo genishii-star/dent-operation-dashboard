@@ -1974,7 +1974,7 @@ function renderGroupedPropertyView(months, area, excludeKpi, overall) {
     const ownerName = props[0].ownerName || '';
     const areaName = props[0].area || '';
 
-    return `<tr class="clickable" onclick="toggleGroupedDrill('${base}')">
+    return `<tr class="clickable" onclick="toggleGroupedDrill('${base}', this)">
       <td>${base}（${props.length}室）</td><td>${ownerName}</td><td>${areaName}</td><td>${props.length}</td>
       <td>${fmtPct(occ)}</td><td>${fmtYenFull(Math.round(adr))}</td><td>${fmtYenFull(Math.round(revpar))}</td>
       <td>${totalNights}泊</td><td>${fmtYenFull(totalSales)}</td><td>${fmtYenFull(totalReceived)}</td>
@@ -1982,16 +1982,19 @@ function renderGroupedPropertyView(months, area, excludeKpi, overall) {
   }).join('');
 }
 
-function toggleGroupedDrill(seriesBase) {
-  const container = document.getElementById('grouped-drill-container');
-  if (activeGroupedDrill === seriesBase) {
+function toggleGroupedDrill(seriesBase, clickedRow) {
+  // 既存のドリルダウン行を削除
+  const existing = document.getElementById('grouped-drill-row');
+  if (existing) {
     destroyDrillCharts('grp');
-    container.innerHTML = '';
+    existing.remove();
+  }
+
+  if (activeGroupedDrill === seriesBase) {
     activeGroupedDrill = null;
     return;
   }
   activeGroupedDrill = seriesBase;
-  destroyDrillCharts('grp');
 
   const months = getSelectedMonths('property');
   const area = currentFilters.propertyArea;
@@ -2026,7 +2029,21 @@ function toggleGroupedDrill(seriesBase) {
   const ownerName = seriesProps[0] ? seriesProps[0].ownerName || '' : '';
   const areaName = seriesProps[0] ? seriesProps[0].area || '' : '';
 
-  container.innerHTML = `<div class="drill-down show">
+  // クリックした行の下にドリルダウン行を挿入
+  const drillRow = document.createElement('tr');
+  drillRow.id = 'grouped-drill-row';
+  const drillCell = document.createElement('td');
+  drillCell.colSpan = 10;
+  drillCell.style.padding = '0';
+  drillRow.appendChild(drillCell);
+
+  if (clickedRow) {
+    clickedRow.insertAdjacentElement('afterend', drillRow);
+  } else {
+    document.getElementById('grouped-property-table').appendChild(drillRow);
+  }
+
+  drillCell.innerHTML = `<div class="drill-down show">
     <h3>${seriesBase} シリーズ <span style="font-size:13px;color:#666;font-weight:400;">(${ownerName} / ${areaName} / ${seriesProps.length}室)</span></h3>
     <div class="kpi-grid-5" style="margin-bottom:16px;">
       <div class="kpi-card"><div class="label">OCC</div><div class="value">${fmtPct(aggOcc)}</div></div>
@@ -2177,6 +2194,7 @@ function toggleGroupedDrill(seriesBase) {
     }
   }, 100);
   setTimeout(initSortableHeaders, 150);
+  drillRow.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
 // ============================================================
