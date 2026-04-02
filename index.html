@@ -1899,11 +1899,13 @@ function renderGroupedPropertyView(months, area, excludeKpi, overall) {
 function toggleGroupedDrill(seriesBase) {
   const container = document.getElementById('grouped-drill-container');
   if (activeGroupedDrill === seriesBase) {
+    destroyDrillCharts('grp');
     container.innerHTML = '';
     activeGroupedDrill = null;
     return;
   }
   activeGroupedDrill = seriesBase;
+  destroyDrillCharts('grp');
 
   const months = getSelectedMonths('property');
   const area = currentFilters.propertyArea;
@@ -1924,14 +1926,129 @@ function toggleGroupedDrill(seriesBase) {
     </tr>`;
   }).join('');
 
+  // Aggregate totals
+  const totalDays = months.reduce((s, ym) => s + getDaysInMonth(ym), 0);
+  let totalNights = 0, totalSales = 0, totalReceived = 0, totalAvailable = 0;
+  seriesProps.forEach(p => {
+    const stats = overall.stats.find(s => s.name === p.name);
+    if (stats) { totalNights += stats.nights; totalSales += stats.sales; totalReceived += stats.received; }
+    totalAvailable += totalDays * (p.rooms || 1);
+  });
+  const aggOcc = totalAvailable > 0 ? (totalNights / totalAvailable) * 100 : 0;
+  const aggAdr = totalNights > 0 ? totalSales / totalNights : 0;
+
+  const ownerName = seriesProps[0] ? seriesProps[0].ownerName || '' : '';
+  const areaName = seriesProps[0] ? seriesProps[0].area || '' : '';
+
   container.innerHTML = `<div class="drill-down show">
-    <h3>${seriesBase} シリーズ内訳</h3>
-    <div class="table-wrap"><table>
+    <h3>${seriesBase} シリーズ <span style="font-size:13px;color:#666;font-weight:400;">(${ownerName} / ${areaName} / ${seriesProps.length}室)</span></h3>
+    <div class="kpi-grid-5" style="margin-bottom:16px;">
+      <div class="kpi-card"><div class="label">OCC</div><div class="value">${fmtPct(aggOcc)}</div></div>
+      <div class="kpi-card"><div class="label">ADR</div><div class="value">${fmtYenFull(Math.round(aggAdr))}</div></div>
+      <div class="kpi-card"><div class="label">販売泊数</div><div class="value">${totalNights}泊</div></div>
+      <div class="kpi-card"><div class="label">販売金額</div><div class="value">${fmtYen(totalSales)}</div></div>
+      <div class="kpi-card"><div class="label">受取金</div><div class="value">${fmtYen(totalReceived)}</div></div>
+    </div>
+    <div class="chart-grid">
+      <div class="card"><h2>月別 販売金額/OCC推移</h2><canvas id="grpChartSalesOcc"></canvas></div>
+      <div class="card"><h2>月別 販売金額/ADR推移</h2><canvas id="grpChartSalesAdr"></canvas></div>
+      <div class="card"><h2>チャネル別売上構成比</h2><canvas id="grpChartChannel"></canvas></div>
+    </div>
+    <div class="card"><h2>部屋別内訳</h2><div class="table-wrap"><table>
       <thead><tr><th>部屋</th><th>OCC</th><th>ADR</th><th>RevPAR</th><th>販売泊数</th><th>販売金額</th><th>受取金</th></tr></thead>
       <tbody>${rows}</tbody>
-    </table></div>
+    </table></div></div>
   </div>`;
-  setTimeout(initSortableHeaders, 50);
+
+  setTimeout(() => {
+    const now = new Date();
+    const curMonth = now.getMonth() + 1;
+    const curYear = now.getFullYear();
+    const monthLabels = [];
+    const occData = [];
+    const adrData = [];
+    const salesData = [];
+
+    for (let i = -5; i <= 6; i++) {
+      const d = new Date(curYear, curMonth - 1 + i, 1);
+      const m = d.getMonth() + 1;
+      const y = d.getFullYear();
+      const mym = `${y}-${String(m).padStart(2, '0')}`;
+      monthLabels.push(`${m}月`);
+      // Aggregate stats across all series properties
+      let mNights = 0, mSales = 0, mAvail = 0;
+      seriesProps.forEach(p => {
+        const s = computePropertyStats(p.name, mym);
+        if (s) { mNights += s.nights; mSales += s.sales; }
+        mAvail += getDaysInMonth(mym) * (p.rooms || 1);
+      });
+      const mOcc = mAvail > 0 ? (mNights / mAvail) * 100 : 0;
+      const mAdr = mNights > 0 ? mSales / mNights : 0;
+      occData.push(mOcc);
+      adrData.push(mAdr);
+      salesData.push(mSales);
+    }
+    const currentIdx = 5;
+
+    const blueBarColors = salesData.map((_, i) => i < currentIdx ? 'rgba(74,144,217,0.2)' : i === currentIdx ? 'rgba(74,144,217,0.5)' : 'rgba(74,144,217,0.1)');
+    const orangeBarColors = salesData.map((_, i) => i < currentIdx ? 'rgba(245,166,35,0.2)' : i === currentIdx ? 'rgba(245,166,35,0.5)' : 'rgba(245,166,35,0.1)');
+    const barBorders = salesData.map((_, i) => i > currentIdx ? 'rgba(0,0,0,0.06)' : 'transparent');
+    const barBorderWidths = salesData.map((_, i) => i > currentIdx ? 1 : 0);
+
+    // Chart 1: Sales + OCC
+    const ctx1 = document.getElementById('grpChartSalesOcc');
+    if (ctx1) {
+      chartInstances['grpSalesOcc'] = new Chart(ctx1, {
+        type: 'bar',
+        data: { labels: monthLabels, datasets: [
+          { type: 'line', label: 'OCC (%)', data: occData, borderColor: CHART_COLORS.blue, backgroundColor: 'rgba(74,144,217,0.08)', fill: true, yAxisID: 'y1', tension: 0.4, pointBorderColor: CHART_COLORS.blue },
+          { type: 'bar', label: '販売金額', data: salesData, backgroundColor: blueBarColors, borderColor: barBorders, borderWidth: barBorderWidths, yAxisID: 'y' }
+        ]},
+        options: { responsive: true, animation: { duration: 600, easing: 'easeOutQuart' }, plugins: { legend: { display: true } }, scales: { x: { grid: { display: false } }, y: { position: 'left', beginAtZero: true, title: { display: true, text: '販売金額 (¥)', font: { size: 11 } }, ticks: { callback: v => '¥' + (v/10000).toFixed(0) + '万' } }, y1: { position: 'right', min: 0, max: 100, grid: { drawOnChartArea: false }, title: { display: true, text: 'OCC (%)', font: { size: 11 } } } } }
+      });
+    }
+
+    // Chart 2: Sales + ADR
+    const ctx2 = document.getElementById('grpChartSalesAdr');
+    if (ctx2) {
+      chartInstances['grpSalesAdr'] = new Chart(ctx2, {
+        type: 'bar',
+        data: { labels: monthLabels, datasets: [
+          { type: 'line', label: 'ADR (¥)', data: adrData, borderColor: CHART_COLORS.orange, backgroundColor: 'rgba(245,166,35,0.08)', fill: true, yAxisID: 'y1', tension: 0.4, pointBorderColor: CHART_COLORS.orange },
+          { type: 'bar', label: '販売金額', data: salesData, backgroundColor: orangeBarColors, borderColor: barBorders, borderWidth: barBorderWidths, yAxisID: 'y' }
+        ]},
+        options: { responsive: true, animation: { duration: 600, easing: 'easeOutQuart' }, plugins: { legend: { display: true } }, scales: { x: { grid: { display: false } }, y: { position: 'left', beginAtZero: true, title: { display: true, text: '販売金額 (¥)', font: { size: 11 } }, ticks: { callback: v => '¥' + (v/10000).toFixed(0) + '万' } }, y1: { position: 'right', beginAtZero: true, grid: { drawOnChartArea: false }, title: { display: true, text: 'ADR (¥)', font: { size: 11 } }, ticks: { callback: v => '¥' + v.toLocaleString() } } } }
+      });
+    }
+
+    // Chart 3: Channel breakdown (aggregate across series)
+    const ym = getSelectedMonth('property');
+    const channelAgg = {};
+    seriesProps.forEach(p => {
+      const s = computePropertyStats(p.name, ym);
+      if (s && s.channels) {
+        Object.entries(s.channels).forEach(([ch, v]) => {
+          if (!channelAgg[ch]) channelAgg[ch] = 0;
+          channelAgg[ch] += v.sales;
+        });
+      }
+    });
+    const totalChSales = Object.values(channelAgg).reduce((s, v) => s + v, 0);
+    const sorted = Object.entries(channelAgg).sort((a, b) => b[1] - a[1]);
+    const channelLabels = sorted.map(([k]) => k);
+    const channelPct = sorted.map(([, v]) => totalChSales > 0 ? (v / totalChSales) * 100 : 0);
+    const channelColors = PALETTE;
+
+    const ctx3 = document.getElementById('grpChartChannel');
+    if (ctx3 && channelLabels.length > 0) {
+      chartInstances['grpChannel'] = new Chart(ctx3, {
+        type: 'bar',
+        data: { labels: channelLabels, datasets: [{ label: '売上構成比', data: channelPct, backgroundColor: channelColors.slice(0, channelLabels.length).map(c => c + 'CC'), hoverBackgroundColor: channelColors.slice(0, channelLabels.length) }] },
+        options: { indexAxis: 'y', responsive: true, animation: { duration: 600, easing: 'easeOutQuart' }, plugins: { legend: { display: false }, tooltip: { callbacks: { label: ctx => ctx.parsed.x.toFixed(1) + '%' } } }, scales: { x: { beginAtZero: true, max: 100, grid: { display: false }, ticks: { callback: v => v + '%' } }, y: { grid: { display: false } } } }
+      });
+    }
+  }, 100);
+  setTimeout(initSortableHeaders, 150);
 }
 
 // ============================================================
