@@ -128,6 +128,24 @@
     .login-box button { width: 100%; padding: 12px; background: #1d1d1f; color: white; border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer; }
     .login-box button:hover { background: #333; }
     .login-error { color: #ff3b30; font-size: 12px; margin-bottom: 12px; display: none; }
+
+    #feedback-btn { position: fixed; bottom: 24px; right: 24px; z-index: 8000; background: #1d1d1f; color: white; border: none; width: 48px; height: 48px; border-radius: 50%; font-size: 20px; cursor: pointer; box-shadow: 0 4px 16px rgba(0,0,0,0.2); transition: transform 0.15s, background 0.15s; display: flex; align-items: center; justify-content: center; }
+    #feedback-btn:hover { transform: scale(1.1); background: #333; }
+    #feedback-modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; z-index: 9000; background: rgba(0,0,0,0.4); align-items: center; justify-content: center; }
+    #feedback-modal.show { display: flex; }
+    .feedback-box { background: white; border-radius: 16px; padding: 28px; width: 400px; max-width: 90vw; box-shadow: 0 8px 32px rgba(0,0,0,0.15); }
+    .feedback-box h3 { font-size: 16px; margin-bottom: 4px; }
+    .feedback-box .sub { font-size: 12px; color: #999; margin-bottom: 16px; }
+    .feedback-box input, .feedback-box textarea, .feedback-box select { width: 100%; padding: 10px 14px; border: 1px solid #ddd; border-radius: 8px; font-size: 13px; margin-bottom: 10px; font-family: inherit; }
+    .feedback-box textarea { height: 100px; resize: vertical; }
+    .feedback-box select { appearance: auto; }
+    .feedback-box .btn-row { display: flex; gap: 8px; justify-content: flex-end; }
+    .feedback-box .btn-row button { padding: 10px 20px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; border: none; }
+    .feedback-box .btn-cancel { background: #f0f0f0; color: #666; }
+    .feedback-box .btn-send { background: #007aff; color: white; }
+    .feedback-box .btn-send:hover { background: #0063d1; }
+    .feedback-box .btn-send:disabled { background: #ccc; cursor: not-allowed; }
+    .feedback-sent { color: #34c759; font-size: 13px; font-weight: 600; text-align: center; padding: 20px 0; }
   </style>
 </head>
 <body>
@@ -146,6 +164,36 @@
   <div class="spinner"></div>
   <div class="loading-text">データを読み込んでいます...</div>
   <div class="loading-detail" id="loading-detail">スプレッドシートに接続中</div>
+</div>
+
+<button id="feedback-btn" onclick="openFeedback()" title="フィードバック">&#9993;</button>
+<div id="feedback-modal">
+  <div class="feedback-box">
+    <h3>フィードバック</h3>
+    <div class="sub">数字の誤りや改善要望をSlackに送信します</div>
+    <input type="text" id="fb-name" placeholder="名前">
+    <select id="fb-tab">
+      <option value="">タブ: 現在のタブ</option>
+      <option value="全体概況">全体概況</option>
+      <option value="オーナー別分析">オーナー別分析</option>
+      <option value="物件別分析">物件別分析</option>
+      <option value="予約管理">予約管理</option>
+      <option value="売上・稼働">売上・稼働</option>
+      <option value="レビュー">レビュー</option>
+    </select>
+    <select id="fb-type">
+      <option value="数字がおかしい">数字がおかしい</option>
+      <option value="改善要望">改善要望</option>
+      <option value="バグ報告">バグ報告</option>
+      <option value="その他">その他</option>
+    </select>
+    <textarea id="fb-message" placeholder="詳細を入力..."></textarea>
+    <div class="btn-row">
+      <button class="btn-cancel" onclick="closeFeedback()">キャンセル</button>
+      <button class="btn-send" id="fb-send" onclick="sendFeedback()">送信</button>
+    </div>
+    <div id="fb-result"></div>
+  </div>
 </div>
 
 <header>
@@ -1008,10 +1056,10 @@ function computePropertyStats(propName, ym) {
     dailyDates.add(date);
   });
 
-  // 予約データから未来分を追加（propCodeで部屋単位マッチ）
+  // 予約データから未来分を追加（propCode/property/propNameでマッチ）
   const propReservations = reservations.filter(r => {
     if (r.status === 'キャンセル' || r.status === 'システムキャンセル') return false;
-    return r.propCode === propName;
+    return r.propCode === propName || r.property === propName || (prop && r.property === prop.propName);
   });
 
   let futureNights = 0;
@@ -1020,30 +1068,23 @@ function computePropertyStats(propName, ym) {
 
   propReservations.forEach(r => {
     if (!r.checkin || !r.checkout) return;
-    // チェックイン〜チェックアウト間の各日を確認
+    // チェックイン〜チェックアウト間の各日を確認し、この月の未来泊数をカウント
     const ci = new Date(r.checkin);
     const co = new Date(r.checkout);
+    let monthNights = 0;
     for (let d = new Date(ci); d < co; d.setDate(d.getDate() + 1)) {
       const ds = d.toISOString().split('T')[0];
-      // この月の範囲内、かつ今日より後、かつ日次データにない日
       if (ds >= monthStart && ds <= monthEnd && ds > today && !dailyDates.has(ds)) {
-        futureNights++;
-        dailyDates.add(ds); // 重複防止
+        monthNights++;
+        dailyDates.add(ds);
       }
     }
-    // 予約全体の泊数に対する月内未来泊の按分で売上を推計
-    if (futureNights > 0 && r.nights > 0) {
-      // 按分は予約単位で計算が必要なので、簡易的に均等配分
+    futureNights += monthNights;
+    // 売上・受取金を月内泊数で按分
+    if (monthNights > 0 && r.nights > 0) {
+      futureSales += (r.sales || 0) * (monthNights / r.nights);
+      futureReceived += (r.received || 0) * (monthNights / r.nights);
     }
-  });
-
-  // 売上は予約データからチェックイン月ベースで補完
-  propReservations.forEach(r => {
-    if (!r.checkin) return;
-    if (getYearMonth(r.checkin) !== ym) return;
-    if (r.checkin <= today) return; // 過去分は日次データにある
-    futureSales += r.sales || 0;
-    futureReceived += r.received || 0;
   });
 
   bookedDays += futureNights;
@@ -1610,6 +1651,7 @@ function destroyDrillCharts(prefix) {
   if (chartInstances[prefix+'SalesOcc']) { chartInstances[prefix+'SalesOcc'].destroy(); delete chartInstances[prefix+'SalesOcc']; }
   if (chartInstances[prefix+'SalesAdr']) { chartInstances[prefix+'SalesAdr'].destroy(); delete chartInstances[prefix+'SalesAdr']; }
   if (chartInstances[prefix+'Channel']) { chartInstances[prefix+'Channel'].destroy(); delete chartInstances[prefix+'Channel']; }
+  if (chartInstances[prefix+'Nationality']) { chartInstances[prefix+'Nationality'].destroy(); delete chartInstances[prefix+'Nationality']; }
 }
 
 // ============================================================
@@ -1623,7 +1665,8 @@ function renderPropertyDetail(container, propertyName, prefix) {
 
   // Get reservations for this property
   const propObj = properties.find(p => p.name === propertyName);
-  const propResv = reservations.filter(r => r.propCode === propertyName || r.property === propertyName || (propObj && r.property === propObj.propName)).slice(0, 10);
+  const propResvAll = reservations.filter(r => r.propCode === propertyName || r.property === propertyName || (propObj && r.property === propObj.propName));
+  const propResv = propResvAll.slice(0, 10);
   let resvRows = propResv.map(r => `<tr><td>${r.date}</td><td>${r.channel}</td><td>${r.guest}</td><td>${r.checkin}</td><td>${r.checkout}</td><td>${r.nights}泊</td><td>${fmtYenFull(r.sales)}</td><td>${r.status}</td></tr>`).join('');
   if (!resvRows) resvRows = '<tr><td colspan="8" style="color:#999;text-align:center;">データなし</td></tr>';
 
@@ -1635,6 +1678,7 @@ function renderPropertyDetail(container, propertyName, prefix) {
       <div class="card"><h2>月別 販売金額/OCC推移</h2><canvas id="${prefix}ChartSalesOcc"></canvas></div>
       <div class="card"><h2>月別 販売金額/ADR推移</h2><canvas id="${prefix}ChartSalesAdr"></canvas></div>
       <div class="card"><h2>チャネル別売上構成比</h2><canvas id="${prefix}ChartChannel"></canvas></div>
+      <div class="card"><h2>ゲスト国籍別</h2><canvas id="${prefix}ChartNationality"></canvas></div>
       <div class="card" id="${prefix}RecentBookings"></div>
     </div>
     <div class="card"><h2>予約一覧</h2><div class="table-wrap"><table>
@@ -1683,7 +1727,7 @@ function renderPropertyDetail(container, propertyName, prefix) {
             { type: 'bar', label: '販売金額', data: salesData, backgroundColor: blueBarColors, borderColor: barBorders, borderWidth: barBorderWidths, yAxisID: 'y' }
           ]
         },
-        options: { responsive: true, animation: { duration: 600, easing: 'easeOutQuart' }, plugins: { legend: { display: true } }, scales: { x: { grid: { display: false } }, y: { position: 'left', beginAtZero: true, title: { display: true, text: '販売金額 (¥)', font: { size: 11 } }, ticks: { callback: v => '¥' + (v/10000).toFixed(0) + '万' } }, y1: { position: 'right', min: 0, max: 100, grid: { drawOnChartArea: false }, title: { display: true, text: 'OCC (%)', font: { size: 11 } } } } }
+        options: { responsive: true, animation: { duration: 600, easing: 'easeOutQuart' }, plugins: { legend: { display: true } }, scales: { x: { grid: { display: false } }, y: { position: 'left', beginAtZero: true, title: { display: true, text: '販売金額 (¥)', font: { size: 11 } }, ticks: { callback: v => '¥' + (v/10000).toFixed(0) + '万' } }, y1: { position: 'right', min: 0, max: 110, grid: { drawOnChartArea: false }, title: { display: true, text: 'OCC (%)', font: { size: 11 } } } } }
       });
     }
 
@@ -1720,6 +1764,43 @@ function renderPropertyDetail(container, propertyName, prefix) {
           options: { indexAxis: 'y', responsive: true, animation: { duration: 600, easing: 'easeOutQuart' }, plugins: { legend: { display: false }, tooltip: { callbacks: { label: ctx => ctx.parsed.x.toFixed(1) + '%' } } }, scales: { x: { beginAtZero: true, max: 100, grid: { display: false }, ticks: { callback: v => v + '%' } }, y: { grid: { display: false } } } }
         });
       }
+    }
+
+    // Nationality breakdown
+    const natAgg = {};
+    propResvAll.forEach(r => {
+      if (r.status === 'システムキャンセル') return;
+      const nat = r.nationality || '不明';
+      if (!natAgg[nat]) natAgg[nat] = { count: 0, sales: 0 };
+      natAgg[nat].count++;
+      natAgg[nat].sales += r.sales || 0;
+    });
+    const natTotal = Object.values(natAgg).reduce((s, v) => s + v.count, 0);
+    const natSorted = Object.entries(natAgg).sort((a, b) => b[1].count - a[1].count);
+    // 上位5件 + その他
+    const natTop = natSorted.slice(0, 5);
+    const natOthers = natSorted.slice(5);
+    const natOtherCount = natOthers.reduce((s, [, v]) => s + v.count, 0);
+    if (natOtherCount > 0) natTop.push(['その他', { count: natOtherCount, sales: 0 }]);
+    const natLabels = natTop.map(([k]) => k);
+    const natPct = natTop.map(([, v]) => natTotal > 0 ? (v.count / natTotal) * 100 : 0);
+
+    const ctxNat = document.getElementById(prefix+'ChartNationality');
+    if (ctxNat && natLabels.length > 0) {
+      chartInstances[prefix+'Nationality'] = new Chart(ctxNat, {
+        type: 'bar',
+        data: { labels: natLabels, datasets: [{ label: '予約数構成比', data: natPct, backgroundColor: channelColors.slice(0, natLabels.length).map(c => c + 'CC'), hoverBackgroundColor: channelColors.slice(0, natLabels.length) }] },
+        options: { indexAxis: 'y', responsive: true, animation: { duration: 600, easing: 'easeOutQuart' }, plugins: { legend: { display: false }, tooltip: { callbacks: {
+          title: ctx => ctx[0].label,
+          afterBody: ctx => {
+            if (ctx[0].label === 'その他') {
+              return natOthers.map(([k, v]) => `  ${k}: ${(natTotal > 0 ? (v.count / natTotal) * 100 : 0).toFixed(1)}% (${v.count}件)`);
+            }
+            return [];
+          },
+          label: ctx => ctx.parsed.x.toFixed(1) + '% (' + natTop[ctx.dataIndex][1].count + '件)'
+        } } }, scales: { x: { beginAtZero: true, max: 100, grid: { display: false }, ticks: { callback: v => v + '%' } }, y: { grid: { display: false } } } }
+      });
     }
 
     // Recent bookings analysis (last 30 days)
@@ -1769,6 +1850,9 @@ function renderPropertyDetail(container, propertyName, prefix) {
         <div style="display:flex;align-items:center;gap:16px;margin-bottom:16px;">
           <div style="font-size:36px;font-weight:700;">${total}<span style="font-size:14px;color:#666;">件</span></div>
           <span style="background:${statusColor}20;color:${statusColor};padding:4px 12px;border-radius:12px;font-size:12px;font-weight:600;">${statusText}</span>
+          <span style="position:relative;cursor:help;font-size:13px;color:#999;" onmouseenter="this.querySelector('.tip').style.display='block'" onmouseleave="this.querySelector('.tip').style.display='none'">&#63;
+            <span class="tip" style="display:none;position:absolute;left:50%;transform:translateX(-50%);bottom:24px;background:#1d1d1f;color:white;font-size:11px;padding:8px 12px;border-radius:8px;white-space:nowrap;z-index:100;font-weight:400;">好調: 5件以上 / 注意: 2〜4件 / 要確認: 0〜1件<br>過去30日間の新規予約獲得数で判定</span>
+          </span>
         </div>
         ${barsHtml}
       `;
@@ -1801,8 +1885,10 @@ function renderPropertyTab() {
   // Build latest reservation lookup per property
   const todayMs = new Date().setHours(0,0,0,0);
   const latestResvMap = {};
+  const todayStr = new Date().toISOString().split('T')[0];
   reservations.forEach(r => {
     if (r.status === 'システムキャンセル') return;
+    if (!r.date || r.date > todayStr) return; // 未来の予約日は除外
     const key = r.propCode || r.property;
     if (!key) return;
     if (!latestResvMap[key] || r.date > latestResvMap[key]) {
@@ -1820,7 +1906,7 @@ function renderPropertyTab() {
       const diffDays = Math.floor((todayMs - new Date(lastDate).getTime()) / 86400000);
       if (diffDays === 0) recentLabel = '<span class="badge-green">今日</span>';
       else if (diffDays > 0) recentLabel = `<span class="${diffDays <= 3 ? 'badge-green' : diffDays <= 7 ? 'badge-blue' : diffDays <= 14 ? 'badge-orange' : 'badge-red'}">${diffDays}日前</span>`;
-      else recentLabel = `<span class="badge-blue">${Math.abs(diffDays)}日後</span>`;
+      else recentLabel = '<span class="badge-green">今日</span>';
     }
     return `<tr class="${rowClass}" data-exclude="${p.excludeKpi}" onclick="togglePropertyDrill('${p.name}', this)">
       <td>${p.name}</td><td>${p.ownerName}</td><td>${p.area}</td><td>${recentLabel}</td>
@@ -1953,6 +2039,7 @@ function toggleGroupedDrill(seriesBase) {
       <div class="card"><h2>月別 販売金額/OCC推移</h2><canvas id="grpChartSalesOcc"></canvas></div>
       <div class="card"><h2>月別 販売金額/ADR推移</h2><canvas id="grpChartSalesAdr"></canvas></div>
       <div class="card"><h2>チャネル別売上構成比</h2><canvas id="grpChartChannel"></canvas></div>
+      <div class="card"><h2>ゲスト国籍別</h2><canvas id="grpChartNationality"></canvas></div>
     </div>
     <div class="card"><h2>部屋別内訳</h2><div class="table-wrap"><table>
       <thead><tr><th>部屋</th><th>OCC</th><th>ADR</th><th>RevPAR</th><th>販売泊数</th><th>販売金額</th><th>受取金</th></tr></thead>
@@ -2004,7 +2091,7 @@ function toggleGroupedDrill(seriesBase) {
           { type: 'line', label: 'OCC (%)', data: occData, borderColor: CHART_COLORS.blue, backgroundColor: 'rgba(74,144,217,0.08)', fill: true, yAxisID: 'y1', tension: 0.4, pointBorderColor: CHART_COLORS.blue },
           { type: 'bar', label: '販売金額', data: salesData, backgroundColor: blueBarColors, borderColor: barBorders, borderWidth: barBorderWidths, yAxisID: 'y' }
         ]},
-        options: { responsive: true, animation: { duration: 600, easing: 'easeOutQuart' }, plugins: { legend: { display: true } }, scales: { x: { grid: { display: false } }, y: { position: 'left', beginAtZero: true, title: { display: true, text: '販売金額 (¥)', font: { size: 11 } }, ticks: { callback: v => '¥' + (v/10000).toFixed(0) + '万' } }, y1: { position: 'right', min: 0, max: 100, grid: { drawOnChartArea: false }, title: { display: true, text: 'OCC (%)', font: { size: 11 } } } } }
+        options: { responsive: true, animation: { duration: 600, easing: 'easeOutQuart' }, plugins: { legend: { display: true } }, scales: { x: { grid: { display: false } }, y: { position: 'left', beginAtZero: true, title: { display: true, text: '販売金額 (¥)', font: { size: 11 } }, ticks: { callback: v => '¥' + (v/10000).toFixed(0) + '万' } }, y1: { position: 'right', min: 0, max: 110, grid: { drawOnChartArea: false }, title: { display: true, text: 'OCC (%)', font: { size: 11 } } } } }
       });
     }
 
@@ -2045,6 +2132,47 @@ function toggleGroupedDrill(seriesBase) {
         type: 'bar',
         data: { labels: channelLabels, datasets: [{ label: '売上構成比', data: channelPct, backgroundColor: channelColors.slice(0, channelLabels.length).map(c => c + 'CC'), hoverBackgroundColor: channelColors.slice(0, channelLabels.length) }] },
         options: { indexAxis: 'y', responsive: true, animation: { duration: 600, easing: 'easeOutQuart' }, plugins: { legend: { display: false }, tooltip: { callbacks: { label: ctx => ctx.parsed.x.toFixed(1) + '%' } } }, scales: { x: { beginAtZero: true, max: 100, grid: { display: false }, ticks: { callback: v => v + '%' } }, y: { grid: { display: false } } } }
+      });
+    }
+
+    // Nationality breakdown (aggregate across series)
+    const grpNatAgg = {};
+    seriesProps.forEach(p => {
+      const propObj = properties.find(pp => pp.name === p.name);
+      reservations.filter(r => {
+        if (r.status === 'システムキャンセル') return false;
+        return r.propCode === p.name || r.property === p.name || (propObj && r.property === propObj.propName);
+      }).forEach(r => {
+        const nat = r.nationality || '不明';
+        if (!grpNatAgg[nat]) grpNatAgg[nat] = { count: 0, sales: 0 };
+        grpNatAgg[nat].count++;
+        grpNatAgg[nat].sales += r.sales || 0;
+      });
+    });
+    const grpNatTotal = Object.values(grpNatAgg).reduce((s, v) => s + v.count, 0);
+    const grpNatSorted = Object.entries(grpNatAgg).sort((a, b) => b[1].count - a[1].count);
+    const grpNatTop = grpNatSorted.slice(0, 5);
+    const grpNatOthers = grpNatSorted.slice(5);
+    const grpNatOtherCount = grpNatOthers.reduce((s, [, v]) => s + v.count, 0);
+    if (grpNatOtherCount > 0) grpNatTop.push(['その他', { count: grpNatOtherCount, sales: 0 }]);
+    const grpNatLabels = grpNatTop.map(([k]) => k);
+    const grpNatPct = grpNatTop.map(([, v]) => grpNatTotal > 0 ? (v.count / grpNatTotal) * 100 : 0);
+
+    const ctxNat = document.getElementById('grpChartNationality');
+    if (ctxNat && grpNatLabels.length > 0) {
+      chartInstances['grpNationality'] = new Chart(ctxNat, {
+        type: 'bar',
+        data: { labels: grpNatLabels, datasets: [{ label: '予約数構成比', data: grpNatPct, backgroundColor: channelColors.slice(0, grpNatLabels.length).map(c => c + 'CC'), hoverBackgroundColor: channelColors.slice(0, grpNatLabels.length) }] },
+        options: { indexAxis: 'y', responsive: true, animation: { duration: 600, easing: 'easeOutQuart' }, plugins: { legend: { display: false }, tooltip: { callbacks: {
+          title: ctx => ctx[0].label,
+          afterBody: ctx => {
+            if (ctx[0].label === 'その他') {
+              return grpNatOthers.map(([k, v]) => `  ${k}: ${(grpNatTotal > 0 ? (v.count / grpNatTotal) * 100 : 0).toFixed(1)}% (${v.count}件)`);
+            }
+            return [];
+          },
+          label: ctx => ctx.parsed.x.toFixed(1) + '% (' + grpNatTop[ctx.dataIndex][1].count + '件)'
+        } } }, scales: { x: { beginAtZero: true, max: 100, grid: { display: false }, ticks: { callback: v => v + '%' } }, y: { grid: { display: false } } } }
       });
     }
   }, 100);
@@ -2219,7 +2347,11 @@ function initDailyCharts() {
       backgroundColor: channelColors[idx % channelColors.length] + 'CC',
       hoverBackgroundColor: channelColors[idx % channelColors.length],
     }));
-    const monthTotals = chartMonths.map(ym => channels.reduce((s, ch) => s + (monthChannelSales[ym][ch] || 0), 0));
+    // 総額は日次データベース（KPIと同じソース）で計算
+    const monthTotals = chartMonths.map(ym => {
+      const stats = computeOverallStats(ym, area, false);
+      return stats.totalSales;
+    });
     const stackedTotalPlugin = {
       id: 'stackedTotalLabel',
       afterDatasetsDraw(chart) {
@@ -2232,7 +2364,9 @@ function initDailyCharts() {
         monthTotals.forEach((total, i) => {
           if (total <= 0) return;
           const xPos = x.getPixelForValue(i);
-          const yPos = y.getPixelForValue(total);
+          // 棒グラフの実際の高さ（チャネル合計）を使って位置決め
+          const barTotal = channels.reduce((s, ch) => s + (monthChannelSales[chartMonths[i]][ch] || 0), 0);
+          const yPos = y.getPixelForValue(barTotal);
           const label = total >= 100000000 ? (total / 100000000).toFixed(1) + '億' : Math.round(total / 10000).toLocaleString() + '万';
           c.fillText(label, xPos, yPos - 4);
         });
@@ -2291,7 +2425,7 @@ function initDailyCharts() {
         scales: {
           x: { grid: { display: false } },
           y: { position: 'left', beginAtZero: true, title: { display: true, text: 'ADR (¥)', font: { size: 11 } }, ticks: { callback: v => '¥' + v.toLocaleString() } },
-          y1: { position: 'right', min: 0, max: 100, grid: { drawOnChartArea: false }, title: { display: true, text: 'OCC (%)', font: { size: 11 } } }
+          y1: { position: 'right', min: 0, max: 110, grid: { drawOnChartArea: false }, title: { display: true, text: 'OCC (%)', font: { size: 11 } } }
         }
       }
     });
@@ -2428,6 +2562,51 @@ function initRevenueCharts() {
 // ============================================================
 // Init
 // ============================================================
+// ── Feedback ──
+const FEEDBACK_WEBHOOK = 'https://hooks.slack.com/services/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';
+
+function openFeedback() {
+  document.getElementById('feedback-modal').classList.add('show');
+  document.getElementById('fb-result').innerHTML = '';
+  document.getElementById('fb-send').disabled = false;
+}
+function closeFeedback() {
+  document.getElementById('feedback-modal').classList.remove('show');
+}
+document.getElementById('feedback-modal').addEventListener('click', e => {
+  if (e.target.id === 'feedback-modal') closeFeedback();
+});
+
+async function sendFeedback() {
+  const name = document.getElementById('fb-name').value.trim() || '匿名';
+  const type = document.getElementById('fb-type').value;
+  const message = document.getElementById('fb-message').value.trim();
+  if (!message) { alert('内容を入力してください'); return; }
+
+  const btn = document.getElementById('fb-send');
+  btn.disabled = true;
+  btn.textContent = '送信中...';
+
+  const fbTab = document.getElementById('fb-tab').value;
+  const activeTab = document.querySelector('.tab-btn.active');
+  const tabName = fbTab || (activeTab ? activeTab.textContent : '-');
+
+  const payload = {
+    text: `*[${type}]* from ${name}\nタブ: ${tabName}\n\n${message}`
+  };
+
+  try {
+    await fetch(FEEDBACK_WEBHOOK, { method: 'POST', body: JSON.stringify(payload) });
+    document.getElementById('fb-result').innerHTML = '<div class="feedback-sent">送信しました</div>';
+    document.getElementById('fb-message').value = '';
+    setTimeout(closeFeedback, 1500);
+  } catch (e) {
+    document.getElementById('fb-result').innerHTML = '<div style="color:#ff3b30;font-size:13px;text-align:center;">送信失敗</div>';
+  }
+  btn.disabled = false;
+  btn.textContent = '送信';
+}
+
 // ── Auth ──
 const LOGIN_PW = 'TDGnq!uPu@KVM!EcZ3';
 let _dataReady = false;
