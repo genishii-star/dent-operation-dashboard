@@ -1,0 +1,5 @@
+*.gs
+*.csv
+chrome-extension/
+Untitled/
+.DS_Store
