@@ -2116,7 +2116,7 @@ function initDailyCharts() {
           if (total <= 0) return;
           const xPos = x.getPixelForValue(i);
           const yPos = y.getPixelForValue(total);
-          const label = total >= 10000000 ? (total / 10000000).toFixed(1) + '億' : Math.round(total / 10000).toLocaleString() + '万';
+          const label = total >= 100000000 ? (total / 100000000).toFixed(1) + '億' : Math.round(total / 10000).toLocaleString() + '万';
           c.fillText(label, xPos, yPos - 4);
         });
         c.restore();
