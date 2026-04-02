@@ -2072,7 +2072,7 @@ function initDailyCharts() {
   chartMonths.forEach(ym => { monthChannelSales[ym] = {}; });
 
   reservations.forEach(r => {
-    if (r.status === 'システムキャンセル') return;
+    if (r.status === 'システムキャンセル' || r.status === 'キャンセル') return;
     const ciYm = getYearMonth(r.checkin);
     if (!monthChannelSales[ciYm]) return;
     if (area !== '全体') {
