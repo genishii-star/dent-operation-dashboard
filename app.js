@@ -847,7 +847,7 @@ function renderDailyTab() {
     if (r.status === 'システムキャンセル') return false;
     if (!monthSet.has(getYearMonth(r.checkin))) return false;
     if (area !== '全体') {
-      const prop = properties.find(p => p.name === r.property || p.propName === r.property);
+      const prop = properties.find(p => p.name === r.propCode || p.name === r.property || p.propName === r.property);
       if (!prop || prop.area !== area) return false;
     }
     return true;
@@ -872,7 +872,7 @@ function renderDailyTab() {
 
   let recentResv = reservations.filter(r => {
     if (area !== '全体') {
-      const prop = properties.find(p => p.name === r.property || p.propName === r.property);
+      const prop = properties.find(p => p.name === r.propCode || p.name === r.property || p.propName === r.property);
       if (!prop || prop.area !== area) return false;
     }
     return r.date >= cutoffStr && r.date <= todayStr;
@@ -1728,11 +1728,11 @@ function renderRevenueTab() {
     if (r.status === 'システムキャンセル') return false;
     if (!monthSet.has(getYearMonth(r.checkin))) return false;
     if (area !== '全体') {
-      const prop = properties.find(p => p.name === r.property || p.propName === r.property);
+      const prop = properties.find(p => p.name === r.propCode || p.name === r.property || p.propName === r.property);
       if (!prop || prop.area !== area) return false;
     }
     if (excludeKpi) {
-      const prop = properties.find(p => p.name === r.property || p.propName === r.property);
+      const prop = properties.find(p => p.name === r.propCode || p.name === r.property || p.propName === r.property);
       if (prop && prop.excludeKpi) return false;
     }
     return true;
@@ -1805,7 +1805,7 @@ function initDailyCharts() {
     const ciYm = getYearMonth(r.checkin);
     if (!monthChannelSales[ciYm]) return;
     if (area !== '全体') {
-      const prop = properties.find(p => p.name === r.property || p.propName === r.property);
+      const prop = properties.find(p => p.name === r.propCode || p.name === r.property || p.propName === r.property);
       if (!prop || prop.area !== area) return;
     }
     const ch = r.channel || 'その他';
@@ -1831,10 +1831,9 @@ function initDailyCharts() {
       backgroundColor: channelColors[idx % channelColors.length] + 'CC',
       hoverBackgroundColor: channelColors[idx % channelColors.length],
     }));
-    // 総額は日次データベース（KPIと同じソース）で計算
+    // 総額はチャネル合計（バーの高さと同じソース）で計算
     const monthTotals = chartMonths.map(ym => {
-      const stats = computeOverallStats(ym, area, false);
-      return stats.totalSales;
+      return channels.reduce((s, ch) => s + (monthChannelSales[ym][ch] || 0), 0);
     });
     const stackedTotalPlugin = {
       id: 'stackedTotalLabel',
@@ -2002,7 +2001,7 @@ function initRevenueCharts() {
     if (r.status === 'システムキャンセル') return false;
     if (!monthSet.has(getYearMonth(r.checkin))) return false;
     if (area !== '全体') {
-      const prop = properties.find(p => p.name === r.property || p.propName === r.property);
+      const prop = properties.find(p => p.name === r.propCode || p.name === r.property || p.propName === r.property);
       if (!prop || prop.area !== area) return false;
     }
     return true;
