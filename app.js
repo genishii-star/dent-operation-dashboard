@@ -1795,22 +1795,26 @@ function initDailyCharts() {
   }
   const currentIdx = 3;
 
-  // Collect channel sales per month
+  // Collect channel sales per month from daily data (same source as KPIs)
   const channelSet = new Set();
   const monthChannelSales = {};
   chartMonths.forEach(ym => { monthChannelSales[ym] = {}; });
 
-  reservations.forEach(r => {
-    if (r.status === 'システムキャンセル' || r.status === 'キャンセル') return;
-    const ciYm = getYearMonth(r.checkin);
-    if (!monthChannelSales[ciYm]) return;
-    if (area !== '全体') {
-      const prop = properties.find(p => p.name === r.propCode || p.name === r.property || p.propName === r.property);
-      if (!prop || prop.area !== area) return;
-    }
-    const ch = r.channel || 'その他';
+  const filteredPropNames = area !== '全体'
+    ? new Set(properties.filter(p => p.area === area).map(p => p.name))
+    : null;
+
+  rawDailyData.forEach(d => {
+    const date = normalizeDate(d['日付']);
+    const ym = getYearMonth(date);
+    if (!monthChannelSales[ym]) return;
+    const status = d['状態'] || '';
+    if (status === 'システムキャンセル') return;
+    const propCode = generatePropCode(d['物件名'] || '', d['ルーム番号'] || '');
+    if (filteredPropNames && !filteredPropNames.has(propCode)) return;
+    const ch = d['予約サイト'] || 'その他';
     channelSet.add(ch);
-    monthChannelSales[ciYm][ch] = (monthChannelSales[ciYm][ch] || 0) + (r.sales || 0);
+    monthChannelSales[ym][ch] = (monthChannelSales[ym][ch] || 0) + parseNum(d['売上合計']);
   });
 
   const channels = [...channelSet].sort((a, b) => {
@@ -1831,9 +1835,10 @@ function initDailyCharts() {
       backgroundColor: channelColors[idx % channelColors.length] + 'CC',
       hoverBackgroundColor: channelColors[idx % channelColors.length],
     }));
-    // 総額はチャネル合計（バーの高さと同じソース）で計算
+    // 総額は日次データベース（KPIと同じソース）で計算
     const monthTotals = chartMonths.map(ym => {
-      return channels.reduce((s, ch) => s + (monthChannelSales[ym][ch] || 0), 0);
+      const stats = computeOverallStats(ym, area, false);
+      return stats.totalSales;
     });
     const stackedTotalPlugin = {
       id: 'stackedTotalLabel',
