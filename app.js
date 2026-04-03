@@ -381,7 +381,7 @@ function processData() {
     if (!code) return null;
     const ownerInfo = ownerMap[pm['オーナーID']] || {};
     const address = pm['住所'] || '';
-    const area = deriveArea(address);
+    const area = pm['エリア'] || deriveArea(address);
     return {
       name: code,
       propName: pm['物件名'] || code,
@@ -398,6 +398,14 @@ function processData() {
       targetHigh: parseNum(pm['繁忙期目標']),
     };
   }).filter(Boolean);
+
+  // Build property lookup maps for fast access (avoid O(N) find per reservation)
+  window._propByName = {};
+  window._propByPropName = {};
+  properties.forEach(p => {
+    window._propByName[p.name] = p;
+    if (p.propName) window._propByPropName[p.propName] = p;
+  });
 
   // Build owners array
   const ownerIds = [...new Set(propertyMaster.map(pm => pm['オーナーID']).filter(Boolean))];
@@ -463,6 +471,14 @@ function getSeasonForMonth(monthNum) {
   return s ? s['シーズン'] : '通常期';
 }
 
+function findPropByReservation(r) {
+  return window._propByName[r.propCode] || window._propByName[r.property] || window._propByPropName[r.property] || null;
+}
+
+function findPropByName(name) {
+  return window._propByName[name] || window._propByPropName[name] || null;
+}
+
 function getTargetForProperty(prop, monthNum) {
   const season = getSeasonForMonth(monthNum);
   if (season === '閑散期') return prop.targetLow;
@@ -491,7 +507,7 @@ function aggregateDailyForMonth(ym, areaFilter, excludeKpi) {
 }
 
 function computePropertyStats(propName, ym) {
-  const prop = properties.find(p => p.name === propName);
+  const prop = findPropByName(propName);
   if (!prop) return null;
 
   const daysInMonth = getDaysInMonth(ym);
@@ -847,7 +863,7 @@ function renderDailyTab() {
     if (r.status === 'システムキャンセル') return false;
     if (!monthSet.has(getYearMonth(r.checkin))) return false;
     if (area !== '全体') {
-      const prop = properties.find(p => p.name === r.propCode || p.name === r.property || p.propName === r.property);
+      const prop = findPropByReservation(r);
       if (!prop || prop.area !== area) return false;
     }
     return true;
@@ -872,7 +888,7 @@ function renderDailyTab() {
 
   let recentResv = reservations.filter(r => {
     if (area !== '全体') {
-      const prop = properties.find(p => p.name === r.propCode || p.name === r.property || p.propName === r.property);
+      const prop = findPropByReservation(r);
       if (!prop || prop.area !== area) return false;
     }
     return r.date >= cutoffStr && r.date <= todayStr;
@@ -903,7 +919,7 @@ function renderOwnerTab() {
   if (area !== '全体') {
     filteredOwners = owners.filter(o => {
       return o.properties.some(pn => {
-        const p = properties.find(pp => pp.name === pn);
+        const p = findPropByName(pn);
         return p && p.area === area;
       });
     });
@@ -1033,7 +1049,7 @@ function toggleOwnerDrill(ownerId) {
   const barWidth = Math.min(rate, 100);
 
   let propRows = propStats.map(p => {
-    const prop = properties.find(pp => pp.name === p.name);
+    const prop = findPropByName(p.name);
     return `<tr class="clickable" onclick="event.stopPropagation();toggleOwnerPropertyDrill('${p.name}')">
       <td>${p.name}</td><td>${p.area}</td><td>${fmtPct(p.occ)}</td><td>${fmtYenFull(Math.round(p.adr))}</td><td>${fmtYenFull(Math.round(p.revpar))}</td><td>${fmtYenFull(p.sales)}</td><td>${fmtYenFull(p.received)}</td><td>${prop && prop.excludeKpi ? '<span class="badge-gray">除外</span>' : '-'}</td>
     </tr>`;
@@ -1124,13 +1140,13 @@ function destroyDrillCharts(prefix) {
 // Shared property detail renderer
 // ============================================================
 function renderPropertyDetail(container, propertyName, prefix) {
-  const prop = properties.find(p => p.name === propertyName);
+  const prop = findPropByName(propertyName);
   if (!prop) return;
 
   const ym = getSelectedMonth('property');
 
   // Get reservations for this property
-  const propObj = properties.find(p => p.name === propertyName);
+  const propObj = prop;
   const propResvAll = reservations.filter(r => r.propCode === propertyName || r.property === propertyName || (propObj && r.property === propObj.propName));
   const propResv = propResvAll.slice(0, 10);
   let resvRows = propResv.map(r => `<tr><td>${r.date}</td><td>${r.channel}</td><td>${r.guest}</td><td>${r.checkin}</td><td>${r.checkout}</td><td>${r.nights}泊</td><td>${fmtYenFull(r.sales)}</td><td>${r.status}</td></tr>`).join('');
@@ -1621,7 +1637,7 @@ function toggleGroupedDrill(seriesBase, clickedRow) {
     // Nationality breakdown (aggregate across series)
     const grpNatAgg = {};
     seriesProps.forEach(p => {
-      const propObj = properties.find(pp => pp.name === p.name);
+      const propObj = findPropByName(p.name);
       reservations.filter(r => {
         if (r.status === 'システムキャンセル') return false;
         return r.propCode === p.name || r.property === p.name || (propObj && r.property === propObj.propName);
@@ -1728,11 +1744,11 @@ function renderRevenueTab() {
     if (r.status === 'システムキャンセル') return false;
     if (!monthSet.has(getYearMonth(r.checkin))) return false;
     if (area !== '全体') {
-      const prop = properties.find(p => p.name === r.propCode || p.name === r.property || p.propName === r.property);
+      const prop = findPropByReservation(r);
       if (!prop || prop.area !== area) return false;
     }
     if (excludeKpi) {
-      const prop = properties.find(p => p.name === r.propCode || p.name === r.property || p.propName === r.property);
+      const prop = findPropByReservation(r);
       if (prop && prop.excludeKpi) return false;
     }
     return true;
@@ -1805,7 +1821,7 @@ function initDailyCharts() {
     const ciYm = getYearMonth(r.checkin);
     if (!monthChannelSales[ciYm]) return;
     if (area !== '全体') {
-      const prop = properties.find(p => p.name === r.propCode || p.name === r.property || p.propName === r.property);
+      const prop = findPropByReservation(r);
       if (!prop || prop.area !== area) return;
     }
     const ch = r.channel || 'その他';
@@ -2001,7 +2017,7 @@ function initRevenueCharts() {
     if (r.status === 'システムキャンセル') return false;
     if (!monthSet.has(getYearMonth(r.checkin))) return false;
     if (area !== '全体') {
-      const prop = properties.find(p => p.name === r.propCode || p.name === r.property || p.propName === r.property);
+      const prop = findPropByReservation(r);
       if (!prop || prop.area !== area) return false;
     }
     return true;
