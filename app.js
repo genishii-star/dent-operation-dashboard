@@ -521,7 +521,14 @@ function computePropertyStats(propName, ym) {
     return code === propName && getYearMonth(date) === ym && status !== 'システムキャンセル';
   });
 
-  let bookedDays = propDaily.length;
+  // 日次データに含まれる日付のセット（重複防止用 + ユニーク日数カウント）
+  const dailyDates = new Set();
+  propDaily.forEach(d => {
+    const date = normalizeDate(d['日付']);
+    dailyDates.add(date);
+  });
+
+  let bookedDays = dailyDates.size;
   let totalSales = propDaily.reduce((s, d) => s + parseNum(d['売上合計']), 0);
   let totalReceived = propDaily.reduce((s, d) => s + parseNum(d['受取金合計']), 0);
 
@@ -530,13 +537,6 @@ function computePropertyStats(propName, ym) {
   const [ymY, ymM] = ym.split('-').map(Number);
   const monthStart = ym + '-01';
   const monthEnd = ym + '-' + String(daysInMonth).padStart(2, '0');
-
-  // 日次データに含まれる日付のセット（重複防止用）
-  const dailyDates = new Set();
-  propDaily.forEach(d => {
-    const date = normalizeDate(d['日付']);
-    dailyDates.add(date);
-  });
 
   // 予約データから未来分を追加（propCode/property/propNameでマッチ）
   const propReservations = reservations.filter(r => {
@@ -1163,6 +1163,7 @@ function renderPropertyDetail(container, propertyName, prefix) {
       <div class="card"><h2>ゲスト国籍別</h2><canvas id="${prefix}ChartNationality"></canvas></div>
       <div class="card" id="${prefix}RecentBookings"></div>
     </div>
+    <div class="card" id="${prefix}Calendar"></div>
     <div class="card"><h2>予約一覧</h2><div class="table-wrap"><table>
       <thead><tr><th>予約日</th><th>予約サイト</th><th>ゲスト名</th><th>チェックイン</th><th>チェックアウト</th><th>泊数</th><th>販売金額</th><th>状態</th></tr></thead>
       <tbody>${resvRows}</tbody>
@@ -1339,7 +1340,189 @@ function renderPropertyDetail(container, propertyName, prefix) {
         ${barsHtml}
       `;
     }
+
+    // Calendar view
+    renderCalendarView(prefix, propertyName, propResvAll, ym);
   }, 100);
+}
+
+// ============================================================
+// Calendar View
+// ============================================================
+function renderCalendarView(prefix, propertyName, propResvAll, initialYm) {
+  const container = document.getElementById(prefix + 'Calendar');
+  if (!container) return;
+
+  const CHANNEL_COLORS = {
+    'Airbnb': '#FF5A5F',
+    'Booking.com': '#003580',
+    'Vrbo': '#3c67f0',
+    'Expedia': '#FBCE02',
+    '自社': '#34c759',
+    '直接': '#34c759',
+  };
+  const DEFAULT_COLOR = '#007aff';
+
+  let calYear, calMonth;
+  const [iy, im] = initialYm.split('-').map(Number);
+  calYear = iy;
+  calMonth = im;
+
+  function getChannelColor(ch) {
+    if (!ch) return DEFAULT_COLOR;
+    for (const [key, color] of Object.entries(CHANNEL_COLORS)) {
+      if (ch.includes(key)) return color;
+    }
+    return DEFAULT_COLOR;
+  }
+
+  function render() {
+    const ym = `${calYear}-${String(calMonth).padStart(2, '0')}`;
+    const daysInMonth = new Date(calYear, calMonth, 0).getDate();
+    const firstDow = new Date(calYear, calMonth - 1, 1).getDay(); // 0=Sun
+    const today = new Date().toISOString().split('T')[0];
+
+    // Build day → reservations map
+    const dayMap = {}; // date string → [reservation, ...]
+    const activeResvs = propResvAll.filter(r =>
+      r.status !== 'システムキャンセル' && r.status !== 'キャンセル' && r.checkin && r.checkout
+    );
+
+    activeResvs.forEach(r => {
+      const ci = new Date(r.checkin);
+      const co = new Date(r.checkout);
+      for (let d = new Date(ci); d < co; d.setDate(d.getDate() + 1)) {
+        const ds = d.toISOString().split('T')[0];
+        if (getYearMonth(ds) === ym) {
+          if (!dayMap[ds]) dayMap[ds] = [];
+          dayMap[ds].push(r);
+        }
+      }
+    });
+
+    // Build reservation bars (for spanning display)
+    const resvBars = [];
+    const seen = new Set();
+    activeResvs.forEach(r => {
+      if (seen.has(r.id)) return;
+      const ci = new Date(r.checkin);
+      const co = new Date(r.checkout);
+      const monthStart = new Date(calYear, calMonth - 1, 1);
+      const monthEnd = new Date(calYear, calMonth, 0);
+      // Only include if overlaps this month
+      if (ci > monthEnd || co <= monthStart) return;
+      seen.add(r.id);
+      const startDay = ci < monthStart ? 1 : ci.getDate();
+      const coDate = new Date(co);
+      coDate.setDate(coDate.getDate() - 1); // last night
+      const endDay = coDate > monthEnd ? daysInMonth : coDate.getDate();
+      resvBars.push({ ...r, startDay, endDay, color: getChannelColor(r.channel) });
+    });
+
+    // Header
+    let html = `
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
+        <h2 style="margin:0;">予約カレンダー</h2>
+        <div style="display:flex;align-items:center;gap:12px;">
+          <button class="cal-nav-btn" data-dir="-1" style="background:none;border:1px solid #ddd;border-radius:8px;padding:4px 12px;cursor:pointer;font-size:14px;">◀</button>
+          <span style="font-size:15px;font-weight:600;min-width:100px;text-align:center;">${calYear}年${calMonth}月</span>
+          <button class="cal-nav-btn" data-dir="1" style="background:none;border:1px solid #ddd;border-radius:8px;padding:4px 12px;cursor:pointer;font-size:14px;">▶</button>
+        </div>
+      </div>
+    `;
+
+    // Day-of-week header
+    const dows = ['日', '月', '火', '水', '木', '金', '土'];
+    html += '<div style="display:grid;grid-template-columns:repeat(7,1fr);gap:1px;background:#e5e5e5;border-radius:8px;overflow:hidden;">';
+    dows.forEach((d, i) => {
+      const color = i === 0 ? '#ff3b30' : i === 6 ? '#007aff' : '#666';
+      html += `<div style="background:#fafafa;text-align:center;padding:8px 0;font-size:12px;font-weight:600;color:${color};">${d}</div>`;
+    });
+
+    // Empty cells before first day
+    for (let i = 0; i < firstDow; i++) {
+      html += '<div style="background:white;min-height:80px;"></div>';
+    }
+
+    // Day cells
+    for (let day = 1; day <= daysInMonth; day++) {
+      const ds = `${ym}-${String(day).padStart(2, '0')}`;
+      const resvs = dayMap[ds] || [];
+      const isToday = ds === today;
+      const dow = (firstDow + day - 1) % 7;
+      const dayColor = dow === 0 ? '#ff3b30' : dow === 6 ? '#007aff' : '#1d1d1f';
+      const isPast = ds < today;
+
+      let cellBg = 'white';
+      if (isToday) cellBg = '#f0f7ff';
+
+      // Day number
+      let cellHtml = `<div style="background:${cellBg};min-height:80px;padding:4px 6px;position:relative;${isPast && resvs.length === 0 ? 'opacity:0.5;' : ''}">`;
+      cellHtml += `<div style="font-size:12px;font-weight:${isToday ? '700' : '500'};color:${dayColor};margin-bottom:2px;">`;
+      if (isToday) cellHtml += `<span style="background:#007aff;color:white;border-radius:50%;width:22px;height:22px;display:inline-flex;align-items:center;justify-content:center;">${day}</span>`;
+      else cellHtml += day;
+      cellHtml += '</div>';
+
+      // Reservation info for this day (max 2 shown)
+      resvs.slice(0, 2).forEach(r => {
+        const color = getChannelColor(r.channel);
+        const isCheckin = r.checkin === ds;
+        const label = isCheckin ? r.guest || r.channel : '';
+        const chShort = (r.channel || '').replace('.com', '');
+        cellHtml += `<div class="cal-resv-chip" style="background:${color}18;border-left:3px solid ${color};padding:1px 4px;margin-bottom:1px;border-radius:0 4px 4px 0;font-size:10px;color:#333;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer;" title="${r.guest} | ${r.channel} | ${r.checkin}→${r.checkout} | ${r.nights}泊 | ${fmtYenFull(r.sales)}">`;
+        if (isCheckin) {
+          cellHtml += `<span style="font-weight:600;">${r.guest || '---'}</span>`;
+        } else {
+          cellHtml += `<span style="color:${color};font-size:9px;">━</span> ${chShort}`;
+        }
+        cellHtml += '</div>';
+      });
+      if (resvs.length > 2) {
+        cellHtml += `<div style="font-size:9px;color:#999;">+${resvs.length - 2}件</div>`;
+      }
+      if (resvs.length === 0 && !isPast) {
+        cellHtml += `<div style="font-size:10px;color:#ccc;margin-top:8px;text-align:center;">空室</div>`;
+      }
+
+      cellHtml += '</div>';
+      html += cellHtml;
+    }
+
+    // Empty cells after last day
+    const lastDow = (firstDow + daysInMonth - 1) % 7;
+    for (let i = lastDow + 1; i < 7; i++) {
+      html += '<div style="background:white;min-height:80px;"></div>';
+    }
+
+    html += '</div>';
+
+    // Legend
+    html += '<div style="display:flex;gap:16px;margin-top:12px;flex-wrap:wrap;">';
+    const legendItems = [['Airbnb', '#FF5A5F'], ['Booking.com', '#003580'], ['その他', DEFAULT_COLOR], ['空室', '#ccc']];
+    legendItems.forEach(([label, color]) => {
+      if (label === '空室') {
+        html += `<div style="display:flex;align-items:center;gap:4px;font-size:11px;color:#999;"><span style="width:12px;height:12px;border:1px dashed ${color};border-radius:2px;display:inline-block;"></span>${label}</div>`;
+      } else {
+        html += `<div style="display:flex;align-items:center;gap:4px;font-size:11px;color:#666;"><span style="width:12px;height:12px;background:${color};border-radius:2px;display:inline-block;"></span>${label}</div>`;
+      }
+    });
+    html += '</div>';
+
+    container.innerHTML = html;
+
+    // Nav button events
+    container.querySelectorAll('.cal-nav-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const dir = parseInt(btn.dataset.dir);
+        calMonth += dir;
+        if (calMonth > 12) { calMonth = 1; calYear++; }
+        if (calMonth < 1) { calMonth = 12; calYear--; }
+        render();
+      });
+    });
+  }
+
+  render();
 }
 
 // ============================================================
