@@ -141,7 +141,7 @@ let currentFilters = {
   dailyPeriod: 'thisMonth',
   ownerPeriod: 'thisMonth',
   propertyPeriod: 'thisMonth',
-  reservationPeriod: 'thisMonth',
+  reservationPeriod: 'yesterday',
   revenuePeriod: 'thisMonth',
   propertyView: 'all',
   recentDays: 1,
@@ -396,6 +396,8 @@ function processData() {
       targetLow: parseNum(pm['閑散期目標']),
       targetNormal: parseNum(pm['通常期目標']),
       targetHigh: parseNum(pm['繁忙期目標']),
+      airbnbAccount: pm['airbnbアカウント'] || '',
+      airbnbListingId: pm['airbnbリスティングID'] || '',
     };
   }).filter(Boolean);
 
@@ -689,6 +691,7 @@ function setAreaFilter(el, tabId) {
   el.classList.add('active');
   currentFilters[tabId + 'Area'] = el.dataset.area;
   renderAll();
+  setTimeout(() => initChartsForTab(tabId), 50);
 }
 
 function setPropertyView(el) {
@@ -715,6 +718,7 @@ function setPeriodFilter(el, tabId) {
   el.classList.add('active');
   currentFilters[tabId + 'Period'] = el.dataset.period;
   renderAll();
+  setTimeout(() => initChartsForTab(tabId), 50);
 }
 
 // ============================================================
@@ -832,6 +836,7 @@ function renderAll() {
   renderPropertyTab();
   renderReservationTab();
   renderRevenueTab();
+  renderReviewTab();
   setTimeout(initSortableHeaders, 50);
 }
 
@@ -854,13 +859,12 @@ function renderDailyTab() {
   // Overall stats for selected period
   const overall = computeOverallStatsMulti(months, area, false);
 
-  // Compute total days and avg daily sales
+  // 選択期間の日数（チェックイン月ベース1日平均売上の分母）
   const totalDays = months.reduce((s, ym) => s + getDaysInMonth(ym), 0);
-  const avgDailySales = totalDays > 0 ? overall.totalSales / totalDays : 0;
 
-  // Average nights per reservation
+  // チェックイン月ベース予約（OTAチャートと同じソース・粒度）
   const monthResvs = reservations.filter(r => {
-    if (r.status === 'システムキャンセル') return false;
+    if (r.status === 'システムキャンセル' || r.status === 'キャンセル') return false;
     if (!monthSet.has(getYearMonth(r.checkin))) return false;
     if (area !== '全体') {
       const prop = findPropByReservation(r);
@@ -870,10 +874,15 @@ function renderDailyTab() {
   });
   const avgNights = monthResvs.length > 0 ? monthResvs.reduce((s, r) => s + r.nights, 0) / monthResvs.length : 0;
 
+  // 売上合計・受取金合計はチェックイン月ベースに統一（月別OTA売上推移グラフと一致させる）
+  const checkinSales = monthResvs.reduce((s, r) => s + (r.sales || 0), 0);
+  const checkinReceived = monthResvs.reduce((s, r) => s + (r.received || 0), 0);
+  const checkinAvgDailySales = totalDays > 0 ? checkinSales / totalDays : 0;
+
   // KPIs
-  document.getElementById('kpi-daily-sales').textContent = fmtYen(overall.totalSales);
-  document.getElementById('kpi-daily-avg').textContent = fmtYenFull(Math.round(avgDailySales));
-  document.getElementById('kpi-daily-received').textContent = fmtYen(overall.totalReceived);
+  document.getElementById('kpi-daily-sales').textContent = fmtYen(checkinSales);
+  document.getElementById('kpi-daily-avg').textContent = fmtYenFull(Math.round(checkinAvgDailySales));
+  document.getElementById('kpi-daily-received').textContent = fmtYen(checkinReceived);
   document.getElementById('kpi-daily-adr').textContent = fmtYenFull(Math.round(overall.adr));
   document.getElementById('kpi-daily-occ').textContent = fmtPct(overall.occ);
   document.getElementById('kpi-daily-nights').textContent = avgNights.toFixed(1) + '泊';
@@ -899,7 +908,7 @@ function renderDailyTab() {
     tbody.innerHTML = '<tr><td colspan="8" style="color:#999;text-align:center;">該当する予約はありません</td></tr>';
   } else {
     tbody.innerHTML = recentResv.map(r => `<tr>
-      <td>${r.date}</td><td>${r.channel}</td><td>${r.property}</td><td>${r.guest}</td><td>${r.checkin}</td><td>${r.checkout}</td><td>${r.nights}泊</td><td>${fmtYenFull(r.sales)}</td>
+      <td>${(r.date || '').slice(0, 10)}</td><td>${r.channel}</td><td>${r.property}</td><td>${r.guest}</td><td>${r.checkin}</td><td>${r.checkout}</td><td>${r.nights}泊</td><td>${fmtYenFull(r.sales)}</td>
     </tr>`).join('');
   }
 
@@ -989,7 +998,7 @@ function renderOwnerTab() {
   const tbody = document.getElementById('owner-table');
   tbody.innerHTML = ownerStats.map(o => {
     const rateClass = o.rate >= 100 ? 'positive' : o.rate >= 70 ? '' : 'negative';
-    return `<tr class="clickable" onclick="toggleOwnerDrill('${o.id}')">
+    return `<tr class="clickable" onclick="toggleOwnerDrill('${o.id}', this)">
       <td>${o.name}</td><td>${o.propCount}件</td><td>${o.royalty}</td>
       <td>${fmtYen(o.target)}</td><td>${fmtYen(o.actual)}</td>
       <td class="${rateClass}">${fmtPct(o.rate)}</td>
@@ -1002,10 +1011,13 @@ function renderOwnerTab() {
 // Owner drill-down
 // ============================================================
 let activeOwnerDrill = null;
-function toggleOwnerDrill(ownerId) {
-  const container = document.getElementById('owner-drill-container');
+function toggleOwnerDrill(ownerId, clickedRow) {
+  // 既存のドリルダウン行を削除
+  const existing = document.getElementById('owner-drill-row');
+  if (existing) existing.remove();
+
+  // 同じオーナーをクリック → 閉じるだけ
   if (activeOwnerDrill === ownerId) {
-    container.innerHTML = '';
     activeOwnerDrill = null;
     return;
   }
@@ -1055,7 +1067,21 @@ function toggleOwnerDrill(ownerId) {
     </tr>`;
   }).join('');
 
-  container.innerHTML = `<div class="drill-down show">
+  // クリックした行のすぐ下にドリルダウン行を挿入
+  const drillRow = document.createElement('tr');
+  drillRow.id = 'owner-drill-row';
+  const drillCell = document.createElement('td');
+  drillCell.colSpan = 8;
+  drillCell.style.padding = '0';
+  drillRow.appendChild(drillCell);
+
+  if (clickedRow) {
+    clickedRow.insertAdjacentElement('afterend', drillRow);
+  } else {
+    document.getElementById('owner-table').appendChild(drillRow);
+  }
+
+  drillCell.innerHTML = `<div class="drill-down show" style="margin-top:12px;">
     <h3>${owner.name}</h3>
     <div class="progress-bar-wrap">
       <div class="progress-bar-label"><span>目標: ${fmtYen(target)}</span><span>実績: ${fmtYen(totalSales)} (${fmtPct(rate)})</span></div>
@@ -1068,6 +1094,7 @@ function toggleOwnerDrill(ownerId) {
     <div id="owner-property-drill-container"></div>
   </div>`;
   setTimeout(initSortableHeaders, 50);
+  drillRow.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
 // ============================================================
@@ -1149,7 +1176,7 @@ function renderPropertyDetail(container, propertyName, prefix) {
   const propObj = prop;
   const propResvAll = reservations.filter(r => r.propCode === propertyName || r.property === propertyName || (propObj && r.property === propObj.propName));
   const propResv = propResvAll.slice(0, 10);
-  let resvRows = propResv.map(r => `<tr><td>${r.date}</td><td>${r.channel}</td><td>${r.guest}</td><td>${r.checkin}</td><td>${r.checkout}</td><td>${r.nights}泊</td><td>${fmtYenFull(r.sales)}</td><td>${r.status}</td></tr>`).join('');
+  let resvRows = propResv.map(r => `<tr><td>${(r.date || '').slice(0, 10)}</td><td>${r.channel}</td><td>${r.guest}</td><td>${r.checkin}</td><td>${r.checkout}</td><td>${r.nights}泊</td><td>${fmtYenFull(r.sales)}</td><td>${r.status}</td></tr>`).join('');
   if (!resvRows) resvRows = '<tr><td colspan="8" style="color:#999;text-align:center;">データなし</td></tr>';
 
   destroyDrillCharts(prefix);
@@ -1178,6 +1205,7 @@ function renderPropertyDetail(container, propertyName, prefix) {
     const occData = [];
     const adrData = [];
     const salesData = [];
+    const targetData = [];
     for (let i = -5; i <= 6; i++) {
       const d = new Date(curYear, curMonth - 1 + i, 1);
       const m = d.getMonth() + 1;
@@ -1188,7 +1216,23 @@ function renderPropertyDetail(container, propertyName, prefix) {
       occData.push(stats ? stats.occ : 0);
       adrData.push(stats ? stats.adr : 0);
       salesData.push(stats ? stats.sales : 0);
+      targetData.push(getTargetForProperty(prop, m));
     }
+    const targetLineDataset = {
+      type: 'line',
+      label: '目標売上',
+      data: targetData,
+      borderColor: '#ff3b30',
+      backgroundColor: 'transparent',
+      borderDash: [6, 4],
+      borderWidth: 2,
+      pointRadius: 0,
+      pointHoverRadius: 4,
+      pointBackgroundColor: '#ff3b30',
+      tension: 0,
+      fill: false,
+      yAxisID: 'y',
+    };
     const currentIdx = 5; // index of current month
 
     // Bar colors: past=light, current=solid, future=dashed
@@ -1206,7 +1250,8 @@ function renderPropertyDetail(container, propertyName, prefix) {
           labels: monthLabels,
           datasets: [
             { type: 'line', label: 'OCC (%)', data: occData, borderColor: CHART_COLORS.blue, backgroundColor: 'rgba(74,144,217,0.08)', fill: true, yAxisID: 'y1', tension: 0.4, pointBorderColor: CHART_COLORS.blue },
-            { type: 'bar', label: '販売金額', data: salesData, backgroundColor: blueBarColors, borderColor: barBorders, borderWidth: barBorderWidths, yAxisID: 'y' }
+            { type: 'bar', label: '販売金額', data: salesData, backgroundColor: blueBarColors, borderColor: barBorders, borderWidth: barBorderWidths, yAxisID: 'y' },
+            { ...targetLineDataset }
           ]
         },
         options: { responsive: true, animation: { duration: 600, easing: 'easeOutQuart' }, plugins: { legend: { display: true } }, scales: { x: { grid: { display: false } }, y: { position: 'left', beginAtZero: true, title: { display: true, text: '販売金額 (¥)', font: { size: 11 } }, ticks: { callback: v => '¥' + (v/10000).toFixed(0) + '万' } }, y1: { position: 'right', min: 0, max: 110, grid: { drawOnChartArea: false }, title: { display: true, text: 'OCC (%)', font: { size: 11 } } } } }
@@ -1222,7 +1267,8 @@ function renderPropertyDetail(container, propertyName, prefix) {
           labels: monthLabels,
           datasets: [
             { type: 'line', label: 'ADR (¥)', data: adrData, borderColor: CHART_COLORS.orange, backgroundColor: 'rgba(245,166,35,0.08)', fill: true, yAxisID: 'y1', tension: 0.4, pointBorderColor: CHART_COLORS.orange },
-            { type: 'bar', label: '販売金額', data: salesData, backgroundColor: orangeBarColors, borderColor: barBorders, borderWidth: barBorderWidths, yAxisID: 'y' }
+            { type: 'bar', label: '販売金額', data: salesData, backgroundColor: orangeBarColors, borderColor: barBorders, borderWidth: barBorderWidths, yAxisID: 'y' },
+            { ...targetLineDataset }
           ]
         },
         options: { responsive: true, animation: { duration: 600, easing: 'easeOutQuart' }, plugins: { legend: { display: true } }, scales: { x: { grid: { display: false } }, y: { position: 'left', beginAtZero: true, title: { display: true, text: '販売金額 (¥)', font: { size: 11 } }, ticks: { callback: v => '¥' + (v/10000).toFixed(0) + '万' } }, y1: { position: 'right', beginAtZero: true, grid: { drawOnChartArea: false }, title: { display: true, text: 'ADR (¥)', font: { size: 11 } }, ticks: { callback: v => '¥' + v.toLocaleString() } } } }
@@ -1683,42 +1729,132 @@ function toggleGroupedDrill(seriesBase, clickedRow) {
 // ============================================================
 // Tab 4: 予約管理
 // ============================================================
+function localDateStr(d) {
+  // ローカルタイムゾーン基準で YYYY-MM-DD 文字列を返す（toISOStringはUTC変換でズレるため）
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+function getReservationPeriodPredicate() {
+  return getReservationPeriodInfo().current;
+}
+
+function getReservationPeriodInfo() {
+  // 全ピル共通: 予約日 r.date ベース。current/previous は同じ長さの直前期間。
+  const period = currentFilters.reservationPeriod || 'yesterday';
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  // [start, end) の半開区間を返すヘルパー
+  const range = (() => {
+    const dayRange = (days, label) => {
+      const start = new Date(today); start.setDate(start.getDate() - days);
+      return { start, end: new Date(today), label };
+    };
+    if (period === 'yesterday') return dayRange(1, '対前日');
+    if (period === 'last3Days') return dayRange(3, '対前3日');
+    if (period === 'last7Days') return dayRange(7, '対前7日');
+    if (period === 'thisMonth') {
+      const start = new Date(today.getFullYear(), today.getMonth(), 1);
+      const end = new Date(today.getFullYear(), today.getMonth() + 1, 1);
+      return { start, end, label: '対前月' };
+    }
+    if (period === 'lastMonth') {
+      const start = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+      const end = new Date(today.getFullYear(), today.getMonth(), 1);
+      return { start, end, label: '対前月' };
+    }
+    if (period === 'last3Months') {
+      const start = new Date(today.getFullYear(), today.getMonth() - 2, 1);
+      const end = new Date(today.getFullYear(), today.getMonth() + 1, 1);
+      return { start, end, label: '対前3ヶ月' };
+    }
+    return dayRange(1, '対前日');
+  })();
+
+  // 前期間 = 同じ長さで直前にスライド
+  const lenMs = range.end - range.start;
+  const prevStart = new Date(range.start.getTime() - lenMs);
+  const prevEnd = new Date(range.start);
+
+  const cs = localDateStr(range.start), ce = localDateStr(range.end);
+  const ps = localDateStr(prevStart), pe = localDateStr(prevEnd);
+
+  return {
+    current: r => r.date && r.date >= cs && r.date < ce,
+    previous: r => r.date && r.date >= ps && r.date < pe,
+    vsLabel: range.label,
+  };
+}
+
+function fmtVsPct(cur, prev) {
+  if (prev === 0) {
+    if (cur === 0) return '±0%';
+    return '前期0';
+  }
+  const pct = ((cur - prev) / prev) * 100;
+  const sign = pct >= 0 ? '+' : '';
+  return `${sign}${pct.toFixed(1)}%`;
+}
+
 function renderReservationTab() {
   const channelFilter = document.getElementById('resv-channel-filter').value;
   const statusFilter = document.getElementById('resv-status-filter').value;
-  const months = getSelectedMonths('reservation');
-  const monthSet = new Set(months);
+  const periodInfo = getReservationPeriodInfo();
 
-  let filtered = [...reservations];
+  // チャネル/ステータスのプレフィルタを共通関数化（current/previous両方に適用）
+  const applySelectFilters = arr => {
+    let a = arr;
+    if (channelFilter) a = a.filter(r => r.channel === channelFilter);
+    if (statusFilter) a = a.filter(r => r.status === statusFilter);
+    return a;
+  };
 
-  // Channel filter
-  if (channelFilter) filtered = filtered.filter(r => r.channel === channelFilter);
-  // Status filter
-  if (statusFilter) filtered = filtered.filter(r => r.status === statusFilter);
+  const filtered = applySelectFilters(reservations).filter(periodInfo.current);
+  const prevFiltered = applySelectFilters(reservations).filter(periodInfo.previous);
 
-  // Period filter (based on checkin date)
-  filtered = filtered.filter(r => monthSet.has(getYearMonth(r.checkin)));
-
-  // KPIs
+  // KPIs - 当期
   const totalCount = filtered.length;
   const cancelCount = filtered.filter(r => r.status === 'システムキャンセル').length;
   const confirmedOnly = filtered.filter(r => r.status !== 'システムキャンセル');
-  const avgNights = confirmedOnly.length > 0 ? confirmedOnly.reduce((s, r) => s + r.nights, 0) / confirmedOnly.length : 0;
+  const totalNights = confirmedOnly.reduce((s, r) => s + r.nights, 0);
+  const avgNights = confirmedOnly.length > 0 ? totalNights / confirmedOnly.length : 0;
   const avgGuests = confirmedOnly.length > 0 ? confirmedOnly.reduce((s, r) => s + r.guestCount, 0) / confirmedOnly.length : 0;
+  const totalSales = confirmedOnly.reduce((s, r) => s + (r.sales || 0), 0);
+  const adr = totalNights > 0 ? totalSales / totalNights : 0;
+  const cancelSales = filtered.filter(r => r.status === 'システムキャンセル').reduce((s, r) => s + (r.sales || 0), 0);
+
+  // KPIs - 前期間
+  const prevTotalCount = prevFiltered.length;
+  const prevCancelCount = prevFiltered.filter(r => r.status === 'システムキャンセル').length;
+  const prevConfirmed = prevFiltered.filter(r => r.status !== 'システムキャンセル');
+  const prevTotalNights = prevConfirmed.reduce((s, r) => s + r.nights, 0);
+  const prevTotalSales = prevConfirmed.reduce((s, r) => s + (r.sales || 0), 0);
+  const prevAdr = prevTotalNights > 0 ? prevTotalSales / prevTotalNights : 0;
+  const prevCancelSales = prevFiltered.filter(r => r.status === 'システムキャンセル').reduce((s, r) => s + (r.sales || 0), 0);
 
   document.getElementById('kpi-resv-count').textContent = totalCount + '件';
+  document.getElementById('kpi-resv-count-vs-cnt').textContent = `${periodInfo.vsLabel} ${fmtVsPct(totalCount, prevTotalCount)}`;
+  document.getElementById('kpi-resv-sales').textContent = fmtYenFull(totalSales);
+  document.getElementById('kpi-resv-count-vs').textContent = `${periodInfo.vsLabel} ${fmtVsPct(totalSales, prevTotalSales)}`;
+  document.getElementById('kpi-resv-adr').textContent = fmtYenFull(Math.round(adr));
+  document.getElementById('kpi-resv-adr-vs').textContent = `${periodInfo.vsLabel} ${fmtVsPct(adr, prevAdr)}`;
   document.getElementById('kpi-resv-cancel').textContent = cancelCount + '件';
   document.getElementById('kpi-resv-cancel-rate').textContent = totalCount > 0 ? 'キャンセル率 ' + fmtPct((cancelCount / totalCount) * 100) : '-';
+  document.getElementById('kpi-resv-cancel-sales').textContent = fmtYenFull(cancelSales);
+  document.getElementById('kpi-resv-cancel-vs').textContent = `${periodInfo.vsLabel} ${fmtVsPct(cancelSales, prevCancelSales)}`;
   document.getElementById('kpi-resv-nights').textContent = avgNights.toFixed(1) + '泊';
   document.getElementById('kpi-resv-guests').textContent = avgGuests.toFixed(1) + '名';
 
-  // Table
+  // Table（キャンセルは表示から除外）
   const tbody = document.getElementById('reservation-table');
-  const displayResv = filtered.slice(0, 100);
+  const displayResv = filtered.filter(r => r.status !== 'システムキャンセル' && r.status !== 'キャンセル').slice(0, 100);
   tbody.innerHTML = displayResv.map(r => {
     const statusBadge = r.status === '確認済み' ? 'badge-green' : r.status === 'システムキャンセル' ? 'badge-red' : 'badge-orange';
     return `<tr>
-      <td>${r.id}</td><td>${r.channel}</td><td>${r.date}</td><td>${r.property}</td><td>${r.guest}</td><td>${r.nationality}</td><td>${r.guestCount}名</td><td>${r.checkin}</td><td>${r.checkout}</td><td>${r.nights}泊</td><td><span class="${statusBadge}">${r.status}</span></td><td>${fmtYenFull(r.sales)}</td><td>${fmtYenFull(r.received)}</td><td>${r.paid}</td>
+      <td>${(r.date || '').slice(0, 10)}</td><td>${r.channel}</td><td>${r.property}</td><td>${fmtYenFull(r.sales)}</td><td>${r.checkin}</td><td>${r.nights}泊</td><td>${r.guestCount}名</td><td>${r.checkout}</td><td>${r.guest}</td><td>${r.nationality}</td><td><span class="${statusBadge}">${r.status}</span></td><td>${fmtYenFull(r.received)}</td><td>${r.paid}</td><td>${r.id}</td>
     </tr>`;
   }).join('');
 }
@@ -1794,6 +1930,7 @@ function initChartsForTab(tabId) {
   if (tabId === 'daily') initDailyCharts();
   if (tabId === 'reservation') initReservationCharts();
   if (tabId === 'revenue') initRevenueCharts();
+  if (tabId === 'review') initReviewCharts();
 }
 
 function initDailyCharts() {
@@ -1957,51 +2094,126 @@ function initDailyCharts() {
 }
 
 function initReservationCharts() {
-  const months = getSelectedMonths('reservation');
-  const monthSet = new Set(months);
+  const periodPred = getReservationPeriodPredicate();
   const channelFilter = document.getElementById('resv-channel-filter').value;
   const statusFilter = document.getElementById('resv-status-filter').value;
 
   let filtered = [...reservations];
   if (channelFilter) filtered = filtered.filter(r => r.channel === channelFilter);
   if (statusFilter) filtered = filtered.filter(r => r.status === statusFilter);
-  filtered = filtered.filter(r => monthSet.has(getYearMonth(r.checkin)));
+  filtered = filtered.filter(periodPred);
 
-  // Channel breakdown doughnut
-  destroyChart('channelBD');
-  const channelMap = {};
+  // チェックイン月別予約数（縦棒、月昇順）
+  destroyChart('checkinMonthBD');
+  const monthMap = {};
+  const monthSalesMap = {};
   filtered.forEach(r => {
-    const ch = r.channel || 'その他';
-    channelMap[ch] = (channelMap[ch] || 0) + 1;
+    const ym = getYearMonth(r.checkin);
+    if (!ym) return;
+    monthMap[ym] = (monthMap[ym] || 0) + 1;
+    monthSalesMap[ym] = (monthSalesMap[ym] || 0) + (r.sales || 0);
   });
-  const ctx2 = document.getElementById('chartChannelBreakdown');
-  if (ctx2) {
-    const labels = Object.keys(channelMap);
-    const data = Object.values(channelMap);
-    const colors = PALETTE;
-    allCharts['channelBD'] = new Chart(ctx2, {
-      type: 'doughnut',
-      data: { labels, datasets: [{ data, backgroundColor: colors.slice(0, labels.length) }] },
-      options: { responsive: true, plugins: { legend: { position: 'bottom', labels: { font: { size: 11 } } } } }
+  const ctxM = document.getElementById('chartCheckinMonthBreakdown');
+  if (ctxM) {
+    const sortedMonths = Object.keys(monthMap).sort();
+    const mLabels = sortedMonths.map(ym => {
+      const [y, m] = ym.split('-');
+      return `${parseInt(y, 10)}/${parseInt(m, 10)}月`;
+    });
+    const mData = sortedMonths.map(ym => monthMap[ym]);
+    const mSales = sortedMonths.map(ym => monthSalesMap[ym] || 0);
+    const mTotal = mData.reduce((s, v) => s + v, 0);
+    allCharts['checkinMonthBD'] = new Chart(ctxM, {
+      type: 'bar',
+      data: {
+        labels: mLabels,
+        datasets: [{
+          label: '予約数',
+          data: mData,
+          backgroundColor: CHART_COLORS.orange + 'CC',
+          hoverBackgroundColor: CHART_COLORS.orange,
+        }]
+      },
+      options: {
+        responsive: true,
+        animation: { duration: 600, easing: 'easeOutQuart' },
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              label: ctx => {
+                const v = ctx.parsed.y;
+                const pct = mTotal > 0 ? ((v / mTotal) * 100).toFixed(1) : '0.0';
+                return [`${v}件 (${pct}%)`, `販売額: ${fmtYenFull(mSales[ctx.dataIndex])}`];
+              }
+            }
+          }
+        },
+        scales: {
+          x: { grid: { display: false } },
+          y: { beginAtZero: true, ticks: { precision: 0 } }
+        }
+      }
     });
   }
 
-  // Nationality breakdown doughnut
-  destroyChart('nationalityBD');
-  const natMap = {};
+  // 物件別予約数（横棒、件数降順）
+  destroyChart('propertyBD');
+  const propMap = {};
+  const propSalesMap = {};
   filtered.forEach(r => {
-    const nat = r.nationality || '不明';
-    natMap[nat] = (natMap[nat] || 0) + 1;
+    const p = r.property || 'その他';
+    propMap[p] = (propMap[p] || 0) + 1;
+    propSalesMap[p] = (propSalesMap[p] || 0) + (r.sales || 0);
   });
-  const ctx3 = document.getElementById('chartNationalityBreakdown');
-  if (ctx3) {
-    const labels = Object.keys(natMap).sort((a, b) => natMap[b] - natMap[a]).slice(0, 10);
-    const data = labels.map(l => natMap[l]);
-    const colors = PALETTE;
-    allCharts['nationalityBD'] = new Chart(ctx3, {
-      type: 'doughnut',
-      data: { labels, datasets: [{ data, backgroundColor: colors.slice(0, labels.length) }] },
-      options: { responsive: true, plugins: { legend: { position: 'bottom', labels: { font: { size: 11 } } } } }
+  const ctx4 = document.getElementById('chartPropertyBreakdown');
+  if (ctx4) {
+    const sortedAll = Object.entries(propMap).sort((a, b) => b[1] - a[1]);
+    const TOP_N = 15;
+    const top = sortedAll.slice(0, TOP_N);
+    const rest = sortedAll.slice(TOP_N);
+    const restCount = rest.reduce((s, [, v]) => s + v, 0);
+    const restSales = rest.reduce((s, [k]) => s + (propSalesMap[k] || 0), 0);
+    const sorted = restCount > 0 ? [...top, ['その他', restCount]] : top;
+    const labels = sorted.map(([k]) => k);
+    const data = sorted.map(([, v]) => v);
+    const propSales = sorted.map(([k]) => k === 'その他' ? restSales : (propSalesMap[k] || 0));
+    const total = data.reduce((s, v) => s + v, 0);
+    // 全物件名を表示するためにキャンバス高さを物件数に応じて調整
+    ctx4.parentElement.style.height = Math.max(240, labels.length * 22) + 'px';
+    allCharts['propertyBD'] = new Chart(ctx4, {
+      type: 'bar',
+      data: {
+        labels,
+        datasets: [{
+          label: '予約数',
+          data,
+          backgroundColor: CHART_COLORS.blue + 'CC',
+          hoverBackgroundColor: CHART_COLORS.blue,
+        }]
+      },
+      options: {
+        indexAxis: 'y',
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: { duration: 600, easing: 'easeOutQuart' },
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              label: ctx => {
+                const v = ctx.parsed.x;
+                const pct = total > 0 ? ((v / total) * 100).toFixed(1) : '0.0';
+                return [`${v}件 (${pct}%)`, `販売額: ${fmtYenFull(propSales[ctx.dataIndex])}`];
+              }
+            }
+          }
+        },
+        scales: {
+          x: { beginAtZero: true, grid: { display: false }, ticks: { precision: 0 } },
+          y: { grid: { display: false }, ticks: { font: { size: 11 }, autoSkip: false } }
+        }
+      }
     });
   }
 }
@@ -2105,6 +2317,424 @@ async function sendFeedback() {
   }
   btn.disabled = false;
   btn.textContent = '送信';
+}
+
+// ============================================================
+// Tab 6: レビュー（仮実装・モックデータ）
+// ============================================================
+const REVIEW_MOCK = (function generateMockReviews() {
+  const propsBase = [
+    { code: 'ENK801', name: 'ENK', room: '801', area: '大阪' },
+    { code: 'ENK902', name: 'ENK', room: '902', area: '大阪' },
+    { code: 'ENK302', name: 'ENK', room: '302', area: '大阪' },
+    { code: 'ENK602', name: 'ENK', room: '602', area: '大阪' },
+    { code: 'ENK502', name: 'ENK', room: '502', area: '大阪' },
+    { code: 'ENK101', name: 'ENK', room: '101', area: '大阪' },
+    { code: 'ENK201', name: 'ENK', room: '201', area: '大阪' },
+    { code: 'WID101', name: 'WID', room: '101', area: '京都' },
+    { code: 'WID201', name: 'WID', room: '201', area: '京都' },
+    { code: 'HTL布団6', name: 'HTL', room: '布団6', area: '東京' },
+    { code: 'HTL布団3', name: 'HTL', room: '布団3', area: '東京' },
+    { code: 'YUAN401', name: 'Yuan', room: '401', area: '京都' },
+  ];
+  const guestsByLang = {
+    ja: ['田中 健', '佐藤 美咲', '鈴木 大輔', '高橋 由紀', '伊藤 翔'],
+    en: ['John Smith', 'Emma Wilson', 'Michael Brown', 'Sarah Davis', 'Victor Sobczak'],
+    zh: ['王 偉', '李 娜', '張 偉', '劉 洋', '陳 静']
+  };
+  const positives = {
+    ja: ['とても清潔で快適でした。立地も良く再訪したいです。', '部屋が広く、設備も充実していました。', 'スタッフの対応が丁寧で安心して滞在できました。'],
+    en: ['Spotless apartment, perfect location! Will book again.', 'Comfortable stay, host was very responsive.', 'Excellent value for money, highly recommended.'],
+    zh: ['房间很干净，位置也很好，下次还会再来。', '设施齐全，体验很好。', '主人很热情，推荐！']
+  };
+  const negatives = {
+    ja: ['Wi-Fiが不安定で仕事に支障が出ました。改善希望です。', 'チェックインの説明が分かりにくかったです。'],
+    en: ['Wi-Fi was unreliable, made remote work difficult.', 'The room was smaller than expected based on photos.'],
+    zh: ['Wi-Fi信号不稳定。', '房间比照片看起来小。']
+  };
+  const privates = [
+    'シャワーの水圧が弱い気がしました。',
+    'エアコンのリモコンの電池が切れていました。',
+    '冷蔵庫の中に前のゲストの食品が残っていました。',
+    'ベッドのスプリングが少し気になりました。',
+    'キッチンの包丁が切れにくかったです。',
+    '玄関の鍵の操作がやや分かりにくかったです。'
+  ];
+  const reviews = [];
+  const now = new Date();
+  let id = 1;
+  for (let i = 0; i < 180; i++) {
+    const daysAgo = Math.floor(Math.random() * 360);
+    const date = new Date(now.getTime() - daysAgo * 86400000);
+    const prop = propsBase[Math.floor(Math.random() * propsBase.length)];
+    const langs = ['ja', 'en', 'zh'];
+    const lang = langs[Math.floor(Math.random() * langs.length)];
+    const guests = guestsByLang[lang];
+    const guest = guests[Math.floor(Math.random() * guests.length)];
+    const r = Math.random();
+    let star;
+    if (r < 0.7) star = 5;
+    else if (r < 0.88) star = 4;
+    else if (r < 0.96) star = 3;
+    else if (r < 0.99) star = 2;
+    else star = 1;
+    const sentiment = star >= 4 ? 'pos' : star === 3 ? 'neu' : 'neg';
+    const body = sentiment === 'neg'
+      ? negatives[lang][Math.floor(Math.random() * negatives[lang].length)]
+      : positives[lang][Math.floor(Math.random() * positives[lang].length)];
+    const hasPrivate = Math.random() < 0.18;
+    const replyStatus = star <= 3
+      ? (Math.random() < 0.4 ? 'pending' : (Math.random() < 0.5 ? 'approved' : 'posted'))
+      : (Math.random() < 0.7 ? 'posted' : 'none');
+    reviews.push({
+      id: 'rv_' + (id++),
+      date: date.toISOString().slice(0, 10),
+      property: prop,
+      guest, lang, star, body, sentiment,
+      stars: {
+        cleanliness: Math.max(1, star - (Math.random() < 0.3 ? 1 : 0)),
+        accuracy: Math.max(1, star - (Math.random() < 0.2 ? 1 : 0)),
+        checkin: Math.max(1, star - (Math.random() < 0.2 ? 1 : 0)),
+        communication: Math.max(1, star),
+        location: Math.max(1, star + (Math.random() < 0.3 ? 0 : 0)),
+        value: Math.max(1, star - (Math.random() < 0.2 ? 1 : 0)),
+      },
+      privateFeedback: hasPrivate ? privates[Math.floor(Math.random() * privates.length)] : null,
+      replyStatus,
+      replyDraft: star <= 3 ? 'このたびはご不便をおかけし申し訳ございません。いただいたご指摘を真摯に受け止め、改善に努めてまいります。' : null
+    });
+  }
+  // Mock execution log
+  const logs = [];
+  for (let i = 0; i < 20; i++) {
+    const daysAgo = Math.floor(Math.random() * 14);
+    const dt = new Date(now.getTime() - daysAgo * 86400000 - Math.random() * 86400000);
+    const prop = propsBase[Math.floor(Math.random() * propsBase.length)];
+    const langs = ['ja', 'en', 'zh'];
+    const lang = langs[Math.floor(Math.random() * langs.length)];
+    const guests = guestsByLang[lang];
+    const r = Math.random();
+    const status = r < 0.85 ? 'success' : (r < 0.93 ? 'skipped' : 'failed');
+    logs.push({
+      datetime: dt.toISOString().replace('T', ' ').slice(0, 16),
+      system: Math.random() < 0.85 ? 'A_post' : 'B_reply',
+      property: prop,
+      guest: guests[Math.floor(Math.random() * guests.length)],
+      lang, status,
+      note: status === 'skipped' ? '催促OFF' : (status === 'failed' ? 'モーダル開けず' : '★5固定')
+    });
+  }
+  logs.sort((a, b) => b.datetime.localeCompare(a.datetime));
+  return { reviews, logs };
+})();
+
+let _reviewFilters = { period: 30, area: '全体', lang: 'all', star: 'all' };
+let _rvCharts = {};
+
+function _filterReviews() {
+  const now = new Date();
+  const cutoff = new Date(now.getTime() - _reviewFilters.period * 86400000);
+  return REVIEW_MOCK.reviews.filter(r => {
+    if (new Date(r.date) < cutoff) return false;
+    if (_reviewFilters.area !== '全体' && r.property.area !== _reviewFilters.area) return false;
+    if (_reviewFilters.lang !== 'all' && r.lang !== _reviewFilters.lang) return false;
+    return true;
+  });
+}
+
+function setReviewFilter(el, key) {
+  el.parentElement.querySelectorAll('.pill').forEach(p => p.classList.remove('active'));
+  el.classList.add('active');
+  if (key === 'period') _reviewFilters.period = parseInt(el.dataset.period, 10);
+  if (key === 'area') _reviewFilters.area = el.dataset.area;
+  if (key === 'lang') _reviewFilters.lang = el.dataset.lang;
+  if (key === 'star') _reviewFilters.star = el.dataset.star;
+  renderReviewTab();
+  initReviewCharts();
+}
+
+function renderReviewTab() {
+  if (!document.getElementById('rv-kpi-avg')) return;
+  const filtered = _filterReviews();
+
+  // KPI
+  const avg = filtered.length ? (filtered.reduce((s, r) => s + r.star, 0) / filtered.length) : 0;
+  const negCount = filtered.filter(r => r.sentiment === 'neg').length;
+  const posted = REVIEW_MOCK.logs.filter(l => l.system === 'A_post' && l.status === 'success').length;
+  document.getElementById('rv-kpi-avg').textContent = avg.toFixed(2) + ' ★';
+  document.getElementById('rv-kpi-avg-sub').textContent = filtered.length ? `n=${filtered.length}` : '';
+  document.getElementById('rv-kpi-count').textContent = filtered.length;
+  document.getElementById('rv-kpi-count-sub').textContent = `直近${_reviewFilters.period}日`;
+  // 記載率: mock = received / (received + 推定未記載)
+  const totalReservations = Math.floor(filtered.length / 0.62);
+  const rate = totalReservations ? (filtered.length / totalReservations * 100) : 0;
+  document.getElementById('rv-kpi-rate').textContent = rate.toFixed(0) + '%';
+  const negRate = filtered.length ? (negCount / filtered.length * 100) : 0;
+  document.getElementById('rv-kpi-neg').textContent = negRate.toFixed(1) + '%';
+  document.getElementById('rv-kpi-neg-sub').textContent = `${negCount} 件`;
+  document.getElementById('rv-kpi-posted').textContent = posted;
+  document.getElementById('rv-kpi-posted-sub').textContent = '直近14日';
+
+  // 物件別テーブル
+  const byProp = {};
+  filtered.forEach(r => {
+    const k = r.property.code;
+    if (!byProp[k]) byProp[k] = { prop: r.property, list: [] };
+    byProp[k].list.push(r);
+  });
+  const propRows = Object.values(byProp).map(o => {
+    const cnt = o.list.length;
+    const avgS = o.list.reduce((s, r) => s + r.star, 0) / cnt;
+    const neg = o.list.filter(r => r.sentiment === 'neg').length;
+    const latest = o.list.map(r => r.date).sort().slice(-1)[0];
+    const rateP = Math.min(100, 50 + Math.random() * 40);
+    return { prop: o.prop, cnt, avg: avgS, neg, latest, rate: rateP };
+  }).sort((a, b) => b.cnt - a.cnt);
+
+  // 物件マスタからAirbnb情報をルックアップ（コード正規化マッチ）
+  const airbnbByCode = {};
+  (propertyMaster || []).forEach(pm => {
+    const code = pm['物件コード'] || '';
+    if (!code) return;
+    airbnbByCode[code] = {
+      account: pm['airbnbアカウント'] || '',
+      listingId: pm['airbnbリスティングID'] || ''
+    };
+  });
+
+  const tbody = document.querySelector('#rv-property-table tbody');
+  tbody.innerHTML = propRows.map(r => {
+    const starColor = r.avg >= 4.7 ? 'positive' : r.avg < 4.3 ? 'negative' : '';
+    const negPct = (r.neg / r.cnt * 100).toFixed(0);
+    const trend = r.avg >= 4.7 ? '▲' : r.avg < 4.3 ? '▼' : '→';
+    const ab = airbnbByCode[r.prop.code] || {};
+    const link = ab.listingId
+      ? ` <a href="https://www.airbnb.com/rooms/${ab.listingId}" target="_blank" style="font-size:11px;color:#007aff;text-decoration:none;">↗</a>`
+      : '';
+    const acctBadge = ab.account ? ` <span class="badge-blue">${ab.account}</span>` : '';
+    return `<tr>
+      <td>${r.prop.name} #${r.prop.room}${link}${acctBadge}</td>
+      <td>${r.prop.area}</td>
+      <td class="text-right">${r.cnt}</td>
+      <td class="text-right ${starColor}">${r.avg.toFixed(2)}</td>
+      <td class="text-right">${r.rate.toFixed(0)}%</td>
+      <td class="text-right ${r.neg > 0 ? 'negative' : ''}">${negPct}%</td>
+      <td>${r.latest}</td>
+      <td>${trend}</td>
+    </tr>`;
+  }).join('');
+
+  // 承認待ち
+  const pending = filtered.filter(r => r.replyStatus === 'pending');
+  document.getElementById('rv-approval-count').textContent = pending.length;
+  document.getElementById('rv-approval-list').innerHTML = pending.length ? pending.map(r => `
+    <div style="border:1px solid #ffe1c2;background:#fffbf5;border-radius:8px;padding:14px 16px;margin-bottom:10px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+        <div style="font-size:13px;font-weight:600;">${r.property.name} #${r.property.room} <span style="color:#999;font-weight:400;margin-left:8px;">${r.guest} / ${r.date}</span></div>
+        <div><span class="badge-red">★${r.star}</span></div>
+      </div>
+      <div style="font-size:12px;color:#444;background:#f5f5f7;padding:8px 12px;border-radius:6px;margin-bottom:8px;">
+        <strong>レビュー本文:</strong> ${r.body}
+      </div>
+      <div style="font-size:12px;color:#444;background:#eef5ff;padding:8px 12px;border-radius:6px;margin-bottom:10px;">
+        <strong>提案返信（Claude生成）:</strong> ${r.replyDraft}
+      </div>
+      <div style="display:flex;gap:8px;">
+        <button class="refresh-btn" style="background:#34c759;color:white;border:none;">承認</button>
+        <button class="refresh-btn" style="background:#ff9500;color:white;border:none;">編集</button>
+        <button class="refresh-btn" style="background:#ff3b30;color:white;border:none;">却下</button>
+      </div>
+    </div>
+  `).join('') : '<div style="color:#999;font-size:13px;padding:20px 0;text-align:center;">承認待ちはありません</div>';
+
+  // プライベートFB
+  const withPrivate = filtered.filter(r => r.privateFeedback);
+  const privByProp = {};
+  withPrivate.forEach(r => {
+    const k = r.property.code;
+    if (!privByProp[k]) privByProp[k] = { prop: r.property, list: [] };
+    privByProp[k].list.push(r);
+  });
+  document.getElementById('rv-private-list').innerHTML = Object.values(privByProp).length
+    ? Object.values(privByProp).slice(0, 8).map(o => `
+      <div style="border-left:3px solid #ff9500;padding:8px 14px;margin-bottom:10px;background:#fafafa;border-radius:0 6px 6px 0;">
+        <div style="font-weight:600;font-size:12px;margin-bottom:6px;">${o.prop.name} #${o.prop.room} <span style="color:#999;font-weight:400;">（${o.list.length}件）</span></div>
+        ${o.list.slice(0, 3).map(r => `<div style="font-size:12px;color:#555;margin:3px 0;">・ ${r.privateFeedback} <span style="color:#999;">(${r.date} / ${r.guest})</span></div>`).join('')}
+      </div>
+    `).join('')
+    : '<div style="color:#999;font-size:13px;padding:20px 0;text-align:center;">プライベートフィードバックはありません</div>';
+
+  // レビュー一覧
+  let listFiltered = filtered;
+  if (_reviewFilters.star !== 'all') {
+    if (_reviewFilters.star === 'lt3') listFiltered = listFiltered.filter(r => r.star < 3);
+    else listFiltered = listFiltered.filter(r => r.star === parseInt(_reviewFilters.star, 10));
+  }
+  listFiltered = listFiltered.sort((a, b) => b.date.localeCompare(a.date)).slice(0, 30);
+  const listBody = document.querySelector('#rv-list-table tbody');
+  listBody.innerHTML = listFiltered.map(r => {
+    const sentBadge = r.sentiment === 'pos' ? '<span class="badge-green">ポジ</span>' :
+                      r.sentiment === 'neg' ? '<span class="badge-red">ネガ</span>' :
+                      '<span class="badge-gray">中立</span>';
+    const replyBadge = {
+      none: '<span class="badge-gray">未返信</span>',
+      draft: '<span class="badge-blue">下書き</span>',
+      pending: '<span class="badge-orange">承認待ち</span>',
+      approved: '<span class="badge-blue">承認済</span>',
+      posted: '<span class="badge-green">投稿済</span>',
+      rejected: '<span class="badge-gray">却下</span>'
+    }[r.replyStatus];
+    const starColor = r.star >= 4 ? 'positive' : r.star <= 2 ? 'negative' : '';
+    return `<tr>
+      <td>${r.date}</td>
+      <td>${r.property.name} #${r.property.room}</td>
+      <td>${r.guest}</td>
+      <td>${r.lang.toUpperCase()}</td>
+      <td class="text-right ${starColor}">★${r.star}</td>
+      <td style="max-width:380px;white-space:normal;font-size:12px;">${r.body}</td>
+      <td>${sentBadge}</td>
+      <td>${replyBadge}</td>
+    </tr>`;
+  }).join('');
+
+  // ★フィルタのpill clickをbind
+  document.querySelectorAll('#rv-list-star-filter .pill').forEach(p => {
+    p.onclick = () => setReviewFilter(p, 'star');
+  });
+
+  // 実行ログ
+  const logBody = document.querySelector('#rv-log-table tbody');
+  logBody.innerHTML = REVIEW_MOCK.logs.map(l => {
+    const stBadge = l.status === 'success' ? '<span class="badge-green">成功</span>' :
+                    l.status === 'skipped' ? '<span class="badge-gray">スキップ</span>' :
+                    '<span class="badge-red">失敗</span>';
+    return `<tr>
+      <td style="font-size:12px;">${l.datetime}</td>
+      <td><span class="badge-blue">${l.system}</span></td>
+      <td>${l.property.name} #${l.property.room}</td>
+      <td>${l.guest}</td>
+      <td>${l.lang.toUpperCase()}</td>
+      <td>${stBadge}</td>
+      <td style="font-size:12px;color:#666;">${l.note}</td>
+    </tr>`;
+  }).join('');
+
+  // キーワード
+  const kwPos = [
+    { w: '清潔', n: 42 }, { w: '立地', n: 38 }, { w: '快適', n: 31 },
+    { w: '広い', n: 24 }, { w: 'スタッフ', n: 19 }, { w: 'recommended', n: 17 },
+    { w: 'comfortable', n: 14 }, { w: '便利', n: 12 }
+  ];
+  const kwNeg = [
+    { w: 'Wi-Fi', n: 8 }, { w: '狭い', n: 5 }, { w: '臭い', n: 3 },
+    { w: '騒音', n: 3 }, { w: 'shower', n: 2 }
+  ];
+  const kwHtml = arr => arr.map(k => {
+    const sz = 11 + Math.min(k.n / 4, 8);
+    return `<span style="display:inline-block;margin:3px;padding:3px 10px;background:#f0f0f0;border-radius:12px;font-size:${sz}px;">${k.w} <span style="color:#999;font-size:10px;">×${k.n}</span></span>`;
+  }).join('');
+  document.getElementById('rv-kw-pos').innerHTML = kwHtml(kwPos);
+  document.getElementById('rv-kw-neg').innerHTML = kwHtml(kwNeg);
+
+  // フィルタpillのbind（毎回再bind）
+  document.querySelectorAll('#review-period-filter .pill').forEach(p => p.onclick = () => setReviewFilter(p, 'period'));
+  document.querySelectorAll('#review-area-filter .pill').forEach(p => p.onclick = () => setReviewFilter(p, 'area'));
+  document.querySelectorAll('#review-lang-filter .pill').forEach(p => p.onclick = () => setReviewFilter(p, 'lang'));
+}
+
+function initReviewCharts() {
+  if (typeof Chart === 'undefined') return;
+  const filtered = _filterReviews();
+
+  // 月別集計
+  const byMonth = {};
+  filtered.forEach(r => {
+    const m = r.date.slice(0, 7);
+    if (!byMonth[m]) byMonth[m] = { stars: [], pos: 0, neu: 0, neg: 0 };
+    byMonth[m].stars.push(r.star);
+    byMonth[m][r.sentiment]++;
+  });
+  const months = Object.keys(byMonth).sort();
+  const trendData = months.map(m => {
+    const ss = byMonth[m].stars;
+    return ss.reduce((a, b) => a + b, 0) / ss.length;
+  });
+  const posData = months.map(m => byMonth[m].pos);
+  const neuData = months.map(m => byMonth[m].neu);
+  const negData = months.map(m => byMonth[m].neg);
+
+  if (_rvCharts.trend) _rvCharts.trend.destroy();
+  const trendCtx = document.getElementById('rv-trend-chart');
+  if (trendCtx) {
+    _rvCharts.trend = new Chart(trendCtx, {
+      type: 'line',
+      data: {
+        labels: months,
+        datasets: [{
+          label: '平均★',
+          data: trendData,
+          borderColor: '#007aff',
+          backgroundColor: 'rgba(0,122,255,0.1)',
+          tension: 0.3, fill: true
+        }]
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        scales: { y: { min: 1, max: 5 } },
+        plugins: { legend: { display: false } }
+      }
+    });
+  }
+
+  if (_rvCharts.sent) _rvCharts.sent.destroy();
+  const sentCtx = document.getElementById('rv-sentiment-chart');
+  if (sentCtx) {
+    _rvCharts.sent = new Chart(sentCtx, {
+      type: 'bar',
+      data: {
+        labels: months,
+        datasets: [
+          { label: 'ポジ', data: posData, backgroundColor: '#34c759' },
+          { label: '中立', data: neuData, backgroundColor: '#aaa' },
+          { label: 'ネガ', data: negData, backgroundColor: '#ff3b30' }
+        ]
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        scales: { x: { stacked: true }, y: { stacked: true } }
+      }
+    });
+  }
+
+  // レーダー（カテゴリ別★平均）
+  const cats = ['cleanliness', 'accuracy', 'checkin', 'communication', 'location', 'value'];
+  const catLabels = ['清潔さ', '正確さ', 'チェックイン', 'コミュニケーション', 'ロケーション', '価値'];
+  const catAvg = cats.map(c => {
+    const vals = filtered.map(r => r.stars[c]);
+    return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : 0;
+  });
+  if (_rvCharts.radar) _rvCharts.radar.destroy();
+  const radarCtx = document.getElementById('rv-radar-chart');
+  if (radarCtx) {
+    _rvCharts.radar = new Chart(radarCtx, {
+      type: 'radar',
+      data: {
+        labels: catLabels,
+        datasets: [{
+          label: '平均★',
+          data: catAvg,
+          borderColor: '#007aff',
+          backgroundColor: 'rgba(0,122,255,0.2)',
+          pointBackgroundColor: '#007aff'
+        }]
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        scales: { r: { min: 0, max: 5, ticks: { stepSize: 1 } } },
+        plugins: { legend: { display: false } }
+      }
+    });
+  }
 }
 
 // ── Auth ──

@@ -186,7 +186,6 @@
       </div>
     </div>
 
-    <div id="owner-drill-container"></div>
   </div>
 </div>
 
@@ -268,12 +267,14 @@
   <div class="container">
     <div class="filter-bar">
       <label>期間</label>
+      <label style="font-size:11px;color:#999;margin-right:8px;">予約獲得日</label>
       <div class="filter-pills" id="resv-period-filter">
-        <span class="pill active" data-period="thisMonth" onclick="setPeriodFilter(this,'reservation')">今月</span>
+        <span class="pill active" data-period="yesterday" onclick="setPeriodFilter(this,'reservation')">昨日</span>
+        <span class="pill" data-period="last3Days" onclick="setPeriodFilter(this,'reservation')">3日間</span>
+        <span class="pill" data-period="last7Days" onclick="setPeriodFilter(this,'reservation')">7日間</span>
+        <span class="pill" data-period="thisMonth" onclick="setPeriodFilter(this,'reservation')">今月</span>
         <span class="pill" data-period="lastMonth" onclick="setPeriodFilter(this,'reservation')">前月</span>
         <span class="pill" data-period="last3Months" onclick="setPeriodFilter(this,'reservation')">直近3ヶ月</span>
-        <span class="pill" data-period="nextMonth" onclick="setPeriodFilter(this,'reservation')">来月</span>
-        <span class="pill" data-period="next2Month" onclick="setPeriodFilter(this,'reservation')">再来月</span>
       </div>
       <label>予約サイト</label>
       <select id="resv-channel-filter" onchange="renderAll()">
@@ -287,11 +288,24 @@
       </select>
     </div>
 
-    <div class="kpi-grid" id="resv-kpi-grid">
-      <div class="kpi-card"><div class="label">予約数</div><div class="value" id="kpi-resv-count">-</div></div>
-      <div class="kpi-card"><div class="label">キャンセル</div><div class="value" id="kpi-resv-cancel">-</div><div class="sub" id="kpi-resv-cancel-rate">-</div></div>
+    <div class="kpi-grid-6" id="resv-kpi-grid">
+      <div class="kpi-card"><div class="label">予約数</div><div class="value" id="kpi-resv-count">-</div><div class="sub" id="kpi-resv-count-vs-cnt">-</div></div>
+      <div class="kpi-card"><div class="label">GMV</div><div class="value" id="kpi-resv-sales">-</div><div class="sub" id="kpi-resv-count-vs">-</div></div>
+      <div class="kpi-card"><div class="label">ADR</div><div class="value" id="kpi-resv-adr">-</div><div class="sub" id="kpi-resv-adr-vs">-</div></div>
+      <div class="kpi-card"><div class="label">キャンセル</div><div class="value" id="kpi-resv-cancel">-</div><div class="sub" id="kpi-resv-cancel-rate">-</div><div class="sub" id="kpi-resv-cancel-sales">-</div><div class="sub" id="kpi-resv-cancel-vs">-</div></div>
       <div class="kpi-card"><div class="label">平均泊数</div><div class="value" id="kpi-resv-nights">-</div></div>
       <div class="kpi-card"><div class="label">平均ゲスト数</div><div class="value" id="kpi-resv-guests">-</div></div>
+    </div>
+
+    <div class="chart-grid">
+      <div class="card">
+        <h2>物件別予約数</h2>
+        <canvas id="chartPropertyBreakdown"></canvas>
+      </div>
+      <div class="card">
+        <h2>チェックイン月別予約数</h2>
+        <canvas id="chartCheckinMonthBreakdown"></canvas>
+      </div>
     </div>
 
     <div class="card">
@@ -299,21 +313,10 @@
       <div class="table-wrap">
         <table>
           <thead>
-            <tr><th>AirHost予約ID</th><th>予約サイト</th><th>予約日</th><th>物件名</th><th>ゲスト名</th><th>国籍</th><th>ゲスト数</th><th>チェックイン</th><th>チェックアウト</th><th>泊数</th><th>状態</th><th>販売</th><th>受取金</th><th>支払済み</th></tr>
+            <tr><th>予約日</th><th>予約サイト</th><th>物件名</th><th>販売額</th><th>チェックイン</th><th>泊数</th><th>ゲスト数</th><th>チェックアウト</th><th>ゲスト名</th><th>国籍</th><th>状態</th><th>受取金</th><th>支払済み</th><th>AirHost予約ID</th></tr>
           </thead>
           <tbody id="reservation-table"></tbody>
         </table>
-      </div>
-    </div>
-
-    <div class="chart-grid">
-      <div class="card">
-        <h2>予約サイト別内訳</h2>
-        <canvas id="chartChannelBreakdown"></canvas>
-      </div>
-      <div class="card">
-        <h2>国籍別内訳</h2>
-        <canvas id="chartNationalityBreakdown"></canvas>
       </div>
     </div>
   </div>
@@ -378,13 +381,184 @@
 <!-- ==================== Tab 6: レビュー ==================== -->
 <div id="tab-review" class="tab-content">
   <div class="container">
-    <div class="card">
-      <h2>レビュー</h2>
-      <p style="color:#999;font-size:13px;padding:40px 0;text-align:center;">
-        レビューデータはAirhostのCSVエクスポートに含まれないため、現在このタブではデータを表示できません。<br>
-        レビューデータの連携方法については別途ご相談ください。
-      </p>
+
+    <div style="background:#fff8e1;border:1px solid #ffd54f;border-radius:8px;padding:10px 16px;margin-bottom:16px;font-size:12px;color:#795548;">
+      ⚠ <strong>仮実装（モックデータ）</strong> — 表示中のレビューはサンプルデータです。実データ連携は SPEC.md / SPEC.html 参照
     </div>
+
+    <div class="filter-bar">
+      <label>期間</label>
+      <div class="filter-pills" id="review-period-filter">
+        <span class="pill" data-period="7">直近7日</span>
+        <span class="pill active" data-period="30">直近30日</span>
+        <span class="pill" data-period="90">直近90日</span>
+        <span class="pill" data-period="365">直近1年</span>
+      </div>
+      <label>エリア</label>
+      <div class="filter-pills" id="review-area-filter">
+        <span class="pill active" data-area="全体">全体</span>
+        <span class="pill" data-area="大阪">大阪</span>
+        <span class="pill" data-area="京都">京都</span>
+        <span class="pill" data-area="東京">東京</span>
+        <span class="pill" data-area="その他">その他</span>
+      </div>
+      <label>言語</label>
+      <div class="filter-pills" id="review-lang-filter">
+        <span class="pill active" data-lang="all">全て</span>
+        <span class="pill" data-lang="ja">日本語</span>
+        <span class="pill" data-lang="en">英語</span>
+        <span class="pill" data-lang="zh">中国語</span>
+      </div>
+    </div>
+
+    <!-- KPI Cards -->
+    <div class="kpi-grid-5">
+      <div class="kpi-card">
+        <div class="label">平均★（総合）</div>
+        <div class="value" id="rv-kpi-avg">—</div>
+        <div class="sub" id="rv-kpi-avg-sub"></div>
+      </div>
+      <div class="kpi-card">
+        <div class="label">受信レビュー数</div>
+        <div class="value" id="rv-kpi-count">—</div>
+        <div class="sub" id="rv-kpi-count-sub"></div>
+      </div>
+      <div class="kpi-card">
+        <div class="label">記載率</div>
+        <div class="value" id="rv-kpi-rate">—</div>
+        <div class="sub">レビュー有 / 全予約</div>
+      </div>
+      <div class="kpi-card">
+        <div class="label">ネガレビュー比率</div>
+        <div class="value" id="rv-kpi-neg">—</div>
+        <div class="sub" id="rv-kpi-neg-sub"></div>
+      </div>
+      <div class="kpi-card">
+        <div class="label">自動投稿数（系統A）</div>
+        <div class="value" id="rv-kpi-posted">—</div>
+        <div class="sub" id="rv-kpi-posted-sub"></div>
+      </div>
+    </div>
+
+    <!-- Charts -->
+    <div class="chart-grid">
+      <div class="card">
+        <h2>月次★トレンド</h2>
+        <canvas id="rv-trend-chart" height="200"></canvas>
+      </div>
+      <div class="card">
+        <h2>ネガポジ月次推移</h2>
+        <canvas id="rv-sentiment-chart" height="200"></canvas>
+      </div>
+    </div>
+
+    <div class="chart-grid">
+      <div class="card">
+        <h2>カテゴリ別★平均（6軸）</h2>
+        <canvas id="rv-radar-chart" height="220"></canvas>
+      </div>
+      <div class="card">
+        <h2>頻出キーワード</h2>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;font-size:12px;">
+          <div>
+            <div style="font-weight:600;color:#34c759;margin-bottom:8px;">ポジティブ</div>
+            <div id="rv-kw-pos"></div>
+          </div>
+          <div>
+            <div style="font-weight:600;color:#ff3b30;margin-bottom:8px;">ネガティブ</div>
+            <div id="rv-kw-neg"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 承認待ち返信キュー -->
+    <div class="card" id="rv-approval-card">
+      <h2>★低評価返信 — 承認待ちキュー <span id="rv-approval-count" class="badge-orange" style="margin-left:8px;">0</span></h2>
+      <div id="rv-approval-list"></div>
+    </div>
+
+    <!-- 物件別スコアテーブル -->
+    <div class="card">
+      <h2>物件別スコアテーブル</h2>
+      <div class="table-wrap">
+        <table id="rv-property-table">
+          <thead>
+            <tr>
+              <th>物件</th>
+              <th>エリア</th>
+              <th class="text-right">レビュー数</th>
+              <th class="text-right">★平均</th>
+              <th class="text-right">記載率</th>
+              <th class="text-right">ネガ率</th>
+              <th>最新レビュー</th>
+              <th>トレンド</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- プライベートフィードバック一覧 -->
+    <div class="card">
+      <h2>プライベートフィードバック（ホストのみ閲覧可・改善ヒント）</h2>
+      <div id="rv-private-list" style="font-size:13px;"></div>
+    </div>
+
+    <!-- レビュー一覧 -->
+    <div class="card">
+      <h2>受信レビュー一覧</h2>
+      <div class="filter-bar" style="margin-bottom:12px;padding:8px 14px;">
+        <label>★</label>
+        <div class="filter-pills" id="rv-list-star-filter">
+          <span class="pill active" data-star="all">全て</span>
+          <span class="pill" data-star="5">★5</span>
+          <span class="pill" data-star="4">★4</span>
+          <span class="pill" data-star="3">★3</span>
+          <span class="pill" data-star="lt3">★3未満</span>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table id="rv-list-table">
+          <thead>
+            <tr>
+              <th>日付</th>
+              <th>物件</th>
+              <th>ゲスト</th>
+              <th>言語</th>
+              <th class="text-right">★</th>
+              <th>本文</th>
+              <th>感情</th>
+              <th>返信</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- 実行ログ -->
+    <div class="card">
+      <h2>自動投稿 実行ログ（直近20件）</h2>
+      <div class="table-wrap">
+        <table id="rv-log-table">
+          <thead>
+            <tr>
+              <th>実行日時</th>
+              <th>系統</th>
+              <th>物件</th>
+              <th>ゲスト</th>
+              <th>言語</th>
+              <th>ステータス</th>
+              <th>備考</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+
   </div>
 </div>
 
