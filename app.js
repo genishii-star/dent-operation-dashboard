@@ -46,6 +46,8 @@ const CHART_COLORS = {
 const PALETTE = Object.values(CHART_COLORS);
 
 const SHEET_ID = '1C7EiYSz-3ohjTy3Ul5zdgqL8cDk24jPj3ySTsAcOPhA';
+const SHEET_GID_PROPERTY_MASTER = '416395562';
+const SHEET_GID_OWNER_MASTER = '907386098';
 const API_KEY = 'AIzaSyD_16gkzGw68S4socdFAr5HtIieisPA3uk';
 
 function sheetApiUrl(sheetName) {
@@ -143,6 +145,7 @@ let currentFilters = {
   propertyPeriod: 'thisMonth',
   reservationPeriod: 'yesterday',
   revenuePeriod: 'thisMonth',
+  ownerProgressPeriod: 'thisMonth',
   propertyView: 'all',
   recentDays: 1,
 };
@@ -290,28 +293,27 @@ function deriveArea(address) {
 
 function generatePropCode(propName, roomNum) {
   if (!propName) return '';
-  // Use master lookup if available
-  if (window._propCodeLookup) {
-    const key = propName + '|' + (roomNum || '');
-    if (window._propCodeLookup[key]) return window._propCodeLookup[key];
+  // 物件コードは「物件名+ルーム番号」(多部屋) または「物件名」(単独) の連結形式。
+  // マスタの物件コードSetと突き合わせて解決する。
+  const codeSet = window._propCodeSet;
+  if (roomNum && roomNum !== 'ALL' && propName !== roomNum && propName.toLowerCase() !== roomNum.toLowerCase()) {
+    const concatenated = propName + roomNum;
+    if (codeSet && codeSet.has(concatenated)) return concatenated;
+    if (codeSet && codeSet.has(propName)) return propName;
+    return concatenated;
   }
-  if (!roomNum || roomNum === 'ALL') return propName;
-  if (propName === roomNum || propName.toLowerCase() === roomNum.toLowerCase()) return propName;
-  return propName + roomNum;
+  if (codeSet && codeSet.has(propName)) return propName;
+  return propName;
 }
 
 function processData() {
-  // Build propCode lookup first (before any generatePropCode calls)
-  const propCodeLookup = {};
+  // 物件コードSetを構築（マスタの物件コード列がそのまま正規化キー）
+  const codeSet = new Set();
   propertyMaster.forEach(pm => {
     const code = pm['物件コード'] || '';
-    const pn = pm['物件名'] || '';
-    const rn = pm['ルーム番号'] || '';
-    if (code && pn) {
-      propCodeLookup[pn + '|' + rn] = code;
-    }
+    if (code) codeSet.add(code);
   });
-  window._propCodeLookup = propCodeLookup;
+  window._propCodeSet = codeSet;
 
   // Map reservations
   reservations = rawReservations.map(r => {
@@ -342,14 +344,6 @@ function processData() {
   // Sort reservations by date descending
   reservations.sort((a, b) => b.date.localeCompare(a.date));
 
-  // Populate channel filter options
-  const channels = [...new Set(reservations.map(r => r.channel).filter(Boolean))];
-  const channelSelect = document.getElementById('resv-channel-filter');
-  channelSelect.innerHTML = '<option value="">すべて</option>';
-  channels.forEach(ch => {
-    channelSelect.innerHTML += `<option value="${ch}">${ch}</option>`;
-  });
-
   // Populate status filter options from actual data
   const statuses = [...new Set(reservations.map(r => r.status).filter(Boolean))];
   const statusSelect = document.getElementById('resv-status-filter');
@@ -358,12 +352,13 @@ function processData() {
     statusSelect.innerHTML += `<option value="${st}">${st}</option>`;
   });
 
-  // Build owner lookup
+  // Build owner lookup（オーナーIDがそのまま表示名）
   const ownerMap = {};
   ownerMaster.forEach(om => {
-    ownerMap[om['オーナーID']] = {
-      id: om['オーナーID'] || '',
-      name: om['オーナー名'] || '',
+    const id = om['オーナーID'] || '';
+    ownerMap[id] = {
+      id: id,
+      name: id,
       royalty: om['ロイヤリティ'] || '',
     };
   });
@@ -398,6 +393,8 @@ function processData() {
       targetHigh: parseNum(pm['繁忙期目標']),
       airbnbAccount: pm['airbnbアカウント'] || '',
       airbnbListingId: pm['airbnbリスティングID'] || '',
+      licenseType: pm['許可種類'] || '',
+      operationLimitDays: parseNum(pm['営業日数上限']) || 0,
     };
   }).filter(Boolean);
 
@@ -479,6 +476,53 @@ function findPropByReservation(r) {
 
 function findPropByName(name) {
   return window._propByName[name] || window._propByPropName[name] || null;
+}
+
+// マスタに存在しない物件名を検出（予約データ + 日次データ両方をスキャン）
+function findOrphanProperties() {
+  const isTest = name => /TEST/i.test(name || '');
+  const orphans = new Map(); // key: 表示名, value: { source: Set, count }
+  reservations.forEach(r => {
+    if (r.status === 'システムキャンセル' || r.status === 'キャンセル') return;
+    if (findPropByReservation(r)) return;
+    if (isTest(r.property) || isTest(r.roomNum)) return;
+    const key = r.property + (r.roomNum ? ` (部屋${r.roomNum})` : '');
+    if (!orphans.has(key)) orphans.set(key, { sources: new Set(), count: 0 });
+    const o = orphans.get(key);
+    o.sources.add('予約');
+    o.count++;
+  });
+  rawDailyData.forEach(d => {
+    const propName = d['物件名'] || '';
+    const roomNum = d['ルーム番号'] || '';
+    if (!propName) return;
+    if (isTest(propName) || isTest(roomNum)) return;
+    const code = generatePropCode(propName, roomNum);
+    if (findPropByName(code)) return;
+    const key = propName + (roomNum && roomNum !== 'ALL' ? ` (部屋${roomNum})` : '');
+    if (!orphans.has(key)) orphans.set(key, { sources: new Set(), count: 0 });
+    const o = orphans.get(key);
+    o.sources.add('日次');
+    o.count++;
+  });
+  return [...orphans.entries()].map(([name, info]) => ({ name, sources: [...info.sources], count: info.count }));
+}
+
+function renderOrphanAlert(containerId) {
+  const el = document.getElementById(containerId);
+  if (!el) return;
+  const orphans = findOrphanProperties();
+  if (orphans.length === 0) {
+    el.innerHTML = '';
+    return;
+  }
+  const items = orphans.map(o => `<li>${o.name} <span style="color:#999;">(${o.sources.join('/')}データ・${o.count}件)</span></li>`).join('');
+  const sheetUrl = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/edit#gid=${SHEET_GID_PROPERTY_MASTER}`;
+  el.innerHTML = `<div class="alert-orphan">
+    <div class="alert-title">⚠ マスタ未登録の物件が ${orphans.length} 件あります</div>
+    物件マスタへの追加または名称統一が必要です。<a href="${sheetUrl}" target="_blank" rel="noopener" style="color:#ff3b30;font-weight:600;text-decoration:underline;">物件マスタを開く ↗</a>
+    <ul>${items}</ul>
+  </div>`;
 }
 
 function getTargetForProperty(prop, monthNum) {
@@ -674,7 +718,7 @@ function fmtPct(n) {
 // ============================================================
 function switchTab(id) {
   document.querySelectorAll('.tab-btn').forEach((btn, i) => {
-    const tabIds = ['daily','owner','property','reservation','revenue','review'];
+    const tabIds = ['daily','owner','property','reservation','revenue','review','shinpou'];
     btn.classList.toggle('active', tabIds[i] === id);
   });
   document.querySelectorAll('.tab-content').forEach(tc => tc.classList.remove('active'));
@@ -837,6 +881,7 @@ function renderAll() {
   renderReservationTab();
   renderRevenueTab();
   renderReviewTab();
+  renderShinpouTab();
   setTimeout(initSortableHeaders, 50);
 }
 
@@ -920,6 +965,7 @@ function renderDailyTab() {
 // Tab 2: オーナー別分析
 // ============================================================
 function renderOwnerTab() {
+  renderOrphanAlert('owner-orphan-alert');
   const months = getSelectedMonths('owner');
   const area = currentFilters.ownerArea;
 
@@ -993,6 +1039,44 @@ function renderOwnerTab() {
   document.getElementById('kpi-owner-avg-rate').textContent = fmtPct(avgRate);
   const underCount = ownerStats.filter(o => o.rate < 100).length;
   document.getElementById('kpi-owner-under').innerHTML = underCount + '名' + (underCount > 0 ? ' <span class="badge-orange">要確認</span>' : '');
+
+  // 達成率プログレスバー一覧（独立した期間ピルで集計、達成率の低い順）
+  const progressList = document.getElementById('owner-progress-list');
+  if (progressList) {
+    const progressMonths = getSelectedMonths('ownerProgress');
+    const progressStats = filteredOwners.map(o => {
+      const ownerProps2 = properties.filter(p => p.ownerId === o.id);
+      const relevantProps2 = area !== '全体' ? ownerProps2.filter(p => p.area === area) : ownerProps2;
+      let totalSales2 = 0, target2 = 0;
+      const allPropStats2 = {};
+      progressMonths.forEach(ym => {
+        const monthNum = getMonthNumber(ym);
+        relevantProps2.forEach(p => {
+          const s = computePropertyStats(p.name, ym);
+          if (!s) return;
+          if (!allPropStats2[p.name]) allPropStats2[p.name] = { ...s };
+          else allPropStats2[p.name].sales += s.sales;
+        });
+        target2 += relevantProps2.reduce((s, p) => s + getTargetForProperty(p, monthNum), 0);
+      });
+      totalSales2 = Object.values(allPropStats2).reduce((s, p) => s + p.sales, 0);
+      const rate2 = target2 > 0 ? (totalSales2 / target2) * 100 : 0;
+      return { id: o.id, name: o.name, propCount: relevantProps2.length, target: target2, actual: totalSales2, rate: rate2 };
+    });
+    const sortedByRate = [...progressStats].sort((a, b) => a.rate - b.rate);
+    progressList.innerHTML = sortedByRate.map(o => {
+      const barClass = o.rate >= 100 ? 'progress-green' : o.rate >= 70 ? 'progress-orange' : 'progress-red';
+      const barWidth = Math.min(o.rate, 100);
+      const rateClass = o.rate >= 100 ? 'positive' : o.rate >= 70 ? '' : 'negative';
+      return `<div class="clickable" onclick="toggleOwnerDrill('${o.id}', null)" style="display:flex;align-items:center;gap:12px;padding:8px 0;border-bottom:1px solid #f0f0f0;">
+        <div style="width:140px;font-size:13px;font-weight:600;flex-shrink:0;">${o.name}</div>
+        <div style="width:50px;font-size:11px;color:#999;flex-shrink:0;">${o.propCount}件</div>
+        <div style="flex:1;min-width:120px;"><div class="progress-bar-bg"><div class="progress-bar-fill ${barClass}" style="width:${barWidth}%"></div></div></div>
+        <div class="${rateClass}" style="width:60px;text-align:right;font-size:13px;font-weight:600;flex-shrink:0;">${fmtPct(o.rate)}</div>
+        <div style="width:200px;text-align:right;font-size:11px;color:#666;flex-shrink:0;">${fmtYen(o.actual)} / ${fmtYen(o.target)}</div>
+      </div>`;
+    }).join('') || '<div style="color:#999;text-align:center;padding:12px;">対象オーナーがありません</div>';
+  }
 
   // Table
   const tbody = document.getElementById('owner-table');
@@ -1081,20 +1165,242 @@ function toggleOwnerDrill(ownerId, clickedRow) {
     document.getElementById('owner-table').appendChild(drillRow);
   }
 
+  // 物件詳細と同じスタイルで合算表示
+  // オーナー所属の全予約を取得
+  const ownerPropNames = new Set(ownerProps.map(p => p.name));
+  const ownerPropPropNames = new Set(ownerProps.map(p => p.propName).filter(Boolean));
+  const ownerResvAll = reservations.filter(r => ownerPropNames.has(r.propCode) || ownerPropNames.has(r.property) || ownerPropPropNames.has(r.property));
+  const ownerResv = ownerResvAll.slice(0, 10);
+  let ownerResvRows = ownerResv.map(r => `<tr><td>${(r.date || '').slice(0, 10)}</td><td>${r.channel}</td><td>${r.property}</td><td>${r.guest}</td><td>${r.checkin}</td><td>${r.checkout}</td><td>${r.nights}泊</td><td>${fmtYenFull(r.sales)}</td><td>${r.status}</td></tr>`).join('');
+  if (!ownerResvRows) ownerResvRows = '<tr><td colspan="9" style="color:#999;text-align:center;">データなし</td></tr>';
+
+  destroyDrillCharts('own');
+
   drillCell.innerHTML = `<div class="drill-down show" style="margin-top:12px;">
-    <h3>${owner.name}</h3>
+    <h3>${owner.name} <span style="font-size:13px;color:#666;font-weight:400;">(${ownerProps.length}物件)</span></h3>
     <div class="progress-bar-wrap">
       <div class="progress-bar-label"><span>目標: ${fmtYen(target)}</span><span>実績: ${fmtYen(totalSales)} (${fmtPct(rate)})</span></div>
       <div class="progress-bar-bg"><div class="progress-bar-fill ${barColor}" style="width:${barWidth}%"></div></div>
     </div>
-    <div class="table-wrap"><table>
-      <thead><tr><th>物件名</th><th>エリア</th><th>今月OCC</th><th>ADR</th><th>RevPAR</th><th>販売金額</th><th>受取金</th><th>KPI除外</th></tr></thead>
+    <div class="chart-grid">
+      <div class="card"><h2>月別 販売金額/OCC推移（合算）</h2><canvas id="ownChartSalesOcc"></canvas></div>
+      <div class="card"><h2>月別 販売金額/ADR推移（合算）</h2><canvas id="ownChartSalesAdr"></canvas></div>
+      <div class="card"><h2>チャネル別売上構成比（合算）</h2><canvas id="ownChartChannel"></canvas></div>
+      <div class="card"><h2>ゲスト国籍別（合算）</h2><canvas id="ownChartNationality"></canvas></div>
+      <div class="card" id="ownRecentBookings"></div>
+    </div>
+    <div class="card"><h2>予約一覧（直近10件・合算）</h2><div class="table-wrap"><table>
+      <thead><tr><th>予約日</th><th>予約サイト</th><th>物件名</th><th>ゲスト名</th><th>チェックイン</th><th>チェックアウト</th><th>泊数</th><th>販売金額</th><th>状態</th></tr></thead>
+      <tbody>${ownerResvRows}</tbody>
+    </table></div></div>
+    <div class="card"><h2>物件別内訳</h2><div class="table-wrap"><table>
+      <thead><tr><th>物件名</th><th>エリア</th><th>OCC</th><th>ADR</th><th>RevPAR</th><th>販売金額</th><th>受取金</th><th>KPI除外</th></tr></thead>
       <tbody>${propRows}</tbody>
-    </table></div>
+    </table></div></div>
     <div id="owner-property-drill-container"></div>
   </div>`;
+
+  renderOwnerDetailCharts(ownerProps, ownerResvAll, 'own');
+
   setTimeout(initSortableHeaders, 50);
   drillRow.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+// オーナー合算チャート（物件詳細と同じ構成、複数物件の合算）
+function renderOwnerDetailCharts(ownerProps, ownerResvAll, prefix) {
+  setTimeout(() => {
+    const now = new Date();
+    const curMonth = now.getMonth() + 1;
+    const curYear = now.getFullYear();
+    const monthLabels = [];
+    const occData = [];
+    const adrData = [];
+    const salesData = [];
+    const targetData = [];
+    const totalRooms = ownerProps.reduce((s, p) => s + (p.rooms || 1), 0);
+
+    for (let i = -5; i <= 6; i++) {
+      const d = new Date(curYear, curMonth - 1 + i, 1);
+      const m = d.getMonth() + 1;
+      const y = d.getFullYear();
+      const mym = `${y}-${String(m).padStart(2, '0')}`;
+      monthLabels.push(`${m}月`);
+
+      // 月内の全物件合算
+      let mNights = 0, mSales = 0;
+      ownerProps.forEach(p => {
+        const s = computePropertyStats(p.name, mym);
+        if (!s) return;
+        mNights += s.nights;
+        mSales += s.sales;
+      });
+      const days = getDaysInMonth(mym);
+      const avail = days * totalRooms;
+      const occ = avail > 0 ? (mNights / avail) * 100 : 0;
+      const adr = mNights > 0 ? mSales / mNights : 0;
+      occData.push(occ);
+      adrData.push(adr);
+      salesData.push(mSales);
+      // 目標売上もオーナー全物件合算
+      targetData.push(ownerProps.reduce((s, p) => s + getTargetForProperty(p, m), 0));
+    }
+    const targetLineDataset = {
+      type: 'line', label: '目標売上', data: targetData,
+      borderColor: '#ff3b30', backgroundColor: 'transparent',
+      borderDash: [6, 4], borderWidth: 2, pointRadius: 0,
+      pointHoverRadius: 4, pointBackgroundColor: '#ff3b30',
+      tension: 0, fill: false, yAxisID: 'y',
+    };
+    const currentIdx = 5;
+
+    const blueBarColors = salesData.map((_, i) => i < currentIdx ? 'rgba(74,144,217,0.2)' : i === currentIdx ? 'rgba(74,144,217,0.5)' : 'rgba(74,144,217,0.1)');
+    const orangeBarColors = salesData.map((_, i) => i < currentIdx ? 'rgba(245,166,35,0.2)' : i === currentIdx ? 'rgba(245,166,35,0.5)' : 'rgba(245,166,35,0.1)');
+    const barBorders = salesData.map((_, i) => i > currentIdx ? 'rgba(0,0,0,0.06)' : 'transparent');
+    const barBorderWidths = salesData.map((_, i) => i > currentIdx ? 1 : 0);
+
+    // Sales/OCC chart
+    const ctx1 = document.getElementById(prefix + 'ChartSalesOcc');
+    if (ctx1) {
+      chartInstances[prefix + 'SalesOcc'] = new Chart(ctx1, {
+        type: 'bar',
+        data: {
+          labels: monthLabels,
+          datasets: [
+            { type: 'line', label: 'OCC (%)', data: occData, borderColor: CHART_COLORS.blue, backgroundColor: 'rgba(74,144,217,0.08)', fill: true, yAxisID: 'y1', tension: 0.4, pointBorderColor: CHART_COLORS.blue },
+            { type: 'bar', label: '販売金額', data: salesData, backgroundColor: blueBarColors, borderColor: barBorders, borderWidth: barBorderWidths, yAxisID: 'y' },
+            { ...targetLineDataset }
+          ]
+        },
+        options: { responsive: true, animation: { duration: 600, easing: 'easeOutQuart' }, plugins: { legend: { display: true } }, scales: { x: { grid: { display: false } }, y: { position: 'left', beginAtZero: true, title: { display: true, text: '販売金額 (¥)', font: { size: 11 } }, ticks: { callback: v => '¥' + (v / 10000).toFixed(0) + '万' } }, y1: { position: 'right', min: 0, max: 110, grid: { drawOnChartArea: false }, title: { display: true, text: 'OCC (%)', font: { size: 11 } } } } }
+      });
+    }
+
+    // Sales/ADR chart
+    const ctx1b = document.getElementById(prefix + 'ChartSalesAdr');
+    if (ctx1b) {
+      chartInstances[prefix + 'SalesAdr'] = new Chart(ctx1b, {
+        type: 'bar',
+        data: {
+          labels: monthLabels,
+          datasets: [
+            { type: 'line', label: 'ADR (¥)', data: adrData, borderColor: CHART_COLORS.orange, backgroundColor: 'rgba(245,166,35,0.08)', fill: true, yAxisID: 'y1', tension: 0.4, pointBorderColor: CHART_COLORS.orange },
+            { type: 'bar', label: '販売金額', data: salesData, backgroundColor: orangeBarColors, borderColor: barBorders, borderWidth: barBorderWidths, yAxisID: 'y' },
+            { ...targetLineDataset }
+          ]
+        },
+        options: { responsive: true, animation: { duration: 600, easing: 'easeOutQuart' }, plugins: { legend: { display: true } }, scales: { x: { grid: { display: false } }, y: { position: 'left', beginAtZero: true, title: { display: true, text: '販売金額 (¥)', font: { size: 11 } }, ticks: { callback: v => '¥' + (v / 10000).toFixed(0) + '万' } }, y1: { position: 'right', beginAtZero: true, grid: { drawOnChartArea: false }, title: { display: true, text: 'ADR (¥)', font: { size: 11 } }, ticks: { callback: v => '¥' + v.toLocaleString() } } } }
+      });
+    }
+
+    // Channel breakdown (current month, aggregated)
+    const ym = getSelectedMonth('owner');
+    const channelAgg = {};
+    ownerProps.forEach(p => {
+      const s = computePropertyStats(p.name, ym);
+      if (!s || !s.channels) return;
+      Object.entries(s.channels).forEach(([ch, data]) => {
+        if (!channelAgg[ch]) channelAgg[ch] = { count: 0, sales: 0 };
+        channelAgg[ch].count += data.count;
+        channelAgg[ch].sales += data.sales;
+      });
+    });
+    const channelColors = PALETTE;
+    const totalChSales = Object.values(channelAgg).reduce((s, c) => s + c.sales, 0);
+    const sortedCh = Object.entries(channelAgg).sort((a, b) => b[1].sales - a[1].sales);
+    const channelLabels = sortedCh.map(([k]) => k);
+    const channelPct = sortedCh.map(([, v]) => totalChSales > 0 ? (v.sales / totalChSales) * 100 : 0);
+    const ctx2 = document.getElementById(prefix + 'ChartChannel');
+    if (ctx2 && channelLabels.length > 0) {
+      chartInstances[prefix + 'Channel'] = new Chart(ctx2, {
+        type: 'bar',
+        data: { labels: channelLabels, datasets: [{ label: '売上構成比', data: channelPct, backgroundColor: channelColors.slice(0, channelLabels.length).map(c => c + 'CC'), hoverBackgroundColor: channelColors.slice(0, channelLabels.length) }] },
+        options: { indexAxis: 'y', responsive: true, animation: { duration: 600, easing: 'easeOutQuart' }, plugins: { legend: { display: false }, tooltip: { callbacks: { label: ctx => ctx.parsed.x.toFixed(1) + '%' } } }, scales: { x: { beginAtZero: true, max: 100, grid: { display: false }, ticks: { callback: v => v + '%' } }, y: { grid: { display: false } } } }
+      });
+    }
+
+    // Nationality breakdown (aggregated)
+    const natAgg = {};
+    ownerResvAll.forEach(r => {
+      if (r.status === 'システムキャンセル') return;
+      const nat = r.nationality || '不明';
+      if (!natAgg[nat]) natAgg[nat] = { count: 0, sales: 0 };
+      natAgg[nat].count++;
+      natAgg[nat].sales += r.sales || 0;
+    });
+    const natTotal = Object.values(natAgg).reduce((s, v) => s + v.count, 0);
+    const natSorted = Object.entries(natAgg).sort((a, b) => b[1].count - a[1].count);
+    const natTop = natSorted.slice(0, 5);
+    const natOthers = natSorted.slice(5);
+    const natOtherCount = natOthers.reduce((s, [, v]) => s + v.count, 0);
+    if (natOtherCount > 0) natTop.push(['その他', { count: natOtherCount, sales: 0 }]);
+    const natLabels = natTop.map(([k]) => k);
+    const natPct = natTop.map(([, v]) => natTotal > 0 ? (v.count / natTotal) * 100 : 0);
+    const ctxNat = document.getElementById(prefix + 'ChartNationality');
+    if (ctxNat && natLabels.length > 0) {
+      chartInstances[prefix + 'Nationality'] = new Chart(ctxNat, {
+        type: 'bar',
+        data: { labels: natLabels, datasets: [{ label: '予約数構成比', data: natPct, backgroundColor: channelColors.slice(0, natLabels.length).map(c => c + 'CC'), hoverBackgroundColor: channelColors.slice(0, natLabels.length) }] },
+        options: { indexAxis: 'y', responsive: true, animation: { duration: 600, easing: 'easeOutQuart' }, plugins: { legend: { display: false }, tooltip: { callbacks: {
+          title: ctx => ctx[0].label,
+          afterBody: ctx => {
+            if (ctx[0].label === 'その他') {
+              return natOthers.map(([k, v]) => `  ${k}: ${(natTotal > 0 ? (v.count / natTotal) * 100 : 0).toFixed(1)}% (${v.count}件)`);
+            }
+            return [];
+          },
+          label: ctx => ctx.parsed.x.toFixed(1) + '% (' + natTop[ctx.dataIndex][1].count + '件)'
+        } } }, scales: { x: { beginAtZero: true, max: 100, grid: { display: false }, ticks: { callback: v => v + '%' } }, y: { grid: { display: false } } } }
+      });
+    }
+
+    // Recent bookings (last 30 days, aggregated)
+    const recentBox = document.getElementById(prefix + 'RecentBookings');
+    if (recentBox) {
+      const nowDate = new Date();
+      const recent = ownerResvAll.filter(r => {
+        if (r.status === 'システムキャンセル') return false;
+        if (!r.date) return false;
+        const diffMs = nowDate - new Date(r.date);
+        return diffMs >= 0 && diffMs < 30 * 86400000;
+      });
+      const buckets = [
+        { label: '直近3日', min: 0, max: 3, count: 0 },
+        { label: '4〜7日前', min: 3, max: 7, count: 0 },
+        { label: '8〜14日前', min: 7, max: 14, count: 0 },
+        { label: '15〜30日前', min: 14, max: 30, count: 0 },
+      ];
+      recent.forEach(r => {
+        const days = Math.floor((nowDate - new Date(r.date)) / 86400000);
+        buckets.forEach(b => { if (days >= b.min && days < b.max) b.count++; });
+      });
+      const total = recent.length;
+      // 物件数で閾値を比例調整（物件数が多いオーナーは閾値も高くなる）
+      const propCount = ownerProps.length;
+      const threshGood = Math.max(5, propCount * 2);
+      const threshWarn = Math.max(2, propCount);
+      const statusColor = total >= threshGood ? '#34c759' : total >= threshWarn ? '#ff9500' : '#ff3b30';
+      const statusText = total >= threshGood ? '好調' : total >= threshWarn ? '注意' : '要確認';
+      const barsHtml = buckets.map(b => {
+        const pct = total > 0 ? (b.count / total) * 100 : 0;
+        const barColor = b.count > 0 ? CHART_COLORS.blue : '#e5e5e5';
+        return `<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
+          <span style="font-size:12px;color:#666;width:80px;text-align:right;flex-shrink:0;">${b.label}</span>
+          <div style="flex:1;background:#f0f0f0;border-radius:4px;height:24px;position:relative;overflow:hidden;">
+            <div style="width:${pct}%;background:${barColor};height:100%;border-radius:4px;transition:width 0.3s;min-width:${b.count > 0 ? '2px' : '0'}"></div>
+          </div>
+          <span style="font-size:13px;font-weight:600;width:40px;text-align:right;flex-shrink:0;">${b.count}件</span>
+        </div>`;
+      }).join('');
+      recentBox.innerHTML = `
+        <h2>直近予約数分析 <span style="font-size:11px;color:#999;">（過去30日間・合算）</span></h2>
+        <div style="display:flex;align-items:center;gap:16px;margin-bottom:16px;">
+          <div style="font-size:36px;font-weight:700;">${total}<span style="font-size:14px;color:#666;">件</span></div>
+          <span style="background:${statusColor}20;color:${statusColor};padding:4px 12px;border-radius:12px;font-size:12px;font-weight:600;">${statusText}</span>
+        </div>
+        ${barsHtml}
+      `;
+    }
+  }, 100);
 }
 
 // ============================================================
@@ -1393,6 +1699,7 @@ function renderPropertyDetail(container, propertyName, prefix) {
 // Tab 3: 物件別分析
 // ============================================================
 function renderPropertyTab() {
+  renderOrphanAlert('property-orphan-alert');
   const months = getSelectedMonths('property');
   const area = currentFilters.propertyArea;
   const excludeKpi = document.getElementById('excludeKpiToggle') && document.getElementById('excludeKpiToggle').checked;
@@ -1800,16 +2107,13 @@ function fmtVsPct(cur, prev) {
 }
 
 function renderReservationTab() {
-  const channelFilter = document.getElementById('resv-channel-filter').value;
   const statusFilter = document.getElementById('resv-status-filter').value;
   const periodInfo = getReservationPeriodInfo();
 
-  // チャネル/ステータスのプレフィルタを共通関数化（current/previous両方に適用）
+  // ステータスのプレフィルタを共通関数化（current/previous両方に適用）
   const applySelectFilters = arr => {
-    let a = arr;
-    if (channelFilter) a = a.filter(r => r.channel === channelFilter);
-    if (statusFilter) a = a.filter(r => r.status === statusFilter);
-    return a;
+    if (statusFilter) return arr.filter(r => r.status === statusFilter);
+    return arr;
   };
 
   const filtered = applySelectFilters(reservations).filter(periodInfo.current);
@@ -2095,11 +2399,9 @@ function initDailyCharts() {
 
 function initReservationCharts() {
   const periodPred = getReservationPeriodPredicate();
-  const channelFilter = document.getElementById('resv-channel-filter').value;
   const statusFilter = document.getElementById('resv-status-filter').value;
 
   let filtered = [...reservations];
-  if (channelFilter) filtered = filtered.filter(r => r.channel === channelFilter);
   if (statusFilter) filtered = filtered.filter(r => r.status === statusFilter);
   filtered = filtered.filter(periodPred);
 
@@ -2127,31 +2429,52 @@ function initReservationCharts() {
       type: 'bar',
       data: {
         labels: mLabels,
-        datasets: [{
-          label: '予約数',
-          data: mData,
-          backgroundColor: CHART_COLORS.orange + 'CC',
-          hoverBackgroundColor: CHART_COLORS.orange,
-        }]
+        datasets: [
+          {
+            type: 'bar',
+            label: '予約数',
+            data: mData,
+            backgroundColor: CHART_COLORS.orange + 'CC',
+            hoverBackgroundColor: CHART_COLORS.orange,
+            yAxisID: 'y',
+            order: 2,
+          },
+          {
+            type: 'line',
+            label: 'GMV',
+            data: mSales,
+            borderColor: CHART_COLORS.blue,
+            backgroundColor: 'rgba(74,144,217,0.08)',
+            tension: 0.4,
+            yAxisID: 'y1',
+            order: 1,
+            pointBackgroundColor: CHART_COLORS.blue,
+          },
+        ]
       },
       options: {
         responsive: true,
         animation: { duration: 600, easing: 'easeOutQuart' },
         plugins: {
-          legend: { display: false },
+          legend: { display: true, position: 'top', labels: { font: { size: 11 }, padding: 12 } },
           tooltip: {
+            mode: 'index',
             callbacks: {
               label: ctx => {
-                const v = ctx.parsed.y;
-                const pct = mTotal > 0 ? ((v / mTotal) * 100).toFixed(1) : '0.0';
-                return [`${v}件 (${pct}%)`, `販売額: ${fmtYenFull(mSales[ctx.dataIndex])}`];
+                if (ctx.dataset.label === '予約数') {
+                  const v = ctx.parsed.y;
+                  const pct = mTotal > 0 ? ((v / mTotal) * 100).toFixed(1) : '0.0';
+                  return `予約数: ${v}件 (${pct}%)`;
+                }
+                return `GMV: ${fmtYenFull(ctx.parsed.y)}`;
               }
             }
           }
         },
         scales: {
           x: { grid: { display: false } },
-          y: { beginAtZero: true, ticks: { precision: 0 } }
+          y: { position: 'left', beginAtZero: true, title: { display: true, text: '予約数', font: { size: 11 } }, ticks: { precision: 0 } },
+          y1: { position: 'right', beginAtZero: true, grid: { drawOnChartArea: false }, title: { display: true, text: 'GMV (¥)', font: { size: 11 } }, ticks: { callback: v => '¥' + (v / 10000).toFixed(0) + '万' } }
         }
       }
     });
@@ -2451,6 +2774,120 @@ function setReviewFilter(el, key) {
   if (key === 'star') _reviewFilters.star = el.dataset.star;
   renderReviewTab();
   initReviewCharts();
+}
+
+// ============================================================
+// Tab 7: 新法チェック
+// ============================================================
+function getCurrentFiscalYear() {
+  // 4/1 〜 翌3/31。今が4月以降ならその年が起点、3月以前なら前年が起点。
+  const now = new Date();
+  const startYear = now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1;
+  const start = new Date(startYear, 3, 1); // April 1
+  const end = new Date(startYear + 1, 3, 1); // April 1 of next year (exclusive)
+  return { start, end, startYear };
+}
+
+function countFyNightsForProperty(propName, fyStart, fyEnd) {
+  // 該当物件の予約から、FY期間内の泊数を算出（キャンセル除外、30泊以上(マンスリー)除外）
+  // また、マンスリー（30泊以上）の件数・FY内泊数を別途集計
+  const prop = findPropByName(propName);
+  let nights = 0;
+  let monthlyCount = 0;
+  let monthlyNights = 0;
+  reservations.forEach(r => {
+    if (r.status === 'システムキャンセル' || r.status === 'キャンセル') return;
+    if (r.propCode !== propName && r.property !== propName && (!prop || r.property !== prop.propName)) return;
+    if (!r.checkin || !r.checkout) return;
+    const ci = new Date(r.checkin);
+    const co = new Date(r.checkout);
+    if (isNaN(ci) || isNaN(co)) return;
+    // FY範囲内の泊数を算出（[ci, co) ∩ [fyStart, fyEnd)）
+    const overlapStart = ci > fyStart ? ci : fyStart;
+    const overlapEnd = co < fyEnd ? co : fyEnd;
+    const ms = overlapEnd - overlapStart;
+    if (ms <= 0) return;
+    const fyNights = Math.round(ms / 86400000);
+    if (r.nights >= 30) {
+      // マンスリー予約は新法カウントから除外
+      monthlyCount++;
+      monthlyNights += fyNights;
+    } else {
+      nights += fyNights;
+    }
+  });
+  return { nights, monthlyCount, monthlyNights };
+}
+
+function renderShinpouTab() {
+  const { start, end, startYear } = getCurrentFiscalYear();
+  const fmtFy = d => `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`;
+  const endDisplay = new Date(end.getTime() - 86400000); // 表示用に末日へ
+  const fyEl = document.getElementById('shinpou-fy-range');
+  if (fyEl) fyEl.textContent = `年度: ${fmtFy(start)} 〜 ${fmtFy(endDisplay)}`;
+
+  // 対象物件: 許可種類が「民泊新法」
+  const targetProps = properties.filter(p => p.licenseType === '民泊新法');
+
+  let overCount = 0, warnCount = 0, sumPct = 0;
+  let totalMonthlyCount = 0, totalMonthlyNights = 0;
+
+  const rows = targetProps.map(p => {
+    const { nights, monthlyCount, monthlyNights } = countFyNightsForProperty(p.name, start, end);
+    const limit = p.operationLimitDays || 180;
+    const remaining = Math.max(limit - nights, 0);
+    const pct = limit > 0 ? (nights / limit) * 100 : 0;
+    sumPct += pct;
+    totalMonthlyCount += monthlyCount;
+    totalMonthlyNights += monthlyNights;
+
+    let status, statusBadge, barClass;
+    if (pct > 100) {
+      status = '超過';
+      statusBadge = 'badge-red';
+      barClass = 'progress-red';
+      overCount++;
+    } else if (pct >= 95) {
+      status = '残りわずか';
+      statusBadge = 'badge-orange';
+      barClass = 'progress-orange';
+      warnCount++;
+    } else if (pct >= 70) {
+      status = '注意';
+      statusBadge = 'badge-orange';
+      barClass = 'progress-orange';
+    } else {
+      status = 'OK';
+      statusBadge = 'badge-green';
+      barClass = 'progress-green';
+    }
+    const barWidth = Math.min(pct, 100);
+    return `<tr>
+      <td>${p.name}</td>
+      <td>${p.licenseType}</td>
+      <td class="text-right">${limit}日</td>
+      <td class="text-right">${nights}日</td>
+      <td class="text-right">${remaining}日</td>
+      <td><div class="progress-bar-bg" style="min-width:120px;"><div class="progress-bar-fill ${barClass}" style="width:${barWidth}%"></div></div></td>
+      <td class="text-right">${pct.toFixed(1)}%</td>
+      <td><span class="${statusBadge}">${status}</span></td>
+      <td class="text-right">${monthlyCount}件</td>
+      <td class="text-right">${monthlyNights}日</td>
+    </tr>`;
+  }).join('');
+
+  const tbody = document.getElementById('shinpou-table');
+  if (tbody) {
+    tbody.innerHTML = rows || '<tr><td colspan="10" style="color:#999;text-align:center;">対象物件がありません</td></tr>';
+  }
+
+  const avgPct = targetProps.length > 0 ? sumPct / targetProps.length : 0;
+  document.getElementById('kpi-shinpou-count').textContent = targetProps.length + '件';
+  document.getElementById('kpi-shinpou-over').textContent = overCount + '件';
+  document.getElementById('kpi-shinpou-warn').textContent = warnCount + '件';
+  document.getElementById('kpi-shinpou-avg').textContent = avgPct.toFixed(1) + '%';
+  document.getElementById('kpi-shinpou-monthly-count').textContent = totalMonthlyCount + '件';
+  document.getElementById('kpi-shinpou-monthly-nights').textContent = totalMonthlyNights + '日';
 }
 
 function renderReviewTab() {

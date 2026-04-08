@@ -36,9 +36,10 @@
       <option value="全体概況">全体概況</option>
       <option value="オーナー別分析">オーナー別分析</option>
       <option value="物件別分析">物件別分析</option>
-      <option value="予約管理">予約管理</option>
+      <option value="予約獲得状況">予約獲得状況</option>
       <option value="売上・稼働">売上・稼働</option>
       <option value="レビュー">レビュー</option>
+      <option value="新法チェック">新法チェック</option>
     </select>
     <select id="fb-type">
       <option value="数字がおかしい">数字がおかしい</option>
@@ -67,9 +68,10 @@
   <button class="tab-btn active" onclick="switchTab('daily')">全体概況</button>
   <button class="tab-btn" onclick="switchTab('owner')">オーナー別分析</button>
   <button class="tab-btn" onclick="switchTab('property')">物件別分析</button>
-  <button class="tab-btn" onclick="switchTab('reservation')">予約管理</button>
+  <button class="tab-btn" onclick="switchTab('reservation')">予約獲得状況</button>
   <button class="tab-btn" onclick="switchTab('revenue')">売上・稼働</button>
   <button class="tab-btn" onclick="switchTab('review')">レビュー</button>
+  <button class="tab-btn" onclick="switchTab('shinpou')">新法チェック</button>
 </nav>
 
 <div class="error-banner" id="error-banner"></div>
@@ -168,10 +170,27 @@
       </div>
     </div>
 
+    <div id="owner-orphan-alert"></div>
+
     <div class="kpi-grid-3">
       <div class="kpi-card"><div class="label">オーナー数</div><div class="value" id="kpi-owner-count">-</div></div>
       <div class="kpi-card"><div class="label">平均達成率</div><div class="value" id="kpi-owner-avg-rate">-</div></div>
       <div class="kpi-card"><div class="label">目標未達オーナー</div><div class="value" id="kpi-owner-under">-</div></div>
+    </div>
+
+    <div class="card">
+      <h2>オーナー別 達成率（達成率の低い順）</h2>
+      <div class="filter-bar" style="border:none;background:transparent;padding:0 0 12px 0;">
+        <label>期間</label>
+        <div class="filter-pills" id="owner-progress-period-filter">
+          <span class="pill active" data-period="thisMonth" onclick="setPeriodFilter(this,'ownerProgress')">今月</span>
+          <span class="pill" data-period="lastMonth" onclick="setPeriodFilter(this,'ownerProgress')">前月</span>
+          <span class="pill" data-period="last3Months" onclick="setPeriodFilter(this,'ownerProgress')">直近3ヶ月</span>
+          <span class="pill" data-period="nextMonth" onclick="setPeriodFilter(this,'ownerProgress')">来月</span>
+          <span class="pill" data-period="next2Month" onclick="setPeriodFilter(this,'ownerProgress')">再来月</span>
+        </div>
+      </div>
+      <div id="owner-progress-list"></div>
     </div>
 
     <div class="card">
@@ -219,6 +238,8 @@
         <span class="pill" data-view="grouped" onclick="setPropertyView(this)">複数物件まとめ</span>
       </div>
     </div>
+
+    <div id="property-orphan-alert"></div>
 
     <div class="kpi-grid-5" id="property-kpi-grid">
       <div class="kpi-card"><div class="label">管理物件数</div><div class="value" id="kpi-prop-count">-</div></div>
@@ -276,10 +297,6 @@
         <span class="pill" data-period="lastMonth" onclick="setPeriodFilter(this,'reservation')">前月</span>
         <span class="pill" data-period="last3Months" onclick="setPeriodFilter(this,'reservation')">直近3ヶ月</span>
       </div>
-      <label>予約サイト</label>
-      <select id="resv-channel-filter" onchange="renderAll()">
-        <option value="">すべて</option>
-      </select>
       <label>ステータス</label>
       <select id="resv-status-filter" onchange="renderAll()">
         <option value="">すべて</option>
@@ -559,6 +576,45 @@
       </div>
     </div>
 
+  </div>
+</div>
+
+<!-- ==================== Tab 7: 新法チェック ==================== -->
+<div id="tab-shinpou" class="tab-content">
+  <div class="container">
+    <div style="text-align:center;color:#999;font-size:13px;margin-bottom:12px;" id="shinpou-fy-range"></div>
+
+    <div class="kpi-grid-6" id="shinpou-kpi-grid">
+      <div class="kpi-card"><div class="label">対象物件数</div><div class="value" id="kpi-shinpou-count">-</div><div class="sub">許可種類: 民泊新法</div></div>
+      <div class="kpi-card"><div class="label">上限超過</div><div class="value" id="kpi-shinpou-over">-</div><div class="sub">100% 超</div></div>
+      <div class="kpi-card"><div class="label">残りわずか</div><div class="value" id="kpi-shinpou-warn">-</div><div class="sub">95〜100%</div></div>
+      <div class="kpi-card"><div class="label">平均消化率</div><div class="value" id="kpi-shinpou-avg">-</div></div>
+      <div class="kpi-card"><div class="label">マンスリー予約</div><div class="value" id="kpi-shinpou-monthly-count">-</div><div class="sub">30泊以上の予約</div></div>
+      <div class="kpi-card"><div class="label">マンスリー泊数合計</div><div class="value" id="kpi-shinpou-monthly-nights">-</div></div>
+    </div>
+
+    <div class="card">
+      <h2>物件別 営業日数チェック</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>物件名</th>
+              <th>許可種類</th>
+              <th class="text-right">営業上限</th>
+              <th class="text-right">確定日数</th>
+              <th class="text-right">残り日数</th>
+              <th>進捗</th>
+              <th class="text-right">消化率</th>
+              <th>ステータス</th>
+              <th class="text-right">マンスリー件数</th>
+              <th class="text-right">マンスリー泊数</th>
+            </tr>
+          </thead>
+          <tbody id="shinpou-table"></tbody>
+        </table>
+      </div>
+    </div>
   </div>
 </div>
 
