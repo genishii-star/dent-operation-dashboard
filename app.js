@@ -379,13 +379,30 @@ function processData() {
   });
 
   // Build owner lookup（オーナーIDがそのまま表示名）
+  // ロイヤリティ計算優先順位: 計算用ロイヤリティ列 → ロイヤリティ列
+  // 階段式などフリーテキストで parseNum が失敗するオーナーは「計算用ロイヤリティ」列で固定%を指定
   const ownerMap = {};
   ownerMaster.forEach(om => {
     const id = om['オーナーID'] || '';
+    const royaltyText = om['ロイヤリティ'] || '';
+    const overrideText = om['計算用ロイヤリティ'] || '';
+    const overridePct = parseNum(overrideText);
+    const fallbackPct = parseNum(royaltyText);
+    // パース失敗判定: 元テキストが空でも「運営費のみ」でも「0%」でもないのに 0 になるケース
+    const isIntentionalZero = !royaltyText
+      || /運営費のみ/.test(royaltyText)
+      || /^0\s*%?$/.test(royaltyText.trim());
+    const fallbackParseFailed = !overrideText && fallbackPct === 0 && !isIntentionalZero;
+    let pct = 0;
+    if (overrideText) pct = overridePct;
+    else if (!fallbackParseFailed) pct = fallbackPct;
     ownerMap[id] = {
       id: id,
       name: id,
-      royalty: om['ロイヤリティ'] || '',
+      royalty: royaltyText,
+      royaltyOverride: overrideText,
+      royaltyPct: pct,
+      royaltyParseFailed: fallbackParseFailed,
     };
   });
 
@@ -410,7 +427,8 @@ function processData() {
       ownerId: pm['オーナーID'] || '',
       ownerName: ownerInfo.name || '',
       royalty: ownerInfo.royalty || '',
-      royaltyPct: parseNum(ownerInfo.royalty), // "20%" → 20, "運営費のみ" → 0
+      royaltyPct: ownerInfo.royaltyPct || 0,
+      royaltyParseFailed: !!ownerInfo.royaltyParseFailed,
       area: area,
       rooms: parseNum(pm['部屋数']) || 1,
       excludeKpi: (pm['KPI除外'] || '') === 'TRUE' || (pm['KPI除外'] || '') === '1',
@@ -443,6 +461,9 @@ function processData() {
       id: oid,
       name: info.name || oid,
       royalty: info.royalty || '',
+      royaltyOverride: info.royaltyOverride || '',
+      royaltyPct: info.royaltyPct || 0,
+      royaltyParseFailed: !!info.royaltyParseFailed,
       properties: ownerProps.map(p => p.name),
     };
   });
@@ -3309,6 +3330,28 @@ function renderPmbmTab() {
   setText('kpi-pmbm-pm-avg-vs', fmtVsLine(avgPmPerProp, pyAvgPmPerProp, pmAvgPmPerProp));
   setText('kpi-pmbm-bm-avg', fmtYen(avgBmPerProp));
   setText('kpi-pmbm-bm-avg-vs', fmtVsLine(avgBmPerProp, pyAvgBmPerProp, pmAvgBmPerProp));
+
+  // ロイヤリティ計算不能オーナーの警告
+  // 物件マスタに紐づいているオーナーのうち、royaltyParseFailed のものを抽出
+  const usedOwnerIds = new Set(properties.map(p => p.ownerId).filter(Boolean));
+  const failedOwners = owners.filter(o => o.royaltyParseFailed && usedOwnerIds.has(o.id));
+  const warnEl = document.getElementById('pmbm-royalty-warning');
+  if (warnEl) {
+    if (failedOwners.length === 0) {
+      warnEl.style.display = 'none';
+      warnEl.innerHTML = '';
+    } else {
+      const items = failedOwners.map(o => {
+        const preview = (o.royalty || '').replace(/\s+/g, ' ').slice(0, 60);
+        return `<li><strong>${o.id}</strong> — ロイヤリティ: 「${preview}${o.royalty.length > 60 ? '…' : ''}」</li>`;
+      }).join('');
+      warnEl.style.display = 'block';
+      warnEl.innerHTML =
+        `<div style="font-weight:600;margin-bottom:6px;">⚠️ ロイヤリティが自動計算できないオーナーが ${failedOwners.length} 件あります（PM売上に未集計）</div>` +
+        `<ul style="margin:4px 0 8px 20px;padding:0;">${items}</ul>` +
+        `<div style="font-size:12px;">対応: オーナーマスタの <strong>計算用ロイヤリティ</strong> 列に固定% (例: <code>18</code>) を入力してください。</div>`;
+    }
+  }
 
   // Owner combined top 10
   const ownerCombined = [...cur.byOwner].map(o => ({ ...o, total: o.pm + o.bm }))
