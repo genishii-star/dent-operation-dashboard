@@ -395,6 +395,7 @@ function processData() {
       airbnbListingId: pm['airbnbリスティングID'] || '',
       licenseType: pm['許可種類'] || '',
       operationLimitDays: parseNum(pm['営業日数上限']) || 0,
+      startDate: normalizeDate(pm['運用開始日'] || ''),
     };
   }).filter(Boolean);
 
@@ -718,7 +719,7 @@ function fmtPct(n) {
 // ============================================================
 function switchTab(id) {
   document.querySelectorAll('.tab-btn').forEach((btn, i) => {
-    const tabIds = ['daily','owner','property','reservation','revenue','review','shinpou'];
+    const tabIds = ['daily','owner','property','reservation','revenue','review','watchlist','shinpou'];
     btn.classList.toggle('active', tabIds[i] === id);
   });
   document.querySelectorAll('.tab-content').forEach(tc => tc.classList.remove('active'));
@@ -881,6 +882,7 @@ function renderAll() {
   renderReservationTab();
   renderRevenueTab();
   renderReviewTab();
+  renderWatchlistTab();
   renderShinpouTab();
   setTimeout(initSortableHeaders, 50);
 }
@@ -2235,6 +2237,7 @@ function initChartsForTab(tabId) {
   if (tabId === 'reservation') initReservationCharts();
   if (tabId === 'revenue') initRevenueCharts();
   if (tabId === 'review') initReviewCharts();
+  if (tabId === 'watchlist') initWatchlistCharts();
 }
 
 function initDailyCharts() {
@@ -2774,6 +2777,274 @@ function setReviewFilter(el, key) {
   if (key === 'star') _reviewFilters.star = el.dataset.star;
   renderReviewTab();
   initReviewCharts();
+}
+
+// ============================================================
+// Tab: 要チェック（新着 + パフォーマンス警告）
+// ============================================================
+const WATCHLIST_NEW_MONTHS = 4;
+const WATCHLIST_SALES_YELLOW = 70; // 達成率<70% → 黄
+const WATCHLIST_SALES_RED = 50;    // 達成率<50% → 赤
+const WATCHLIST_OCC_THRESHOLD = 60; // 直近30日稼働率<60% → 警告
+const WATCHLIST_BOOKING_DAYS = 14;  // 直近14日
+
+function isNewProperty(prop) {
+  if (!prop || !prop.startDate) return false;
+  const start = new Date(prop.startDate);
+  if (isNaN(start)) return false;
+  const cutoff = new Date();
+  cutoff.setMonth(cutoff.getMonth() - WATCHLIST_NEW_MONTHS);
+  return start >= cutoff;
+}
+
+function getMonthsSinceStart(prop) {
+  if (!prop || !prop.startDate) return null;
+  const start = new Date(prop.startDate);
+  if (isNaN(start)) return null;
+  const now = new Date();
+  return (now.getFullYear() - start.getFullYear()) * 12 + (now.getMonth() - start.getMonth());
+}
+
+function getCurrentMonthSalesAchievement(prop) {
+  const now = new Date();
+  const ym = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0');
+  const daysInMonth = getDaysInMonth(ym);
+  const dayOfMonth = now.getDate();
+  const stats = computePropertyStats(prop.name, ym);
+  if (!stats) return null;
+  const monthTarget = getTargetForProperty(prop, now.getMonth() + 1);
+  if (!monthTarget) return null;
+  const proratedTarget = monthTarget * (dayOfMonth / daysInMonth);
+  const pct = proratedTarget > 0 ? (stats.sales / proratedTarget) * 100 : 0;
+  return { actual: stats.sales, target: monthTarget, proratedTarget, pct };
+}
+
+function getRecent30DayOcc(prop) {
+  const today = new Date();
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - 30);
+  const cutoffStr = localDateStr(cutoff);
+  const todayStr = localDateStr(today);
+
+  const dailyDates = new Set();
+  rawDailyData.forEach(d => {
+    const date = normalizeDate(d['日付']);
+    const code = generatePropCode(d['物件名'] || '', d['ルーム番号'] || '');
+    const status = d['状態'] || '';
+    if (code !== prop.name) return;
+    if (status === 'システムキャンセル') return;
+    if (date >= cutoffStr && date < todayStr) dailyDates.add(date);
+  });
+  const totalAvail = 30 * (prop.rooms || 1);
+  return totalAvail > 0 ? (dailyDates.size / totalAvail) * 100 : 0;
+}
+
+function getRecent14DayBookingCount(prop) {
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - WATCHLIST_BOOKING_DAYS);
+  const cutoffStr = localDateStr(cutoff);
+  let count = 0;
+  reservations.forEach(r => {
+    if (r.status === 'システムキャンセル' || r.status === 'キャンセル') return;
+    if (!r.date || r.date < cutoffStr) return;
+    if (r.propCode !== prop.name && r.property !== prop.name && r.property !== prop.propName) return;
+    count++;
+  });
+  return count;
+}
+
+function getWatchlistReasons(prop) {
+  const reasons = [];
+  const sales = getCurrentMonthSalesAchievement(prop);
+  if (sales && sales.target > 0) {
+    if (sales.pct < WATCHLIST_SALES_RED) {
+      reasons.push({ type: 'sales', severity: 'red', label: `売上達成率 ${sales.pct.toFixed(0)}%`, detail: `${fmtYen(sales.actual)} / 想定 ${fmtYen(sales.proratedTarget)}` });
+    } else if (sales.pct < WATCHLIST_SALES_YELLOW) {
+      reasons.push({ type: 'sales', severity: 'yellow', label: `売上達成率 ${sales.pct.toFixed(0)}%`, detail: `${fmtYen(sales.actual)} / 想定 ${fmtYen(sales.proratedTarget)}` });
+    }
+  }
+  const occ = getRecent30DayOcc(prop);
+  if (occ < WATCHLIST_OCC_THRESHOLD) {
+    reasons.push({ type: 'occ', severity: 'yellow', label: `稼働率 ${occ.toFixed(0)}%`, detail: '直近30日' });
+  }
+  const bookings = getRecent14DayBookingCount(prop);
+  if (bookings === 0) {
+    reasons.push({ type: 'booking', severity: 'red', label: '新規予約 0件', detail: '直近14日' });
+  }
+  return reasons;
+}
+
+function getWatchlistChartData(prop) {
+  const labels = [];
+  const sales = [];
+  const targets = [];
+  const now = new Date();
+  for (let i = -3; i <= 3; i++) {
+    const d = new Date(now.getFullYear(), now.getMonth() + i, 1);
+    const ym = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+    labels.push((d.getMonth() + 1) + '月');
+    const s = computePropertyStats(prop.name, ym);
+    sales.push(s ? Math.round(s.sales) : 0);
+    targets.push(getTargetForProperty(prop, d.getMonth() + 1) || 0);
+  }
+  return { labels, sales, targets };
+}
+
+let _watchlistCounts = { newCount: 0, watchCount: 0 };
+
+function renderWatchlistTab() {
+  if (!document.getElementById('tab-watchlist')) return;
+
+  // 新着物件
+  const newProps = properties.filter(p => isNewProperty(p) && p.status === '稼働中' && !p.excludeKpi);
+  // パフォーマンス警告（新着除外、稼働中のみ、KPI除外も除外）
+  const watchProps = [];
+  properties.forEach(p => {
+    if (p.status !== '稼働中') return;
+    if (p.excludeKpi) return;
+    if (isNewProperty(p)) return;
+    const reasons = getWatchlistReasons(p);
+    if (reasons.length > 0) watchProps.push({ prop: p, reasons });
+  });
+  // 重要度順（赤の数 → 理由数）
+  watchProps.sort((a, b) => {
+    const ar = a.reasons.filter(r => r.severity === 'red').length;
+    const br = b.reasons.filter(r => r.severity === 'red').length;
+    if (br !== ar) return br - ar;
+    return b.reasons.length - a.reasons.length;
+  });
+
+  _watchlistCounts = { newCount: newProps.length, watchCount: watchProps.length };
+
+  // KPI
+  const kpiNew = document.getElementById('kpi-watchlist-new');
+  const kpiWatch = document.getElementById('kpi-watchlist-watch');
+  if (kpiNew) kpiNew.textContent = newProps.length + '件';
+  if (kpiWatch) kpiWatch.textContent = watchProps.length + '件';
+
+  // Render new section
+  const newSec = document.getElementById('watchlist-new-list');
+  if (newSec) {
+    if (newProps.length === 0) {
+      newSec.innerHTML = '<div style="color:#999;font-size:13px;padding:12px;">新着物件はありません</div>';
+    } else {
+      newSec.innerHTML = newProps.map((p, i) => {
+        const months = getMonthsSinceStart(p);
+        return `<div class="watchlist-card">
+          <div class="watchlist-card-header">
+            <div class="watchlist-card-title">${p.name}</div>
+            <span class="badge-blue">🆕 新着 ${months !== null ? months + 'ヶ月目' : ''}</span>
+          </div>
+          <div class="watchlist-card-meta">運用開始: ${p.startDate || '-'} / オーナー: ${p.ownerId || '-'}</div>
+          <div style="height:120px;"><canvas id="watchlist-chart-new-${i}"></canvas></div>
+        </div>`;
+      }).join('');
+    }
+  }
+
+  // Render watch section
+  const watchSec = document.getElementById('watchlist-watch-list');
+  if (watchSec) {
+    if (watchProps.length === 0) {
+      watchSec.innerHTML = '<div style="color:#999;font-size:13px;padding:12px;">要チェック物件はありません 🎉</div>';
+    } else {
+      watchSec.innerHTML = watchProps.map(({ prop, reasons }, i) => {
+        const badges = reasons.map(r => {
+          const cls = r.severity === 'red' ? 'badge-red' : 'badge-orange';
+          return `<span class="${cls}" title="${r.detail}">${r.label}</span>`;
+        }).join(' ');
+        const sales = getCurrentMonthSalesAchievement(prop);
+        let salesLine = '';
+        if (sales && sales.target > 0) {
+          const pctColor = sales.pct < WATCHLIST_SALES_RED ? '#ff3b30' : (sales.pct < WATCHLIST_SALES_YELLOW ? '#ff9500' : '#34c759');
+          salesLine = `<div style="font-size:12px;margin:6px 0 4px;">当月売上達成率: <strong style="color:${pctColor};">${sales.pct.toFixed(0)}%</strong> <span style="color:#999;">(${fmtYen(sales.actual)} / 想定 ${fmtYen(sales.proratedTarget)})</span></div>`;
+        }
+        return `<div class="watchlist-card">
+          <div class="watchlist-card-header">
+            <div class="watchlist-card-title">${prop.name}</div>
+            <div>${badges}</div>
+          </div>
+          <div class="watchlist-card-meta">オーナー: ${prop.ownerId || '-'} / エリア: ${prop.area || '-'}</div>
+          ${salesLine}
+          <div style="height:120px;"><canvas id="watchlist-chart-watch-${i}"></canvas></div>
+        </div>`;
+      }).join('');
+    }
+  }
+
+  // Update summary badge in daily tab
+  const badge = document.getElementById('watchlist-summary-badge');
+  if (badge) {
+    if (newProps.length + watchProps.length === 0) {
+      badge.style.display = 'none';
+    } else {
+      badge.style.display = '';
+      badge.innerHTML = `⚠️ 要チェック: <strong>${watchProps.length}件</strong> &nbsp;|&nbsp; 🆕 新着: <strong>${newProps.length}件</strong> &nbsp; <a href="#" onclick="switchTab('watchlist');return false;" style="color:#007aff;text-decoration:none;font-weight:600;">→ タブを開く</a>`;
+    }
+  }
+}
+
+function initWatchlistCharts() {
+  // Destroy existing
+  Object.keys(window).forEach(k => {
+    if (k.startsWith('_watchlistChart_') && window[k]) {
+      try { window[k].destroy(); } catch (e) {}
+      window[k] = null;
+    }
+  });
+
+  const drawMini = (canvasId, prop) => {
+    const canvas = document.getElementById(canvasId);
+    if (!canvas) return;
+    const { labels, sales, targets } = getWatchlistChartData(prop);
+    const ctx = canvas.getContext('2d');
+    const chart = new Chart(ctx, {
+      type: 'bar',
+      data: {
+        labels,
+        datasets: [
+          { label: '売上', data: sales, backgroundColor: CHART_COLORS.blue, borderRadius: 4, order: 2 },
+          { label: '目標', data: targets, type: 'line', borderColor: CHART_COLORS.red, borderDash: [4, 4], borderWidth: 2, pointRadius: 0, fill: false, order: 1 },
+        ],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              label: (c) => `${c.dataset.label}: ${fmtYen(c.parsed.y)}`,
+            },
+          },
+        },
+        scales: {
+          y: { beginAtZero: true, ticks: { callback: (v) => fmtYen(v), font: { size: 10 } } },
+          x: { ticks: { font: { size: 10 } } },
+        },
+      },
+    });
+    window['_watchlistChart_' + canvasId] = chart;
+  };
+
+  const newProps = properties.filter(p => isNewProperty(p) && p.status === '稼働中' && !p.excludeKpi);
+  newProps.forEach((p, i) => drawMini('watchlist-chart-new-' + i, p));
+
+  const watchProps = [];
+  properties.forEach(p => {
+    if (p.status !== '稼働中') return;
+    if (p.excludeKpi) return;
+    if (isNewProperty(p)) return;
+    const reasons = getWatchlistReasons(p);
+    if (reasons.length > 0) watchProps.push({ prop: p, reasons });
+  });
+  watchProps.sort((a, b) => {
+    const ar = a.reasons.filter(r => r.severity === 'red').length;
+    const br = b.reasons.filter(r => r.severity === 'red').length;
+    if (br !== ar) return br - ar;
+    return b.reasons.length - a.reasons.length;
+  });
+  watchProps.forEach(({ prop }, i) => drawMini('watchlist-chart-watch-' + i, prop));
 }
 
 // ============================================================

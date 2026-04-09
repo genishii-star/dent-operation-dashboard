@@ -71,6 +71,7 @@
   <button class="tab-btn" onclick="switchTab('reservation')">予約獲得状況</button>
   <button class="tab-btn" onclick="switchTab('revenue')">売上・稼働</button>
   <button class="tab-btn" onclick="switchTab('review')">レビュー</button>
+  <button class="tab-btn" onclick="switchTab('watchlist')">要チェック</button>
   <button class="tab-btn" onclick="switchTab('shinpou')">新法チェック</button>
 </nav>
 
@@ -101,6 +102,8 @@
     </div>
 
     <div style="text-align:center;color:#999;font-size:13px;margin-bottom:12px;" id="daily-date-range"></div>
+
+    <div id="watchlist-summary-badge" style="display:none;background:#fff8e1;border:1px solid #ffc107;border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:13px;text-align:center;"></div>
 
     <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:16px;margin-bottom:20px;" id="daily-kpi-grid">
       <div class="kpi-card"><div class="label">売上合計</div><div class="value" id="kpi-daily-sales">-</div></div>
@@ -576,6 +579,28 @@
       </div>
     </div>
 
+  </div>
+</div>
+
+<!-- ==================== Tab: 要チェック ==================== -->
+<div id="tab-watchlist" class="tab-content">
+  <div class="container">
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px;">
+      <div class="kpi-card"><div class="label">🆕 新着物件</div><div class="value" id="kpi-watchlist-new">-</div><div class="sub">運用開始から4ヶ月以内</div></div>
+      <div class="kpi-card"><div class="label">⚠️ 要チェック物件</div><div class="value" id="kpi-watchlist-watch">-</div><div class="sub">売上 / 稼働 / 予約獲得</div></div>
+    </div>
+
+    <div class="card">
+      <h2>🆕 新着物件</h2>
+      <p style="color:#999;font-size:11px;margin-bottom:12px;">運用開始から4ヶ月以内の物件。立ち上げ期のため、パフォーマンス判定からは除外されます。</p>
+      <div id="watchlist-new-list" class="watchlist-grid"></div>
+    </div>
+
+    <div class="card">
+      <h2>⚠️ 要チェック物件</h2>
+      <p style="color:#999;font-size:11px;margin-bottom:12px;">売上達成率 &lt;70%（&lt;50%は赤）／ 直近30日稼働率 &lt;60% ／ 直近14日新規予約 0件 のいずれかに該当する物件。</p>
+      <div id="watchlist-watch-list" class="watchlist-grid"></div>
+    </div>
   </div>
 </div>
 
