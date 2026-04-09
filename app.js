@@ -3286,6 +3286,15 @@ function renderPmbmTab() {
   const py = computePmBmDetail(shiftMonths(months, -12), area);
   const pm = computePmBmDetail(shiftMonths(months, -1), area);
 
+  // 物件数 (稼働中) — area で絞った稼働中物件数で平均単価を算出
+  const propCount = filterPropertiesByArea(area).filter(p => p.status === '稼働中').length;
+  const avgPmPerProp = propCount > 0 ? cur.pmSales / propCount : 0;
+  const avgBmPerProp = propCount > 0 ? cur.bmSales / propCount : 0;
+  const pyAvgPmPerProp = propCount > 0 ? py.pmSales / propCount : 0;
+  const pyAvgBmPerProp = propCount > 0 ? py.bmSales / propCount : 0;
+  const pmAvgPmPerProp = propCount > 0 ? pm.pmSales / propCount : 0;
+  const pmAvgBmPerProp = propCount > 0 ? pm.bmSales / propCount : 0;
+
   // KPI cards
   const setText = (id, v) => { const el = document.getElementById(id); if (el) el.innerHTML = v; };
   setText('kpi-pmbm-pm', fmtYen(cur.pmSales));
@@ -3296,6 +3305,10 @@ function renderPmbmTab() {
   setText('kpi-pmbm-total-vs', fmtVsLine(cur.pmSales + cur.bmSales, py.pmSales + py.bmSales, pm.pmSales + pm.bmSales));
   setText('kpi-pmbm-rate', cur.pmRate.toFixed(1) + '%');
   setText('kpi-pmbm-rate-vs', fmtVsLinePt(cur.pmRate, py.pmRate, pm.pmRate));
+  setText('kpi-pmbm-pm-avg', fmtYen(avgPmPerProp));
+  setText('kpi-pmbm-pm-avg-vs', fmtVsLine(avgPmPerProp, pyAvgPmPerProp, pmAvgPmPerProp));
+  setText('kpi-pmbm-bm-avg', fmtYen(avgBmPerProp));
+  setText('kpi-pmbm-bm-avg-vs', fmtVsLine(avgBmPerProp, pyAvgBmPerProp, pmAvgBmPerProp));
 
   // Owner combined top 10
   const ownerCombined = [...cur.byOwner].map(o => ({ ...o, total: o.pm + o.bm }))
