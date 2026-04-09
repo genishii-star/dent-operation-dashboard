@@ -766,12 +766,22 @@ function fmtPct(n) {
 // Tab switching
 // ============================================================
 function switchTab(id) {
+  currentTabId = id;
   document.querySelectorAll('.tab-btn').forEach((btn, i) => {
     const tabIds = ['daily','owner','property','reservation','revenue','review','watchlist','shinpou','pmbm'];
     btn.classList.toggle('active', tabIds[i] === id);
   });
   document.querySelectorAll('.tab-content').forEach(tc => tc.classList.remove('active'));
   document.getElementById('tab-' + id).classList.add('active');
+  // If this tab is dirty (data/filters changed since last render), re-render now
+  if (dirtyTabs.has(id)) {
+    const fn = tabRenderers[id];
+    if (fn) {
+      try { fn(); } catch (e) { console.error('[render]', id, e); }
+    }
+    dirtyTabs.delete(id);
+    setTimeout(initSortableHeaders, 50);
+  }
   setTimeout(() => initChartsForTab(id), 50);
 }
 
@@ -913,19 +923,60 @@ function toggleKpiExclude() {
 }
 
 // ============================================================
-// Render all
+// Render all (lazy: active tab now, others marked dirty + idle background)
 // ============================================================
+let currentTabId = 'daily'; // initial active tab in index.html
+const dirtyTabs = new Set();
+const tabRenderers = {
+  daily: renderDailyTab,
+  owner: renderOwnerTab,
+  property: renderPropertyTab,
+  reservation: renderReservationTab,
+  revenue: renderRevenueTab,
+  review: renderReviewTab,
+  watchlist: renderWatchlistTab,
+  shinpou: renderShinpouTab,
+  pmbm: renderPmbmTab,
+};
+const ALL_TAB_IDS = Object.keys(tabRenderers);
+
 function renderAll() {
-  renderPmbmTab();
-  renderDailyTab();
-  renderOwnerTab();
-  renderPropertyTab();
-  renderReservationTab();
-  renderRevenueTab();
-  renderReviewTab();
-  renderWatchlistTab();
-  renderShinpouTab();
+  // 1. Render active tab immediately
+  const fn = tabRenderers[currentTabId];
+  if (fn) {
+    try { fn(); } catch (e) { console.error('[render]', currentTabId, e); }
+  }
+  // 2. Mark all others dirty so they re-render on activation
+  ALL_TAB_IDS.forEach(id => { if (id !== currentTabId) dirtyTabs.add(id); });
   setTimeout(initSortableHeaders, 50);
+  // 3. Background-render dirty tabs during idle time
+  scheduleIdleRender();
+}
+
+let idleRenderHandle = null;
+function scheduleIdleRender() {
+  if (idleRenderHandle != null) return;
+  if (dirtyTabs.size === 0) return;
+  const cb = (deadline) => {
+    idleRenderHandle = null;
+    const ids = Array.from(dirtyTabs);
+    for (const id of ids) {
+      // Yield if running out of idle budget (Chart.js renders are heavy)
+      if (deadline && deadline.timeRemaining && deadline.timeRemaining() < 8) break;
+      if (id === currentTabId) { dirtyTabs.delete(id); continue; }
+      const fn = tabRenderers[id];
+      if (fn) {
+        try { fn(); } catch (e) { console.error('[idle render]', id, e); }
+      }
+      dirtyTabs.delete(id);
+    }
+    if (dirtyTabs.size > 0) scheduleIdleRender();
+  };
+  if (typeof requestIdleCallback === 'function') {
+    idleRenderHandle = requestIdleCallback(cb, { timeout: 3000 });
+  } else {
+    idleRenderHandle = setTimeout(() => cb({ timeRemaining: () => 50 }), 300);
+  }
 }
 
 // ============================================================
