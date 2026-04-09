@@ -33,12 +33,13 @@
     <input type="text" id="fb-name" placeholder="名前">
     <select id="fb-tab">
       <option value="">タブ: 現在のタブ</option>
-      <option value="全体概況">全体概況</option>
+      <option value="TOP">TOP</option>
       <option value="オーナー別分析">オーナー別分析</option>
       <option value="物件別分析">物件別分析</option>
       <option value="予約獲得状況">予約獲得状況</option>
       <option value="売上・稼働">売上・稼働</option>
       <option value="レビュー">レビュー</option>
+      <option value="要チェック">要チェック</option>
       <option value="新法チェック">新法チェック</option>
     </select>
     <select id="fb-type">
@@ -65,7 +66,7 @@
 </header>
 
 <nav class="tab-nav">
-  <button class="tab-btn active" onclick="switchTab('daily')">全体概況</button>
+  <button class="tab-btn active" onclick="switchTab('daily')">TOP</button>
   <button class="tab-btn" onclick="switchTab('owner')">オーナー別分析</button>
   <button class="tab-btn" onclick="switchTab('property')">物件別分析</button>
   <button class="tab-btn" onclick="switchTab('reservation')">予約獲得状況</button>
@@ -79,7 +80,7 @@
 
 <div id="app-content">
 
-<!-- ==================== Tab 1: 全体概況 ==================== -->
+<!-- ==================== Tab 1: TOP ==================== -->
 <div id="tab-daily" class="tab-content active">
   <div class="container">
     <div class="filter-bar">
@@ -105,13 +106,18 @@
 
     <div id="watchlist-summary-badge" style="display:none;background:#fff8e1;border:1px solid #ffc107;border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:13px;text-align:center;"></div>
 
-    <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:16px;margin-bottom:20px;" id="daily-kpi-grid">
-      <div class="kpi-card"><div class="label">売上合計</div><div class="value" id="kpi-daily-sales">-</div></div>
-      <div class="kpi-card"><div class="label">1日の平均売上</div><div class="value" id="kpi-daily-avg">-</div></div>
-      <div class="kpi-card"><div class="label">受取金合計</div><div class="value" id="kpi-daily-received">-</div></div>
-      <div class="kpi-card"><div class="label">ADR (平均客室単価)</div><div class="value" id="kpi-daily-adr">-</div></div>
-      <div class="kpi-card"><div class="label">OCC</div><div class="value" id="kpi-daily-occ">-</div></div>
-      <div class="kpi-card"><div class="label">平均宿泊日数</div><div class="value" id="kpi-daily-nights">-</div></div>
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-bottom:20px;" id="daily-kpi-grid">
+      <div class="kpi-card"><div class="label">売上合計</div><div class="value" id="kpi-daily-sales">-</div><div class="sub" id="kpi-daily-sales-vs">-</div></div>
+      <div class="kpi-card"><div class="label">PM売上</div><div class="value" id="kpi-daily-pm">-</div><div class="sub" id="kpi-daily-pm-vs">-</div></div>
+      <div class="kpi-card"><div class="label">BM売上</div><div class="value" id="kpi-daily-bm">-</div><div class="sub" id="kpi-daily-bm-vs">-</div></div>
+      <div class="kpi-card"><div class="label">受取金合計</div><div class="value" id="kpi-daily-received">-</div><div class="sub" id="kpi-daily-received-vs">-</div></div>
+      <div class="kpi-card"><div class="label">1日の平均売上</div><div class="value" id="kpi-daily-avg">-</div><div class="sub" id="kpi-daily-avg-vs">-</div></div>
+      <div class="kpi-card"><div class="label">新規予約 (直近7日)</div><div class="value" id="kpi-daily-newbooking">-</div><div class="sub" id="kpi-daily-newbooking-vs">-</div></div>
+      <div class="kpi-card"><div class="label">目標達成物件数</div><div class="value" id="kpi-daily-target-hit">-</div><div class="sub" id="kpi-daily-target-hit-sub">-</div><div class="sub" id="kpi-daily-target-hit-vs">-</div></div>
+      <div class="kpi-card"><div class="label">目標達成オーナー数</div><div class="value" id="kpi-daily-target-hit-owner">-</div><div class="sub" id="kpi-daily-target-hit-owner-sub">-</div><div class="sub" id="kpi-daily-target-hit-owner-vs">-</div></div>
+      <div class="kpi-card"><div class="label">ADR (平均客室単価)</div><div class="value" id="kpi-daily-adr">-</div><div class="sub" id="kpi-daily-adr-vs">-</div></div>
+      <div class="kpi-card"><div class="label">OCC</div><div class="value" id="kpi-daily-occ">-</div><div class="sub" id="kpi-daily-occ-vs">-</div></div>
+      <div class="kpi-card"><div class="label">平均宿泊日数</div><div class="value" id="kpi-daily-nights">-</div><div class="sub" id="kpi-daily-nights-vs">-</div></div>
     </div>
 
     <div class="card">
@@ -130,24 +136,6 @@
       </div>
     </div>
 
-    <div class="card">
-      <div class="section-title">
-        新着予約
-        <div class="filter-pills" id="daily-recent-filter">
-          <span class="pill active" data-days="1" onclick="setRecentFilter(this)">過去1日</span>
-          <span class="pill" data-days="3" onclick="setRecentFilter(this)">過去3日</span>
-          <span class="pill" data-days="7" onclick="setRecentFilter(this)">過去1週間</span>
-        </div>
-      </div>
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <tr><th>予約日</th><th>予約サイト</th><th>物件名</th><th>ゲスト名</th><th>チェックイン</th><th>チェックアウト</th><th>泊数</th><th>販売金額</th></tr>
-          </thead>
-          <tbody id="daily-reservations"></tbody>
-        </table>
-      </div>
-    </div>
   </div>
 </div>
 

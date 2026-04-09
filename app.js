@@ -147,7 +147,6 @@ let currentFilters = {
   revenuePeriod: 'thisMonth',
   ownerProgressPeriod: 'thisMonth',
   propertyView: 'all',
-  recentDays: 1,
 };
 
 // ============================================================
@@ -307,6 +306,17 @@ function generatePropCode(propName, roomNum) {
 }
 
 function processData() {
+  // 物件名のマージ（旧名 → 新名）
+  const PROPERTY_NAME_MERGE = {
+    'HGK旧': 'HGK',
+  };
+  rawReservations.forEach(r => {
+    if (PROPERTY_NAME_MERGE[r['物件名']]) r['物件名'] = PROPERTY_NAME_MERGE[r['物件名']];
+  });
+  rawDailyData.forEach(d => {
+    if (PROPERTY_NAME_MERGE[d['物件名']]) d['物件名'] = PROPERTY_NAME_MERGE[d['物件名']];
+  });
+
   // 物件コードSetを構築（マスタの物件コード列がそのまま正規化キー）
   const codeSet = new Set();
   propertyMaster.forEach(pm => {
@@ -336,6 +346,8 @@ function processData() {
       status: r['状態'] || '',
       sales: parseNum(r['販売']),
       received: parseNum(r['受取金']),
+      otaFee: parseNum(r['OTA サービス料']),
+      cleaningFee: parseNum(r['クリーニング代']),
       paid: r['支払い済み'] || '',
       roomTag: r['物件タグ'] || '',
     };
@@ -384,6 +396,7 @@ function processData() {
       ownerId: pm['オーナーID'] || '',
       ownerName: ownerInfo.name || '',
       royalty: ownerInfo.royalty || '',
+      royaltyPct: parseNum(ownerInfo.royalty), // "20%" → 20, "運営費のみ" → 0
       area: area,
       rooms: parseNum(pm['部屋数']) || 1,
       excludeKpi: (pm['KPI除外'] || '') === 'TRUE' || (pm['KPI除外'] || '') === '1',
@@ -749,14 +762,6 @@ function setPropertyView(el) {
   renderAll();
 }
 
-function setRecentFilter(el) {
-  const pills = el.parentElement.querySelectorAll('.pill');
-  pills.forEach(p => p.classList.remove('active'));
-  el.classList.add('active');
-  currentFilters.recentDays = parseInt(el.dataset.days, 10);
-  renderAll();
-}
-
 function setPeriodFilter(el, tabId) {
   const pills = el.parentElement.querySelectorAll('.pill');
   pills.forEach(p => p.classList.remove('active'));
@@ -888,28 +893,21 @@ function renderAll() {
 }
 
 // ============================================================
-// Tab 1: 全体概況
+// Tab 1: TOP
 // ============================================================
-function renderDailyTab() {
-  const months = getSelectedMonths('daily');
-  const area = currentFilters.dailyArea;
+function shiftMonths(months, deltaMonths) {
+  return months.map(ym => {
+    const [y, m] = ym.split('-').map(Number);
+    const d = new Date(y, m - 1 + deltaMonths, 1);
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+  });
+}
 
-  // Date range display
+function computeDailyMetrics(months, area) {
   const monthSet = new Set(months);
-  const firstMonth = months[0];
-  const lastMonth = months[months.length - 1];
-  const firstDay = firstMonth + '-01';
-  const lastDaysInMonth = getDaysInMonth(lastMonth);
-  const lastDay = lastMonth + '-' + String(lastDaysInMonth).padStart(2, '0');
-  document.getElementById('daily-date-range').textContent = firstDay + ' ~ ' + lastDay;
-
-  // Overall stats for selected period
-  const overall = computeOverallStatsMulti(months, area, false);
-
-  // 選択期間の日数（チェックイン月ベース1日平均売上の分母）
   const totalDays = months.reduce((s, ym) => s + getDaysInMonth(ym), 0);
 
-  // チェックイン月ベース予約（OTAチャートと同じソース・粒度）
+  // チェックイン月ベース予約
   const monthResvs = reservations.filter(r => {
     if (r.status === 'システムキャンセル' || r.status === 'キャンセル') return false;
     if (!monthSet.has(getYearMonth(r.checkin))) return false;
@@ -919,45 +917,178 @@ function renderDailyTab() {
     }
     return true;
   });
+  const sales = monthResvs.reduce((s, r) => s + (r.sales || 0), 0);
+  const received = monthResvs.reduce((s, r) => s + (r.received || 0), 0);
+  const avgDailySales = totalDays > 0 ? sales / totalDays : 0;
   const avgNights = monthResvs.length > 0 ? monthResvs.reduce((s, r) => s + r.nights, 0) / monthResvs.length : 0;
 
-  // 売上合計・受取金合計はチェックイン月ベースに統一（月別OTA売上推移グラフと一致させる）
-  const checkinSales = monthResvs.reduce((s, r) => s + (r.sales || 0), 0);
-  const checkinReceived = monthResvs.reduce((s, r) => s + (r.received || 0), 0);
-  const checkinAvgDailySales = totalDays > 0 ? checkinSales / totalDays : 0;
+  // PM売上: (販売 - OTA手数料 - 清掃費) × オーナーロイヤリティ%
+  let pmSales = 0;
+  monthResvs.forEach(r => {
+    const prop = findPropByReservation(r);
+    if (!prop) return;
+    const royaltyPct = prop.royaltyPct || 0;
+    if (royaltyPct === 0) return;
+    const base = (r.sales || 0) - (r.otaFee || 0) - (r.cleaningFee || 0);
+    pmSales += base * (royaltyPct / 100);
+  });
 
-  // KPIs
-  document.getElementById('kpi-daily-sales').textContent = fmtYen(checkinSales);
-  document.getElementById('kpi-daily-avg').textContent = fmtYenFull(Math.round(checkinAvgDailySales));
-  document.getElementById('kpi-daily-received').textContent = fmtYen(checkinReceived);
-  document.getElementById('kpi-daily-adr').textContent = fmtYenFull(Math.round(overall.adr));
-  document.getElementById('kpi-daily-occ').textContent = fmtPct(overall.occ);
-  document.getElementById('kpi-daily-nights').textContent = avgNights.toFixed(1) + '泊';
-
-  // Recent reservations
-  const recentDays = currentFilters.recentDays;
-  const today = new Date();
-  const cutoff = new Date(today);
-  cutoff.setDate(cutoff.getDate() - recentDays);
-  const cutoffStr = cutoff.toISOString().substring(0, 10);
-  const todayStr = today.toISOString().substring(0, 10);
-
-  let recentResv = reservations.filter(r => {
+  // BM売上: 対象月チェックアウト予約の清掃費合計
+  let bmSales = 0;
+  reservations.forEach(r => {
+    if (r.status === 'システムキャンセル' || r.status === 'キャンセル') return;
+    if (!monthSet.has(getYearMonth(r.checkout))) return;
     if (area !== '全体') {
       const prop = findPropByReservation(r);
-      if (!prop || prop.area !== area) return false;
+      if (!prop || prop.area !== area) return;
     }
-    return r.date >= cutoffStr && r.date <= todayStr;
-  }).slice(0, 20);
+    bmSales += (r.cleaningFee || 0);
+  });
 
-  const tbody = document.getElementById('daily-reservations');
-  if (recentResv.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="8" style="color:#999;text-align:center;">該当する予約はありません</td></tr>';
-  } else {
-    tbody.innerHTML = recentResv.map(r => `<tr>
-      <td>${(r.date || '').slice(0, 10)}</td><td>${r.channel}</td><td>${r.property}</td><td>${r.guest}</td><td>${r.checkin}</td><td>${r.checkout}</td><td>${r.nights}泊</td><td>${fmtYenFull(r.sales)}</td>
-    </tr>`).join('');
-  }
+  const overall = computeOverallStatsMulti(months, area, false);
+
+  // 目標達成物件数 / オーナー数
+  const filteredProps = filterPropertiesByArea(area).filter(p => !p.excludeKpi && p.status === '稼働中');
+  let hitCount = 0;
+  const ownerAgg = {};
+  filteredProps.forEach(p => {
+    let actual = 0, target = 0;
+    months.forEach(ym => {
+      const s = computePropertyStats(p.name, ym);
+      if (s) actual += s.sales;
+      const monthNum = parseInt(ym.split('-')[1], 10);
+      target += getTargetForProperty(p, monthNum) || 0;
+    });
+    if (target > 0 && actual >= target) hitCount++;
+    if (p.ownerId) {
+      if (!ownerAgg[p.ownerId]) ownerAgg[p.ownerId] = { actual: 0, target: 0 };
+      ownerAgg[p.ownerId].actual += actual;
+      ownerAgg[p.ownerId].target += target;
+    }
+  });
+  let ownerHit = 0;
+  Object.values(ownerAgg).forEach(o => {
+    if (o.target > 0 && o.actual >= o.target) ownerHit++;
+  });
+
+  return {
+    sales, received, avgDailySales, avgNights,
+    pmSales, bmSales,
+    adr: overall.adr, occ: overall.occ,
+    hitCount, totalProps: filteredProps.length,
+    ownerHit, totalOwners: Object.keys(ownerAgg).length,
+  };
+}
+
+// 直近N日の新規予約数（予約日ベース）
+function countNewBookings(area, daysBack, endDateStr) {
+  const end = new Date(endDateStr);
+  const start = new Date(end);
+  start.setDate(start.getDate() - daysBack + 1);
+  const startStr = localDateStr(start);
+  let count = 0;
+  reservations.forEach(r => {
+    if (r.status === 'システムキャンセル' || r.status === 'キャンセル') return;
+    if (!r.date || r.date < startStr || r.date > endDateStr) return;
+    if (area !== '全体') {
+      const prop = findPropByReservation(r);
+      if (!prop || prop.area !== area) return;
+    }
+    count++;
+  });
+  return count;
+}
+
+// vs ratio formatter (% diff)
+function fmtVsLine(cur, py, pm, formatter) {
+  const fmtOne = (label, prev) => {
+    if (prev == null || prev === 0) return `${label} -`;
+    const diff = cur - prev;
+    const pct = (diff / prev) * 100;
+    const sign = diff >= 0 ? '+' : '';
+    const cls = diff >= 0 ? 'positive' : 'negative';
+    return `<span class="${cls}">${label} ${sign}${pct.toFixed(1)}%</span>`;
+  };
+  return `${fmtOne('YoY', py)} / ${fmtOne('MoM', pm)}`;
+}
+
+// pt diff formatter (for OCC etc)
+function fmtVsLinePt(cur, py, pm) {
+  const fmtOne = (label, prev) => {
+    if (prev == null) return `${label} -`;
+    const diff = cur - prev;
+    const sign = diff >= 0 ? '+' : '';
+    const cls = diff >= 0 ? 'positive' : 'negative';
+    return `<span class="${cls}">${label} ${sign}${diff.toFixed(1)}pt</span>`;
+  };
+  return `${fmtOne('YoY', py)} / ${fmtOne('MoM', pm)}`;
+}
+
+function renderDailyTab() {
+  const months = getSelectedMonths('daily');
+  const area = currentFilters.dailyArea;
+
+  // Date range display
+  const firstMonth = months[0];
+  const lastMonth = months[months.length - 1];
+  const firstDay = firstMonth + '-01';
+  const lastDaysInMonth = getDaysInMonth(lastMonth);
+  const lastDay = lastMonth + '-' + String(lastDaysInMonth).padStart(2, '0');
+  document.getElementById('daily-date-range').textContent = firstDay + ' ~ ' + lastDay;
+
+  const cur = computeDailyMetrics(months, area);
+  const py = computeDailyMetrics(shiftMonths(months, -12), area);
+  const pm = computeDailyMetrics(shiftMonths(months, -1), area);
+
+  // Primary KPIs
+  document.getElementById('kpi-daily-sales').textContent = fmtYen(cur.sales);
+  document.getElementById('kpi-daily-sales-vs').innerHTML = fmtVsLine(cur.sales, py.sales, pm.sales);
+  document.getElementById('kpi-daily-received').textContent = fmtYen(cur.received);
+  document.getElementById('kpi-daily-received-vs').innerHTML = fmtVsLine(cur.received, py.received, pm.received);
+  document.getElementById('kpi-daily-pm').textContent = fmtYen(cur.pmSales);
+  document.getElementById('kpi-daily-pm-vs').innerHTML = fmtVsLine(cur.pmSales, py.pmSales, pm.pmSales);
+  document.getElementById('kpi-daily-bm').textContent = fmtYen(cur.bmSales);
+  document.getElementById('kpi-daily-bm-vs').innerHTML = fmtVsLine(cur.bmSales, py.bmSales, pm.bmSales);
+  document.getElementById('kpi-daily-avg').textContent = fmtYenFull(Math.round(cur.avgDailySales));
+  document.getElementById('kpi-daily-avg-vs').innerHTML = fmtVsLine(cur.avgDailySales, py.avgDailySales, pm.avgDailySales);
+  document.getElementById('kpi-daily-adr').textContent = fmtYenFull(Math.round(cur.adr));
+  document.getElementById('kpi-daily-adr-vs').innerHTML = fmtVsLine(cur.adr, py.adr, pm.adr);
+  document.getElementById('kpi-daily-occ').textContent = fmtPct(cur.occ);
+  document.getElementById('kpi-daily-occ-vs').innerHTML = fmtVsLinePt(cur.occ, py.occ, pm.occ);
+  document.getElementById('kpi-daily-nights').textContent = cur.avgNights.toFixed(1) + '泊';
+  document.getElementById('kpi-daily-nights-vs').innerHTML = fmtVsLine(cur.avgNights, py.avgNights, pm.avgNights);
+
+  // 目標達成物件数 / オーナー数
+  document.getElementById('kpi-daily-target-hit').textContent = cur.hitCount + '件';
+  document.getElementById('kpi-daily-target-hit-sub').textContent = cur.totalProps > 0 ? `${cur.totalProps}件中 (${(cur.hitCount / cur.totalProps * 100).toFixed(0)}%)` : '-';
+  document.getElementById('kpi-daily-target-hit-vs').innerHTML = fmtVsLine(cur.hitCount, py.hitCount, pm.hitCount);
+  document.getElementById('kpi-daily-target-hit-owner').textContent = cur.ownerHit + '名';
+  document.getElementById('kpi-daily-target-hit-owner-sub').textContent = cur.totalOwners > 0 ? `${cur.totalOwners}名中 (${(cur.ownerHit / cur.totalOwners * 100).toFixed(0)}%)` : '-';
+  document.getElementById('kpi-daily-target-hit-owner-vs').innerHTML = fmtVsLine(cur.ownerHit, py.ownerHit, pm.ownerHit);
+
+  // 新規予約 (直近7日) - 対前週(直前7日) / 対前年(同期間1年前)
+  const todayStr = localDateStr(new Date());
+  const newBookCount = countNewBookings(area, 7, todayStr);
+  // 前週(直前7日: 14日前〜8日前)
+  const prevWeekEnd = new Date();
+  prevWeekEnd.setDate(prevWeekEnd.getDate() - 7);
+  const prevWeekCount = countNewBookings(area, 7, localDateStr(prevWeekEnd));
+  // 前年同期(7日前と同じ7日窓を1年シフト)
+  const prevYearEnd = new Date();
+  prevYearEnd.setFullYear(prevYearEnd.getFullYear() - 1);
+  const prevYearWeekCount = countNewBookings(area, 7, localDateStr(prevYearEnd));
+  document.getElementById('kpi-daily-newbooking').textContent = newBookCount + '件';
+  document.getElementById('kpi-daily-newbooking-vs').innerHTML = (function () {
+    const fmtOne = (label, prev) => {
+      if (prev == null || prev === 0) return `${label} -`;
+      const diff = newBookCount - prev;
+      const pct = (diff / prev) * 100;
+      const sign = diff >= 0 ? '+' : '';
+      const cls = diff >= 0 ? 'positive' : 'negative';
+      return `<span class="${cls}">${label} ${sign}${pct.toFixed(0)}%</span>`;
+    };
+    return `${fmtOne('YoY', prevYearWeekCount)} / ${fmtOne('WoW', prevWeekCount)}`;
+  })();
 
   // Charts
   initDailyCharts();
