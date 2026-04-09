@@ -3149,12 +3149,24 @@ function renderWatchlistTab() {
     if (newProps.length === 0) {
       newSec.innerHTML = '<div style="color:#999;font-size:13px;padding:12px;">新着物件はありません</div>';
     } else {
+      const d7ago = new Date(); d7ago.setDate(d7ago.getDate() - 7);
+      const d7agoStr = localDateStr(d7ago);
+      const todayStr = localDateStr(new Date());
       newSec.innerHTML = newProps.map((p, i) => {
         const months = getMonthsSinceStart(p);
+        let bkCount = 0;
+        reservations.forEach(r => {
+          if (r.status === 'システムキャンセル' || r.status === 'キャンセル') return;
+          if (r.propCode !== p.name && r.property !== p.name && r.property !== p.propName) return;
+          if (r.date && r.date >= d7agoStr && r.date <= todayStr) bkCount++;
+        });
+        const bkPill = bkCount > 0
+          ? `<span class="badge-green" style="margin-left:6px;">直近7日 ${bkCount}件予約</span>`
+          : `<span class="badge-orange" style="margin-left:6px;">直近7日 0件</span>`;
         return `<div class="watchlist-card">
           <div class="watchlist-card-header">
             <div class="watchlist-card-title">${p.name}</div>
-            <span class="badge-blue">🆕 新着 ${months !== null ? months + 'ヶ月目' : ''}</span>
+            <div><span class="badge-blue">🆕 新着 ${months !== null ? months + 'ヶ月目' : ''}</span>${bkPill}</div>
           </div>
           <div class="watchlist-card-meta">運用開始: ${p.startDate || '-'} / オーナー: ${p.ownerId || '-'}</div>
           <div style="height:120px;"><canvas id="watchlist-chart-new-${i}"></canvas></div>
