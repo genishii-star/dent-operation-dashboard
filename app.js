@@ -3009,6 +3009,7 @@ function getWatchlistChartData(prop) {
   const labels = [];
   const sales = [];
   const targets = [];
+  const occs = [];
   const now = new Date();
   for (let i = -3; i <= 3; i++) {
     const d = new Date(now.getFullYear(), now.getMonth() + i, 1);
@@ -3017,8 +3018,9 @@ function getWatchlistChartData(prop) {
     const s = computePropertyStats(prop.name, ym);
     sales.push(s ? Math.round(s.sales) : 0);
     targets.push(getTargetForProperty(prop, d.getMonth() + 1) || 0);
+    occs.push(s ? Math.round(s.occ * 10) / 10 : 0);
   }
-  return { labels, sales, targets };
+  return { labels, sales, targets, occs };
 }
 
 let _watchlistCounts = { newCount: 0, watchCount: 0 };
@@ -3127,15 +3129,16 @@ function initWatchlistCharts() {
   const drawMini = (canvasId, prop) => {
     const canvas = document.getElementById(canvasId);
     if (!canvas) return;
-    const { labels, sales, targets } = getWatchlistChartData(prop);
+    const { labels, sales, targets, occs } = getWatchlistChartData(prop);
     const ctx = canvas.getContext('2d');
     const chart = new Chart(ctx, {
       type: 'bar',
       data: {
         labels,
         datasets: [
-          { label: '売上', data: sales, backgroundColor: CHART_COLORS.blue, borderRadius: 4, order: 2 },
-          { label: '目標', data: targets, type: 'line', borderColor: CHART_COLORS.red, borderDash: [4, 4], borderWidth: 2, pointRadius: 0, fill: false, order: 1 },
+          { label: '売上', data: sales, backgroundColor: CHART_COLORS.blue, borderRadius: 4, order: 3, yAxisID: 'y' },
+          { label: '目標', data: targets, type: 'line', borderColor: CHART_COLORS.red, borderDash: [4, 4], borderWidth: 2, pointRadius: 0, fill: false, order: 2, yAxisID: 'y' },
+          { label: 'OCC', data: occs, type: 'line', borderColor: CHART_COLORS.green, borderWidth: 2, pointRadius: 2, fill: false, order: 1, yAxisID: 'y1' },
         ],
       },
       options: {
@@ -3145,12 +3148,13 @@ function initWatchlistCharts() {
           legend: { display: false },
           tooltip: {
             callbacks: {
-              label: (c) => `${c.dataset.label}: ${fmtYen(c.parsed.y)}`,
+              label: (c) => c.dataset.label === 'OCC' ? `OCC: ${c.parsed.y}%` : `${c.dataset.label}: ${fmtYen(c.parsed.y)}`,
             },
           },
         },
         scales: {
           y: { beginAtZero: true, ticks: { callback: (v) => fmtYen(v), font: { size: 10 } } },
+          y1: { beginAtZero: true, max: 100, position: 'right', grid: { drawOnChartArea: false }, ticks: { callback: (v) => v + '%', font: { size: 10 } } },
           x: { ticks: { font: { size: 10 } } },
         },
       },
