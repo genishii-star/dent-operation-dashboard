@@ -140,6 +140,8 @@ let currentFilters = {
   ownerArea: '全体',
   propertyArea: '全体',
   revenueArea: '全体',
+  pmbmArea: '全体',
+  pmbmPeriod: 'thisMonth',
   dailyPeriod: 'thisMonth',
   ownerPeriod: 'thisMonth',
   propertyPeriod: 'thisMonth',
@@ -308,6 +310,7 @@ function generatePropCode(propName, roomNum) {
 function processData() {
   // 物件名のマージ（旧名 → 新名）
   const PROPERTY_NAME_MERGE = {
+    'HGK(旧)': 'HGK',
     'HGK旧': 'HGK',
   };
   rawReservations.forEach(r => {
@@ -315,6 +318,17 @@ function processData() {
   });
   rawDailyData.forEach(d => {
     if (PROPERTY_NAME_MERGE[d['物件名']]) d['物件名'] = PROPERTY_NAME_MERGE[d['物件名']];
+  });
+  // 物件マスタ側もマージ：旧コード行は新コード行が存在すればドロップ、無ければ rename
+  const _masterCodes = new Set(propertyMaster.map(pm => pm['物件コード'] || ''));
+  propertyMaster = propertyMaster.filter(pm => {
+    const code = pm['物件コード'] || '';
+    if (PROPERTY_NAME_MERGE[code]) {
+      const newCode = PROPERTY_NAME_MERGE[code];
+      if (_masterCodes.has(newCode)) return false; // 重複→ドロップ
+      pm['物件コード'] = newCode;
+    }
+    return true;
   });
 
   // 物件コードSetを構築（マスタの物件コード列がそのまま正規化キー）
@@ -732,7 +746,7 @@ function fmtPct(n) {
 // ============================================================
 function switchTab(id) {
   document.querySelectorAll('.tab-btn').forEach((btn, i) => {
-    const tabIds = ['daily','owner','property','reservation','revenue','review','watchlist','shinpou'];
+    const tabIds = ['daily','owner','property','reservation','revenue','review','watchlist','shinpou','pmbm'];
     btn.classList.toggle('active', tabIds[i] === id);
   });
   document.querySelectorAll('.tab-content').forEach(tc => tc.classList.remove('active'));
@@ -881,6 +895,7 @@ function toggleKpiExclude() {
 // Render all
 // ============================================================
 function renderAll() {
+  renderPmbmTab();
   renderDailyTab();
   renderOwnerTab();
   renderPropertyTab();
@@ -2364,6 +2379,7 @@ function destroyChart(key) {
 }
 
 function initChartsForTab(tabId) {
+  if (tabId === 'pmbm') initPmbmCharts();
   if (tabId === 'daily') initDailyCharts();
   if (tabId === 'reservation') initReservationCharts();
   if (tabId === 'revenue') initRevenueCharts();
@@ -3183,6 +3199,273 @@ function initWatchlistCharts() {
 }
 
 // ============================================================
+// Tab: PM/BM 分析
+// ============================================================
+function computePmBmDetail(months, area) {
+  const monthSet = new Set(months);
+  const byOwner = new Map();
+  const byProp = new Map();
+  const byArea = new Map();
+  let pmSales = 0, bmSales = 0, totalSales = 0;
+  let cleaningCount = 0;
+
+  const ensureOwner = (prop) => {
+    const oid = prop.ownerId || '_none';
+    if (!byOwner.has(oid)) byOwner.set(oid, { id: oid, name: prop.ownerName || oid, pm: 0, bm: 0 });
+    return byOwner.get(oid);
+  };
+  const ensureProp = (prop) => {
+    if (!byProp.has(prop.name)) byProp.set(prop.name, {
+      name: prop.name, ownerName: prop.ownerName || '', area: prop.area || '',
+      royaltyPct: prop.royaltyPct || 0, pm: 0, bm: 0,
+    });
+    return byProp.get(prop.name);
+  };
+  const ensureArea = (a) => {
+    if (!byArea.has(a)) byArea.set(a, { area: a, pm: 0, bm: 0 });
+    return byArea.get(a);
+  };
+
+  // PM (and total sales): checkin-month basis
+  reservations.forEach(r => {
+    if (r.status === 'システムキャンセル' || r.status === 'キャンセル') return;
+    if (!monthSet.has(getYearMonth(r.checkin))) return;
+    const prop = findPropByReservation(r);
+    if (!prop) return;
+    if (area !== '全体' && prop.area !== area) return;
+
+    const sale = r.sales || 0;
+    totalSales += sale;
+    const royaltyPct = prop.royaltyPct || 0;
+    let pm = 0;
+    if (royaltyPct > 0) {
+      pm = ((sale - (r.otaFee || 0) - (r.cleaningFee || 0)) * royaltyPct) / 100;
+    }
+    pmSales += pm;
+
+    ensureOwner(prop).pm += pm;
+    ensureProp(prop).pm += pm;
+    ensureArea(prop.area || '不明').pm += pm;
+  });
+
+  // BM: checkout-month basis
+  reservations.forEach(r => {
+    if (r.status === 'システムキャンセル' || r.status === 'キャンセル') return;
+    if (!monthSet.has(getYearMonth(r.checkout))) return;
+    const prop = findPropByReservation(r);
+    if (!prop) return;
+    if (area !== '全体' && prop.area !== area) return;
+
+    const bm = r.cleaningFee || 0;
+    if (bm <= 0) return;
+    bmSales += bm;
+    cleaningCount++;
+
+    ensureOwner(prop).bm += bm;
+    ensureProp(prop).bm += bm;
+    ensureArea(prop.area || '不明').bm += bm;
+  });
+
+  return {
+    pmSales, bmSales, totalSales,
+    pmRate: totalSales > 0 ? (pmSales / totalSales) * 100 : 0,
+    cleaningCount,
+    avgCleaningUnit: cleaningCount > 0 ? bmSales / cleaningCount : 0,
+    byOwner: Array.from(byOwner.values()),
+    byProp: Array.from(byProp.values()),
+    byArea: Array.from(byArea.values()),
+  };
+}
+
+function renderPmbmTab() {
+  if (!document.getElementById('tab-pmbm')) return;
+  const months = getSelectedMonths('pmbm');
+  const area = currentFilters.pmbmArea;
+
+  const cur = computePmBmDetail(months, area);
+  const py = computePmBmDetail(shiftMonths(months, -12), area);
+  const pm = computePmBmDetail(shiftMonths(months, -1), area);
+
+  // KPI cards
+  const setText = (id, v) => { const el = document.getElementById(id); if (el) el.innerHTML = v; };
+  setText('kpi-pmbm-pm', fmtYen(cur.pmSales));
+  setText('kpi-pmbm-pm-vs', fmtVsLine(cur.pmSales, py.pmSales, pm.pmSales));
+  setText('kpi-pmbm-bm', fmtYen(cur.bmSales));
+  setText('kpi-pmbm-bm-vs', fmtVsLine(cur.bmSales, py.bmSales, pm.bmSales));
+  setText('kpi-pmbm-total', fmtYen(cur.pmSales + cur.bmSales));
+  setText('kpi-pmbm-total-vs', fmtVsLine(cur.pmSales + cur.bmSales, py.pmSales + py.bmSales, pm.pmSales + pm.bmSales));
+  setText('kpi-pmbm-rate', cur.pmRate.toFixed(1) + '%');
+  setText('kpi-pmbm-rate-vs', fmtVsLinePt(cur.pmRate, py.pmRate, pm.pmRate));
+
+  // Owner combined top 10
+  const ownerCombined = [...cur.byOwner].map(o => ({ ...o, total: o.pm + o.bm }))
+    .sort((a, b) => b.total - a.total).slice(0, 10);
+  const tbodyCombined = document.getElementById('pmbm-owner-combined-tbody');
+  if (tbodyCombined) {
+    tbodyCombined.innerHTML = ownerCombined.map((o, i) =>
+      `<tr><td>${i + 1}</td><td>${o.name}</td><td class="text-right">${fmtYen(o.pm)}</td><td class="text-right">${fmtYen(o.bm)}</td><td class="text-right"><strong>${fmtYen(o.total)}</strong></td></tr>`
+    ).join('') || '<tr><td colspan="5" style="color:#999;text-align:center;">データなし</td></tr>';
+  }
+
+  // Owner PM top 10
+  const ownerPm = [...cur.byOwner].sort((a, b) => b.pm - a.pm).slice(0, 10);
+  const tbodyOwnerPm = document.getElementById('pmbm-owner-pm-tbody');
+  if (tbodyOwnerPm) {
+    tbodyOwnerPm.innerHTML = ownerPm.map((o, i) =>
+      `<tr><td>${i + 1}</td><td>${o.name}</td><td class="text-right">${fmtYen(o.pm)}</td></tr>`
+    ).join('') || '<tr><td colspan="3" style="color:#999;text-align:center;">データなし</td></tr>';
+  }
+
+  // Owner BM top 10
+  const ownerBm = [...cur.byOwner].sort((a, b) => b.bm - a.bm).slice(0, 10);
+  const tbodyOwnerBm = document.getElementById('pmbm-owner-bm-tbody');
+  if (tbodyOwnerBm) {
+    tbodyOwnerBm.innerHTML = ownerBm.map((o, i) =>
+      `<tr><td>${i + 1}</td><td>${o.name}</td><td class="text-right">${fmtYen(o.bm)}</td></tr>`
+    ).join('') || '<tr><td colspan="3" style="color:#999;text-align:center;">データなし</td></tr>';
+  }
+
+  // Property PM top 10
+  const propPm = [...cur.byProp].sort((a, b) => b.pm - a.pm).slice(0, 10);
+  const tbodyPropPm = document.getElementById('pmbm-prop-pm-tbody');
+  if (tbodyPropPm) {
+    tbodyPropPm.innerHTML = propPm.map((p, i) =>
+      `<tr><td>${i + 1}</td><td>${p.name}</td><td>${p.ownerName}</td><td>${p.area}</td><td class="text-right">${p.royaltyPct}%</td><td class="text-right">${fmtYen(p.pm)}</td></tr>`
+    ).join('') || '<tr><td colspan="6" style="color:#999;text-align:center;">データなし</td></tr>';
+  }
+
+  // YoY PM up/down top 5
+  const pyPropMap = new Map(py.byProp.map(p => [p.name, p.pm]));
+  const propDeltas = cur.byProp
+    .map(p => ({ name: p.name, cur: p.pm, prev: pyPropMap.get(p.name) || 0 }))
+    .filter(p => p.cur > 0 || p.prev > 0)
+    .map(p => ({ ...p, diff: p.cur - p.prev }));
+  const ups = [...propDeltas].sort((a, b) => b.diff - a.diff).slice(0, 5);
+  const downs = [...propDeltas].sort((a, b) => a.diff - b.diff).slice(0, 5);
+  const fillDelta = (id, rows) => {
+    const tbody = document.getElementById(id);
+    if (!tbody) return;
+    tbody.innerHTML = rows.map(r => {
+      const cls = r.diff >= 0 ? 'positive' : 'negative';
+      const sign = r.diff >= 0 ? '+' : '';
+      return `<tr><td>${r.name}</td><td class="text-right">${fmtYen(r.prev)}</td><td class="text-right">${fmtYen(r.cur)}</td><td class="text-right ${cls}">${sign}${fmtYen(r.diff)}</td></tr>`;
+    }).join('') || '<tr><td colspan="4" style="color:#999;text-align:center;">データなし</td></tr>';
+  };
+  fillDelta('pmbm-prop-up-tbody', ups);
+  fillDelta('pmbm-prop-down-tbody', downs);
+
+  // Royalty bucket distribution
+  const buckets = [
+    { label: '0% (運営費のみ等)', min: 0, max: 0 },
+    { label: '1〜10%', min: 1, max: 10 },
+    { label: '11〜15%', min: 11, max: 15 },
+    { label: '16〜20%', min: 16, max: 20 },
+    { label: '21〜25%', min: 21, max: 25 },
+    { label: '26%以上', min: 26, max: 999 },
+  ];
+  const propPmMap = new Map(cur.byProp.map(p => [p.name, p.pm]));
+  const filteredProps = filterPropertiesByArea(area).filter(p => p.status === '稼働中');
+  const bucketAgg = buckets.map(b => ({ ...b, count: 0, pm: 0 }));
+  filteredProps.forEach(p => {
+    const r = p.royaltyPct || 0;
+    const b = bucketAgg.find(x => r >= x.min && r <= x.max);
+    if (!b) return;
+    b.count++;
+    b.pm += propPmMap.get(p.name) || 0;
+  });
+  const tbodyRoy = document.getElementById('pmbm-royalty-tbody');
+  if (tbodyRoy) {
+    tbodyRoy.innerHTML = bucketAgg.map(b =>
+      `<tr><td>${b.label}</td><td class="text-right">${b.count}件</td><td class="text-right">${fmtYen(b.pm)}</td></tr>`
+    ).join('');
+  }
+
+  // BM breakdown
+  setText('kpi-pmbm-clean-count', cur.cleaningCount + '件');
+  setText('kpi-pmbm-clean-avg', fmtYen(cur.avgCleaningUnit));
+  setText('kpi-pmbm-clean-total', fmtYen(cur.bmSales));
+}
+
+let _pmbmCharts = { monthly: null, rate: null, area: null };
+function initPmbmCharts() {
+  const area = currentFilters.pmbmArea;
+  Object.keys(_pmbmCharts).forEach(k => {
+    if (_pmbmCharts[k]) { try { _pmbmCharts[k].destroy(); } catch (e) {} _pmbmCharts[k] = null; }
+  });
+
+  // Build 7-month series (-3 to +3)
+  const now = new Date();
+  const labels = [];
+  const pmSeries = [];
+  const bmSeries = [];
+  const rateSeries = [];
+  for (let i = -3; i <= 3; i++) {
+    const d = new Date(now.getFullYear(), now.getMonth() + i, 1);
+    const ym = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+    labels.push((d.getMonth() + 1) + '月');
+    const det = computePmBmDetail([ym], area);
+    pmSeries.push(Math.round(det.pmSales));
+    bmSeries.push(Math.round(det.bmSales));
+    rateSeries.push(Math.round(det.pmRate * 10) / 10);
+  }
+
+  const monthlyCtx = document.getElementById('chartPmbmMonthly');
+  if (monthlyCtx) {
+    _pmbmCharts.monthly = new Chart(monthlyCtx.getContext('2d'), {
+      type: 'bar',
+      data: {
+        labels,
+        datasets: [
+          { label: 'PM売上', data: pmSeries, backgroundColor: CHART_COLORS.blue, borderRadius: 4 },
+          { label: 'BM売上', data: bmSeries, backgroundColor: CHART_COLORS.green, borderRadius: 4 },
+        ],
+      },
+      options: {
+        responsive: true,
+        plugins: { legend: { position: 'top' }, tooltip: { callbacks: { label: (c) => `${c.dataset.label}: ${fmtYen(c.parsed.y)}` } } },
+        scales: { y: { beginAtZero: true, ticks: { callback: (v) => fmtYen(v) } } },
+      },
+    });
+  }
+
+  const rateCtx = document.getElementById('chartPmbmRate');
+  if (rateCtx) {
+    _pmbmCharts.rate = new Chart(rateCtx.getContext('2d'), {
+      type: 'line',
+      data: { labels, datasets: [{ label: 'PM率', data: rateSeries, borderColor: CHART_COLORS.purple, backgroundColor: 'rgba(155,89,182,0.1)', fill: true, tension: 0.3 }] },
+      options: {
+        responsive: true,
+        plugins: { legend: { display: false }, tooltip: { callbacks: { label: (c) => `PM率: ${c.parsed.y}%` } } },
+        scales: { y: { beginAtZero: true, ticks: { callback: (v) => v + '%' } } },
+      },
+    });
+  }
+
+  // Area breakdown (current period)
+  const months = getSelectedMonths('pmbm');
+  const cur = computePmBmDetail(months, area);
+  const areaSorted = [...cur.byArea].sort((a, b) => (b.pm + b.bm) - (a.pm + a.bm));
+  const areaCtx = document.getElementById('chartPmbmArea');
+  if (areaCtx) {
+    _pmbmCharts.area = new Chart(areaCtx.getContext('2d'), {
+      type: 'bar',
+      data: {
+        labels: areaSorted.map(a => a.area),
+        datasets: [
+          { label: 'PM', data: areaSorted.map(a => Math.round(a.pm)), backgroundColor: CHART_COLORS.blue },
+          { label: 'BM', data: areaSorted.map(a => Math.round(a.bm)), backgroundColor: CHART_COLORS.green },
+        ],
+      },
+      options: {
+        responsive: true,
+        plugins: { legend: { position: 'top' }, tooltip: { callbacks: { label: (c) => `${c.dataset.label}: ${fmtYen(c.parsed.y)}` } } },
+        scales: { x: { stacked: true }, y: { stacked: true, beginAtZero: true, ticks: { callback: (v) => fmtYen(v) } } },
+      },
+    });
+  }
+}
+
+// ============================================================
 // Tab 7: 新法チェック
 // ============================================================
 function getCurrentFiscalYear() {
@@ -3522,7 +3805,7 @@ function initReviewCharts() {
         }]
       },
       options: {
-        responsive: true, maintainAspectRatio: false,
+        responsive: true,
         scales: { y: { min: 1, max: 5 } },
         plugins: { legend: { display: false } }
       }
@@ -3543,7 +3826,7 @@ function initReviewCharts() {
         ]
       },
       options: {
-        responsive: true, maintainAspectRatio: false,
+        responsive: true,
         scales: { x: { stacked: true }, y: { stacked: true } }
       }
     });
@@ -3572,7 +3855,7 @@ function initReviewCharts() {
         }]
       },
       options: {
-        responsive: true, maintainAspectRatio: false,
+        responsive: true,
         scales: { r: { min: 0, max: 5, ticks: { stepSize: 1 } } },
         plugins: { legend: { display: false } }
       }

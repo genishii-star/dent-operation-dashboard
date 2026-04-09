@@ -75,6 +75,7 @@
   <button class="tab-btn" onclick="switchTab('review')">レビュー</button>
   <button class="tab-btn" onclick="switchTab('watchlist')">要チェック</button>
   <button class="tab-btn" onclick="switchTab('shinpou')">新法チェック</button>
+  <button class="tab-btn" onclick="switchTab('pmbm')">PM/BM分析</button>
 </nav>
 
 <div class="error-banner" id="error-banner"></div>
@@ -82,6 +83,134 @@
 <div id="app-content">
 
 <!-- ==================== Tab 1: TOP ==================== -->
+<!-- ==================== Tab: PM/BM分析 ==================== -->
+<div id="tab-pmbm" class="tab-content">
+  <div class="container">
+    <div class="filter-bar">
+      <label>期間</label>
+      <div class="filter-pills" id="pmbm-period-filter">
+        <span class="pill active" data-period="thisMonth" onclick="setPeriodFilter(this,'pmbm')">今月</span>
+        <span class="pill" data-period="lastMonth" onclick="setPeriodFilter(this,'pmbm')">前月</span>
+        <span class="pill" data-period="last3Months" onclick="setPeriodFilter(this,'pmbm')">直近3ヶ月</span>
+      </div>
+      <label>エリア</label>
+      <div class="filter-pills" id="pmbm-area-filter">
+        <span class="pill active" data-area="全体" onclick="setAreaFilter(this,'pmbm')">全体</span>
+        <span class="pill" data-area="大阪" onclick="setAreaFilter(this,'pmbm')">大阪</span>
+        <span class="pill" data-area="京都" onclick="setAreaFilter(this,'pmbm')">京都</span>
+        <span class="pill" data-area="東京" onclick="setAreaFilter(this,'pmbm')">東京</span>
+        <span class="pill" data-area="その他" onclick="setAreaFilter(this,'pmbm')">その他</span>
+      </div>
+    </div>
+
+    <div class="kpi-grid">
+      <div class="kpi-card"><div class="label">PM売上</div><div class="value" id="kpi-pmbm-pm">-</div><div class="sub" id="kpi-pmbm-pm-vs">-</div></div>
+      <div class="kpi-card"><div class="label">BM売上</div><div class="value" id="kpi-pmbm-bm">-</div><div class="sub" id="kpi-pmbm-bm-vs">-</div></div>
+      <div class="kpi-card"><div class="label">PM+BM 合計</div><div class="value" id="kpi-pmbm-total">-</div><div class="sub" id="kpi-pmbm-total-vs">-</div></div>
+      <div class="kpi-card"><div class="label">PM率 (PM ÷ 総売上)</div><div class="value" id="kpi-pmbm-rate">-</div><div class="sub" id="kpi-pmbm-rate-vs">-</div></div>
+    </div>
+
+    <div class="card">
+      <h2>PM / BM 月次推移 (過去3ヶ月 + 今月 + 未来3ヶ月)</h2>
+      <canvas id="chartPmbmMonthly" height="100"></canvas>
+    </div>
+
+    <div class="chart-grid">
+      <div class="card">
+        <h2>PM率 推移</h2>
+        <canvas id="chartPmbmRate" height="180"></canvas>
+      </div>
+      <div class="card">
+        <h2>エリア別 PM/BM 内訳</h2>
+        <canvas id="chartPmbmArea" height="180"></canvas>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>PM+BM 合算 オーナー上位10</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>順位</th><th>オーナー</th><th class="text-right">PM</th><th class="text-right">BM</th><th class="text-right">合計</th></tr></thead>
+          <tbody id="pmbm-owner-combined-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="chart-grid">
+      <div class="card">
+        <h2>PM売上 オーナー上位10</h2>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>順位</th><th>オーナー</th><th class="text-right">PM売上</th></tr></thead>
+            <tbody id="pmbm-owner-pm-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="card">
+        <h2>BM売上 オーナー上位10</h2>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>順位</th><th>オーナー</th><th class="text-right">BM売上</th></tr></thead>
+            <tbody id="pmbm-owner-bm-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>PM売上 物件上位10</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>順位</th><th>物件</th><th>オーナー</th><th>エリア</th><th class="text-right">ロイヤリティ</th><th class="text-right">PM売上</th></tr></thead>
+          <tbody id="pmbm-prop-pm-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="chart-grid">
+      <div class="card">
+        <h2>YoY PM増加 物件 TOP5</h2>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>物件</th><th class="text-right">前年</th><th class="text-right">当期</th><th class="text-right">差分</th></tr></thead>
+            <tbody id="pmbm-prop-up-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="card">
+        <h2>YoY PM減少 物件 TOP5</h2>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>物件</th><th class="text-right">前年</th><th class="text-right">当期</th><th class="text-right">差分</th></tr></thead>
+            <tbody id="pmbm-prop-down-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <div class="chart-grid">
+      <div class="card">
+        <h2>ロイヤリティ% 別分布</h2>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>ロイヤリティ帯</th><th class="text-right">物件数</th><th class="text-right">PM売上</th></tr></thead>
+            <tbody id="pmbm-royalty-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="card">
+        <h2>BM内訳</h2>
+        <div class="kpi-grid-3" style="margin-bottom:0;">
+          <div class="kpi-card"><div class="label">清掃回数 (チェックアウト件数)</div><div class="value" id="kpi-pmbm-clean-count">-</div></div>
+          <div class="kpi-card"><div class="label">平均清掃単価</div><div class="value" id="kpi-pmbm-clean-avg">-</div></div>
+          <div class="kpi-card"><div class="label">BM合計</div><div class="value" id="kpi-pmbm-clean-total">-</div></div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
 <div id="tab-daily" class="tab-content active">
   <div class="container">
     <div class="filter-bar">
