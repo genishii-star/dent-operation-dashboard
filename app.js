@@ -1736,6 +1736,20 @@ function renderPropertyDetail(container, propertyName, prefix) {
       <div class="card"><h2>ゲスト国籍別</h2><canvas id="${prefix}ChartNationality"></canvas></div>
       <div class="card" id="${prefix}RecentBookings"></div>
     </div>
+    <div class="card" id="${prefix}CalendarCard">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
+        <h2 style="margin-bottom:0;">宿泊単価カレンダー（今年 vs 前年）</h2>
+        <div style="display:flex;align-items:center;gap:8px;">
+          <button onclick="shiftPropertyCalendar('${prefix}','${propertyName}',-1)" style="border:1px solid #ddd;background:white;border-radius:6px;padding:4px 10px;cursor:pointer;font-size:13px;">◀</button>
+          <span id="${prefix}CalMonth" style="font-size:14px;font-weight:600;min-width:80px;text-align:center;"></span>
+          <button onclick="shiftPropertyCalendar('${prefix}','${propertyName}',1)" style="border:1px solid #ddd;background:white;border-radius:6px;padding:4px 10px;cursor:pointer;font-size:13px;">▶</button>
+        </div>
+      </div>
+      <div id="${prefix}CalGrid"></div>
+      <div style="display:flex;gap:16px;margin-top:12px;font-size:11px;color:#999;">
+        <span>🟦 今年</span><span>🟧 前年</span><span style="color:#34c759;">▲ 前年比UP</span><span style="color:#ff3b30;">▼ 前年比DOWN</span>
+      </div>
+    </div>
     <div class="card"><h2>予約一覧</h2><div class="table-wrap"><table>
       <thead><tr><th>予約日</th><th>予約サイト</th><th>ゲスト名</th><th>チェックイン</th><th>チェックアウト</th><th>泊数</th><th>販売金額</th><th>状態</th></tr></thead>
       <tbody>${resvRows}</tbody>
@@ -1932,7 +1946,101 @@ function renderPropertyDetail(container, propertyName, prefix) {
       `;
     }
 
+    renderPropertyCalendar(prefix, propertyName, 0);
   }, 100);
+}
+
+// 物件カレンダー: 日別宿泊単価（今年 vs 前年）
+const _calendarState = {};
+
+function renderPropertyCalendar(prefix, propertyName, offsetMonth) {
+  if (offsetMonth === undefined) offsetMonth = 0;
+  _calendarState[prefix] = { propertyName, offsetMonth };
+
+  const now = new Date();
+  const target = new Date(now.getFullYear(), now.getMonth() + offsetMonth, 1);
+  const year = target.getFullYear();
+  const month = target.getMonth() + 1;
+  const ym = `${year}-${String(month).padStart(2, '0')}`;
+  const prevYm = `${year - 1}-${String(month).padStart(2, '0')}`;
+
+  // ヘッダー更新
+  const labelEl = document.getElementById(prefix + 'CalMonth');
+  if (labelEl) labelEl.textContent = `${year}年${month}月`;
+
+  // 日次データから日別単価を集計
+  function getDailyAdr(propName, targetYm) {
+    const dailyMap = {};
+    rawDailyData.forEach(d => {
+      const date = normalizeDate(d['日付']);
+      const code = generatePropCode(d['物件名'] || '', d['ルーム番号'] || '');
+      const status = d['状態'] || '';
+      if (code !== propName || getYearMonth(date) !== targetYm || status === 'システムキャンセル') return;
+      const day = parseInt(date.split('-')[2], 10);
+      const sales = parseNum(d['売上合計']);
+      if (!dailyMap[day]) dailyMap[day] = { sales: 0, count: 0 };
+      dailyMap[day].sales += sales;
+      dailyMap[day].count += 1;
+    });
+    // ADR = 売上 / 予約数（同日複数部屋の場合は平均）
+    const result = {};
+    Object.keys(dailyMap).forEach(day => {
+      const e = dailyMap[day];
+      result[day] = e.count > 0 ? Math.round(e.sales / e.count) : 0;
+    });
+    return result;
+  }
+
+  const thisYearAdr = getDailyAdr(propertyName, ym);
+  const lastYearAdr = getDailyAdr(propertyName, prevYm);
+
+  const daysInMonth = new Date(year, month, 0).getDate();
+  const firstDow = new Date(year, month - 1, 1).getDay(); // 0=Sun
+
+  const dowLabels = ['日', '月', '火', '水', '木', '金', '土'];
+  let html = '<div style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px;font-size:12px;">';
+  // 曜日ヘッダー
+  dowLabels.forEach((d, i) => {
+    const color = i === 0 ? '#ff3b30' : i === 6 ? '#007aff' : '#666';
+    html += `<div style="text-align:center;font-weight:600;color:${color};padding:4px 0;">${d}</div>`;
+  });
+  // 空セル
+  for (let i = 0; i < firstDow; i++) html += '<div></div>';
+  // 日セル
+  for (let day = 1; day <= daysInMonth; day++) {
+    const thisAdr = thisYearAdr[day] || 0;
+    const prevAdr = lastYearAdr[day] || 0;
+    const dow = (firstDow + day - 1) % 7;
+    const dayColor = dow === 0 ? '#ff3b30' : dow === 6 ? '#007aff' : '#333';
+
+    let diffHtml = '';
+    if (thisAdr > 0 && prevAdr > 0) {
+      const diff = thisAdr - prevAdr;
+      const pct = ((diff / prevAdr) * 100).toFixed(0);
+      const color = diff > 0 ? '#34c759' : diff < 0 ? '#ff3b30' : '#999';
+      const arrow = diff > 0 ? '▲' : diff < 0 ? '▼' : '→';
+      diffHtml = `<div style="font-size:9px;color:${color};font-weight:600;">${arrow}${Math.abs(pct)}%</div>`;
+    } else if (thisAdr > 0 && prevAdr === 0) {
+      diffHtml = `<div style="font-size:9px;color:#999;">前年なし</div>`;
+    }
+
+    const bgColor = thisAdr > 0 ? 'rgba(74,144,217,0.06)' : '#fafafa';
+    html += `<div style="background:${bgColor};border-radius:6px;padding:4px 2px;text-align:center;min-height:60px;">
+      <div style="font-weight:600;color:${dayColor};margin-bottom:2px;">${day}</div>
+      ${thisAdr > 0 ? `<div style="font-size:10px;color:#007aff;font-weight:600;">¥${thisAdr.toLocaleString()}</div>` : `<div style="font-size:10px;color:#ccc;">-</div>`}
+      ${prevAdr > 0 ? `<div style="font-size:9px;color:#ff9500;">¥${prevAdr.toLocaleString()}</div>` : ''}
+      ${diffHtml}
+    </div>`;
+  }
+  html += '</div>';
+
+  const gridEl = document.getElementById(prefix + 'CalGrid');
+  if (gridEl) gridEl.innerHTML = html;
+}
+
+function shiftPropertyCalendar(prefix, propertyName, delta) {
+  const state = _calendarState[prefix] || { propertyName, offsetMonth: 0 };
+  renderPropertyCalendar(prefix, propertyName, state.offsetMonth + delta);
 }
 
 // ============================================================
