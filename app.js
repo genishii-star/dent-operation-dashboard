@@ -3012,7 +3012,7 @@ async function sendFeedback() {
   };
 
   try {
-    await fetch(FEEDBACK_WEBHOOK, { method: 'POST', mode: 'no-cors', body: JSON.stringify(payload) });
+    await fetch(FEEDBACK_WEBHOOK, { method: 'POST', mode: 'no-cors', body: 'payload=' + encodeURIComponent(JSON.stringify(payload)) });
     document.getElementById('fb-result').innerHTML = '<div class="feedback-sent">送信しました</div>';
     document.getElementById('fb-message').value = '';
     setTimeout(closeFeedback, 1500);
