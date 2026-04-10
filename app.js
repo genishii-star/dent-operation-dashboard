@@ -1968,9 +1968,18 @@ function renderPropertyCalendar(prefix, propertyName, offsetMonth) {
   const labelEl = document.getElementById(prefix + 'CalMonth');
   if (labelEl) labelEl.textContent = `${year}年${month}月`;
 
-  // 日次データから日別単価を集計
+  // 日次データ + 予約データから日別単価を集計
   function getDailyAdr(propName, targetYm) {
+    const prop = findPropByName(propName);
+    const daysInM = getDaysInMonth(targetYm);
+    const monthStart = targetYm + '-01';
+    const monthEnd = targetYm + '-' + String(daysInM).padStart(2, '0');
+    const today = new Date().toISOString().split('T')[0];
+
     const dailyMap = {};
+    const coveredDates = new Set();
+
+    // 1) 日次データ（実績）
     rawDailyData.forEach(d => {
       const date = normalizeDate(d['日付']);
       const code = generatePropCode(d['物件名'] || '', d['ルーム番号'] || '');
@@ -1981,8 +1990,30 @@ function renderPropertyCalendar(prefix, propertyName, offsetMonth) {
       if (!dailyMap[day]) dailyMap[day] = { sales: 0, count: 0 };
       dailyMap[day].sales += sales;
       dailyMap[day].count += 1;
+      coveredDates.add(date);
     });
-    // ADR = 売上 / 予約数（同日複数部屋の場合は平均）
+
+    // 2) 予約データから未来分を補完（日次データにない日のみ）
+    const propResv = reservations.filter(r => {
+      if (r.status === 'キャンセル' || r.status === 'システムキャンセル') return false;
+      return r.propCode === propName || r.property === propName || (prop && r.property === prop.propName);
+    });
+    propResv.forEach(r => {
+      if (!r.checkin || !r.checkout || !r.nights || r.nights <= 0) return;
+      const dailyRate = Math.round((r.sales || 0) / r.nights);
+      const ci = new Date(r.checkin);
+      const co = new Date(r.checkout);
+      for (let d = new Date(ci); d < co; d.setDate(d.getDate() + 1)) {
+        const ds = d.toISOString().split('T')[0];
+        if (ds < monthStart || ds > monthEnd || coveredDates.has(ds)) continue;
+        const day = d.getDate();
+        if (!dailyMap[day]) dailyMap[day] = { sales: 0, count: 0 };
+        dailyMap[day].sales += dailyRate;
+        dailyMap[day].count += 1;
+        coveredDates.add(ds);
+      }
+    });
+
     const result = {};
     Object.keys(dailyMap).forEach(day => {
       const e = dailyMap[day];
