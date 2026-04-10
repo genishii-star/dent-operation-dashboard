@@ -495,6 +495,9 @@ function getSelectedMonths(tabId) {
   } else if (period === 'next2Month') {
     const d = new Date(now.getFullYear(), now.getMonth() + 2, 1);
     return [d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0')];
+  } else if (period === 'lastYear') {
+    const d = new Date(now.getFullYear() - 1, now.getMonth(), 1);
+    return [d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0')];
   }
   return [thisYm];
 }
