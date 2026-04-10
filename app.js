@@ -1253,6 +1253,23 @@ function renderOwnerTab() {
     };
   });
 
+  // 目標未設定オーナーアラート
+  const noTargetAlert = document.getElementById('owner-no-target-alert');
+  if (noTargetAlert) {
+    const noTargetOwners = ownerStats.filter(o => o.target === 0 && o.propCount > 0);
+    if (noTargetOwners.length > 0) {
+      const items = noTargetOwners.map(o => `<li>${o.name} <span style="color:#999;">(${o.propCount}物件)</span></li>`).join('');
+      const sheetUrl = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/edit#gid=${SHEET_GID_PROPERTY_MASTER}`;
+      noTargetAlert.innerHTML = `<div class="alert-orphan">
+        <div class="alert-title">⚠ 目標が未設定のオーナーが ${noTargetOwners.length} 名います</div>
+        物件マスタで目標売上（閑散期・通常期・繁忙期）を設定してください。<a href="${sheetUrl}" target="_blank" rel="noopener" style="color:#ff3b30;font-weight:600;text-decoration:underline;">物件マスタを開く ↗</a>
+        <ul>${items}</ul>
+      </div>`;
+    } else {
+      noTargetAlert.innerHTML = '';
+    }
+  }
+
   // KPIs
   document.getElementById('kpi-owner-count').textContent = filteredOwners.length + '名';
   const avgRate = ownerStats.length > 0 ? ownerStats.reduce((s, o) => s + o.rate, 0) / ownerStats.length : 0;
