@@ -1291,7 +1291,7 @@ function renderOwnerTab() {
       return `<div class="clickable" onclick="toggleOwnerDrill('${o.id}', null)" style="display:flex;align-items:center;gap:12px;padding:8px 0;border-bottom:1px solid #f0f0f0;">
         <div style="width:140px;font-size:13px;font-weight:600;flex-shrink:0;">${o.name}</div>
         <div style="width:50px;font-size:11px;color:#999;flex-shrink:0;">${o.propCount}物件</div>
-        <div style="flex:1;min-width:120px;"><div class="progress-bar-bg"><div class="progress-bar-fill ${barClass}" style="width:${barWidth}%"></div></div></div>
+        <div style="flex:1;min-width:120px;"><div class="progress-bar-bg">${barWidth > 0 ? `<div class="progress-bar-fill ${barClass}" style="width:${barWidth}%"></div>` : ''}</div></div>
         <div class="${rateClass}" style="width:60px;text-align:right;font-size:13px;font-weight:600;flex-shrink:0;">${fmtPct(o.rate)}</div>
         <div style="width:200px;text-align:right;font-size:11px;color:#666;flex-shrink:0;">${fmtYen(o.actual)} / ${fmtYen(o.target)}</div>
       </div>`;
