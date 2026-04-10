@@ -2979,12 +2979,20 @@ function initRevenueCharts() {
 // Init
 // ============================================================
 // ── Feedback ──
-const FEEDBACK_WEBHOOK = 'https://hooks.slack.com/services/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';
+function getFeedbackWebhook() {
+  return localStorage.getItem('feedbackWebhookUrl') || '';
+}
+function saveFeedbackWebhook(url) {
+  localStorage.setItem('feedbackWebhookUrl', url);
+}
 
 function openFeedback() {
   document.getElementById('feedback-modal').classList.add('show');
   document.getElementById('fb-result').innerHTML = '';
   document.getElementById('fb-send').disabled = false;
+  // Webhook URL設定欄の初期値
+  const webhookInput = document.getElementById('fb-webhook');
+  if (webhookInput) webhookInput.value = getFeedbackWebhook();
 }
 function closeFeedback() {
   document.getElementById('feedback-modal').classList.remove('show');
@@ -3012,7 +3020,10 @@ async function sendFeedback() {
   };
 
   try {
-    await fetch(FEEDBACK_WEBHOOK, { method: 'POST', mode: 'no-cors', body: 'payload=' + encodeURIComponent(JSON.stringify(payload)) });
+    const webhookUrl = document.getElementById('fb-webhook').value.trim();
+    if (webhookUrl) saveFeedbackWebhook(webhookUrl);
+    if (!webhookUrl) { alert('Webhook URLを設定してください'); btn.disabled = false; btn.textContent = '送信'; return; }
+    await fetch(webhookUrl, { method: 'POST', mode: 'no-cors', body: 'payload=' + encodeURIComponent(JSON.stringify(payload)) });
     document.getElementById('fb-result').innerHTML = '<div class="feedback-sent">送信しました</div>';
     document.getElementById('fb-message').value = '';
     setTimeout(closeFeedback, 1500);
