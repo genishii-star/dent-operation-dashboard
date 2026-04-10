@@ -1290,7 +1290,7 @@ function renderOwnerTab() {
       const rateClass = o.rate >= 100 ? 'positive' : o.rate >= 70 ? '' : 'negative';
       return `<div class="clickable" onclick="toggleOwnerDrill('${o.id}', null)" style="display:flex;align-items:center;gap:12px;padding:8px 0;border-bottom:1px solid #f0f0f0;">
         <div style="width:140px;font-size:13px;font-weight:600;flex-shrink:0;">${o.name}</div>
-        <div style="width:50px;font-size:11px;color:#999;flex-shrink:0;">${o.propCount}件</div>
+        <div style="width:50px;font-size:11px;color:#999;flex-shrink:0;">${o.propCount}物件</div>
         <div style="flex:1;min-width:120px;"><div class="progress-bar-bg"><div class="progress-bar-fill ${barClass}" style="width:${barWidth}%"></div></div></div>
         <div class="${rateClass}" style="width:60px;text-align:right;font-size:13px;font-weight:600;flex-shrink:0;">${fmtPct(o.rate)}</div>
         <div style="width:200px;text-align:right;font-size:11px;color:#666;flex-shrink:0;">${fmtYen(o.actual)} / ${fmtYen(o.target)}</div>
@@ -1303,7 +1303,7 @@ function renderOwnerTab() {
   tbody.innerHTML = ownerStats.map(o => {
     const rateClass = o.rate >= 100 ? 'positive' : o.rate >= 70 ? '' : 'negative';
     return `<tr class="clickable" onclick="toggleOwnerDrill('${o.id}', this)">
-      <td>${o.name}</td><td>${o.propCount}件</td><td>${o.royalty}</td>
+      <td>${o.name}</td><td>${o.propCount}物件</td><td>${o.royalty}</td>
       <td>${fmtYen(o.target)}</td><td>${fmtYen(o.actual)}</td>
       <td class="${rateClass}">${fmtPct(o.rate)}</td>
       <td>${fmtPct(o.avgOcc)}</td><td>${fmtYenFull(Math.round(o.avgAdr))}</td>
@@ -2654,23 +2654,23 @@ function initReservationCharts() {
         datasets: [
           {
             type: 'bar',
-            label: '予約数',
-            data: mData,
-            backgroundColor: CHART_COLORS.orange + 'CC',
-            hoverBackgroundColor: CHART_COLORS.orange,
-            yAxisID: 'y',
+            label: 'GMV',
+            data: mSales,
+            backgroundColor: CHART_COLORS.blue + 'CC',
+            hoverBackgroundColor: CHART_COLORS.blue,
+            yAxisID: 'y1',
             order: 2,
           },
           {
             type: 'line',
-            label: 'GMV',
-            data: mSales,
-            borderColor: CHART_COLORS.blue,
-            backgroundColor: 'rgba(74,144,217,0.08)',
+            label: '予約数',
+            data: mData,
+            borderColor: CHART_COLORS.orange,
+            backgroundColor: 'rgba(255,159,64,0.08)',
             tension: 0.4,
-            yAxisID: 'y1',
+            yAxisID: 'y',
             order: 1,
-            pointBackgroundColor: CHART_COLORS.blue,
+            pointBackgroundColor: CHART_COLORS.orange,
           },
         ]
       },
