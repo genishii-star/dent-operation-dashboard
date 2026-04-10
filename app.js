@@ -2979,7 +2979,7 @@ function initRevenueCharts() {
 // Init
 // ============================================================
 // ── Feedback ──
-const FEEDBACK_WEBHOOK = 'https://hooks.slack.com/services/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';
+const FEEDBACK_WEBHOOK = 'https://hooks.slack.com/services/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';
 
 function openFeedback() {
   document.getElementById('feedback-modal').classList.add('show');
