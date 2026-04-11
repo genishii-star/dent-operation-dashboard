@@ -3225,20 +3225,13 @@ function initRevenueCharts() {
 // Init
 // ============================================================
 // ── Feedback ──
-function getFeedbackWebhook() {
-  return localStorage.getItem('feedbackWebhookUrl') || '';
-}
-function saveFeedbackWebhook(url) {
-  localStorage.setItem('feedbackWebhookUrl', url);
-}
+// GAS Feedback Proxy URL（デプロイ後にここに設定）
+const GAS_FEEDBACK_URL = 'https://script.google.com/macros/s/AKfycbwdA4HjP05m1Y0IQ7lZEVMWfVuJw3kbDlTjUqwVsTBv5aZOa-ya2VLsXtizcd2XDLZ8_w/exec';
 
 function openFeedback() {
   document.getElementById('feedback-modal').classList.add('show');
   document.getElementById('fb-result').innerHTML = '';
   document.getElementById('fb-send').disabled = false;
-  // Webhook URL設定欄の初期値
-  const webhookInput = document.getElementById('fb-webhook');
-  if (webhookInput) webhookInput.value = getFeedbackWebhook();
 }
 function closeFeedback() {
   document.getElementById('feedback-modal').classList.remove('show');
@@ -3266,13 +3259,20 @@ async function sendFeedback() {
   };
 
   try {
-    const webhookUrl = document.getElementById('fb-webhook').value.trim();
-    if (webhookUrl) saveFeedbackWebhook(webhookUrl);
-    if (!webhookUrl) { alert('Webhook URLを設定してください'); btn.disabled = false; btn.textContent = '送信'; return; }
-    await fetch(webhookUrl, { method: 'POST', mode: 'no-cors', body: 'payload=' + encodeURIComponent(JSON.stringify(payload)) });
-    document.getElementById('fb-result').innerHTML = '<div class="feedback-sent">送信しました</div>';
-    document.getElementById('fb-message').value = '';
-    setTimeout(closeFeedback, 1500);
+    if (!GAS_FEEDBACK_URL) { alert('フィードバックURLが未設定です'); btn.disabled = false; btn.textContent = '送信'; return; }
+    const resp = await fetch(GAS_FEEDBACK_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain' },
+      body: JSON.stringify(payload),
+    });
+    const result = await resp.json();
+    if (result.success) {
+      document.getElementById('fb-result').innerHTML = '<div class="feedback-sent">送信しました ✓</div>';
+      document.getElementById('fb-message').value = '';
+      setTimeout(closeFeedback, 1500);
+    } else {
+      document.getElementById('fb-result').innerHTML = '<div style="color:#ff3b30;font-size:13px;text-align:center;">送信失敗: ' + (result.error || '') + '</div>';
+    }
   } catch (e) {
     document.getElementById('fb-result').innerHTML = '<div style="color:#ff3b30;font-size:13px;text-align:center;">送信失敗</div>';
   }
