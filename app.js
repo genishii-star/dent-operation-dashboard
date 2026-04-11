@@ -3242,6 +3242,79 @@ function initRevenueCharts() {
       options: { responsive: true, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, ticks: { callback: v => '¥' + v.toLocaleString() } } } }
     });
   }
+
+  // 予約Window別 ADR & 件数
+  destroyChart('windowAdr');
+  destroyChart('windowCount');
+  const extra = getExtraFilters('revenue');
+  const extraFilteredNames = new Set(filterPropertiesByArea(area, extra).map(p => p.name));
+  const windowResv = reservations.filter(r => {
+    if (r.status === 'キャンセル' || r.status === 'システムキャンセル') return false;
+    if (!r.date || !r.checkin || !r.nights || r.nights <= 0) return false;
+    if (!monthSet.has(getYearMonth(r.checkin))) return false;
+    const prop = findPropByReservation(r);
+    if (!prop) return false;
+    if (!extraFilteredNames.has(prop.name)) return false;
+    if (excludeKpi && prop.excludeKpi) return false;
+    return true;
+  });
+
+  const windowBuckets = [
+    { label: '0〜3日', min: 0, max: 3 },
+    { label: '4〜7日', min: 4, max: 7 },
+    { label: '8〜14日', min: 8, max: 14 },
+    { label: '15〜30日', min: 15, max: 30 },
+    { label: '31〜60日', min: 31, max: 60 },
+    { label: '61〜90日', min: 61, max: 90 },
+    { label: '91日〜', min: 91, max: Infinity },
+  ];
+  const bucketData = windowBuckets.map(() => ({ sales: 0, nights: 0, count: 0 }));
+  windowResv.forEach(r => {
+    const lead = Math.max(0, Math.floor((new Date(r.checkin) - new Date(r.date)) / 86400000));
+    const idx = windowBuckets.findIndex(b => lead >= b.min && lead <= b.max);
+    if (idx >= 0) {
+      bucketData[idx].sales += r.sales || 0;
+      bucketData[idx].nights += r.nights || 0;
+      bucketData[idx].count++;
+    }
+  });
+
+  const wLabels = windowBuckets.map(b => b.label);
+  const wAdr = bucketData.map(d => d.nights > 0 ? Math.round(d.sales / d.nights) : 0);
+  const wCount = bucketData.map(d => d.count);
+
+  const ctxWA = document.getElementById('chartWindowAdr');
+  if (ctxWA) {
+    allCharts['windowAdr'] = new Chart(ctxWA, {
+      type: 'bar',
+      data: { labels: wLabels, datasets: [
+        { type: 'bar', label: 'ADR', data: wAdr, backgroundColor: PALETTE.slice(0, wLabels.length).map(c => c + 'CC'), yAxisID: 'y' },
+        { type: 'line', label: '予約件数', data: wCount, borderColor: CHART_COLORS.orange, backgroundColor: 'transparent', yAxisID: 'y1', tension: 0.3, pointRadius: 4 },
+      ] },
+      options: { responsive: true, plugins: { legend: { display: true } }, scales: {
+        x: { grid: { display: false } },
+        y: { position: 'left', beginAtZero: true, title: { display: true, text: 'ADR (¥)', font: { size: 11 } }, ticks: { callback: v => '¥' + v.toLocaleString() } },
+        y1: { position: 'right', beginAtZero: true, grid: { drawOnChartArea: false }, title: { display: true, text: '予約件数', font: { size: 11 } } },
+      } }
+    });
+  }
+
+  const ctxWC = document.getElementById('chartWindowCount');
+  if (ctxWC) {
+    const avgSales = bucketData.map(d => d.count > 0 ? Math.round(d.sales / d.count) : 0);
+    allCharts['windowCount'] = new Chart(ctxWC, {
+      type: 'bar',
+      data: { labels: wLabels, datasets: [
+        { type: 'bar', label: '予約件数', data: wCount, backgroundColor: CHART_COLORS.blue + '99' },
+        { type: 'line', label: '平均売上/件', data: avgSales, borderColor: CHART_COLORS.orange, backgroundColor: 'transparent', yAxisID: 'y1', tension: 0.3, pointRadius: 4 },
+      ] },
+      options: { responsive: true, plugins: { legend: { display: true } }, scales: {
+        x: { grid: { display: false } },
+        y: { position: 'left', beginAtZero: true, title: { display: true, text: '予約件数', font: { size: 11 } } },
+        y1: { position: 'right', beginAtZero: true, grid: { drawOnChartArea: false }, title: { display: true, text: '平均売上 (¥)', font: { size: 11 } }, ticks: { callback: v => '¥' + (v/10000).toFixed(0) + '万' } },
+      } }
+    });
+  }
 }
 
 // ============================================================
