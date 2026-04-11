@@ -2614,6 +2614,8 @@ function getReservationPeriodInfo() {
     current: r => r.date && r.date >= cs && r.date < ce,
     previous: r => r.date && r.date >= ps && r.date < pe,
     vsLabel: range.label,
+    _start: range.start,
+    _end: range.end,
   };
 }
 
@@ -2638,60 +2640,96 @@ function renderReservationTab() {
   };
 
   const filtered = applySelectFilters(reservations).filter(periodInfo.current);
-  const prevFiltered = applySelectFilters(reservations).filter(periodInfo.previous);
 
-  // KPIs - 当期
-  const totalCount = filtered.length;
-  const cancelCount = filtered.filter(r => r.status === 'システムキャンセル').length;
-  const confirmedOnly = filtered.filter(r => r.status !== 'システムキャンセル');
-  const totalNights = confirmedOnly.reduce((s, r) => s + r.nights, 0);
-  const avgNights = confirmedOnly.length > 0 ? totalNights / confirmedOnly.length : 0;
-  const avgGuests = confirmedOnly.length > 0 ? confirmedOnly.reduce((s, r) => s + r.guestCount, 0) / confirmedOnly.length : 0;
-  const totalSales = confirmedOnly.reduce((s, r) => s + (r.sales || 0), 0);
-  const adr = totalNights > 0 ? totalSales / totalNights : 0;
-  const cancelSales = filtered.filter(r => r.status === 'システムキャンセル').reduce((s, r) => s + (r.sales || 0), 0);
-
-  // KPIs - 前期間
-  const prevTotalCount = prevFiltered.length;
-  const prevCancelCount = prevFiltered.filter(r => r.status === 'システムキャンセル').length;
-  const prevConfirmed = prevFiltered.filter(r => r.status !== 'システムキャンセル');
-  const prevTotalNights = prevConfirmed.reduce((s, r) => s + r.nights, 0);
-  const prevTotalSales = prevConfirmed.reduce((s, r) => s + (r.sales || 0), 0);
-  const prevAdr = prevTotalNights > 0 ? prevTotalSales / prevTotalNights : 0;
-  const prevCancelSales = prevFiltered.filter(r => r.status === 'システムキャンセル').reduce((s, r) => s + (r.sales || 0), 0);
-
-  document.getElementById('kpi-resv-count').textContent = totalCount + '件';
-  document.getElementById('kpi-resv-count-vs-cnt').textContent = `${periodInfo.vsLabel} ${fmtVsPct(totalCount, prevTotalCount)}`;
-  document.getElementById('kpi-resv-sales').textContent = fmtYenFull(totalSales);
-  document.getElementById('kpi-resv-count-vs').textContent = `${periodInfo.vsLabel} ${fmtVsPct(totalSales, prevTotalSales)}`;
-  document.getElementById('kpi-resv-adr').textContent = fmtYenFull(Math.round(adr));
-  document.getElementById('kpi-resv-adr-vs').textContent = `${periodInfo.vsLabel} ${fmtVsPct(adr, prevAdr)}`;
-  document.getElementById('kpi-resv-cancel').textContent = cancelCount + '件';
-  document.getElementById('kpi-resv-cancel-rate').textContent = totalCount > 0 ? 'キャンセル率 ' + fmtPct((cancelCount / totalCount) * 100) : '-';
-  document.getElementById('kpi-resv-cancel-sales').textContent = fmtYenFull(cancelSales);
-  document.getElementById('kpi-resv-cancel-vs').textContent = `${periodInfo.vsLabel} ${fmtVsPct(cancelSales, prevCancelSales)}`;
-  const prevAvgNights = prevConfirmed.length > 0 ? prevTotalNights / prevConfirmed.length : 0;
-  const prevAvgGuests = prevConfirmed.length > 0 ? prevConfirmed.reduce((s, r) => s + r.guestCount, 0) / prevConfirmed.length : 0;
-  document.getElementById('kpi-resv-nights').textContent = avgNights.toFixed(1) + '泊';
-  document.getElementById('kpi-resv-nights-vs').textContent = `${periodInfo.vsLabel} ${fmtVsPct(avgNights, prevAvgNights)}`;
-  document.getElementById('kpi-resv-guests').textContent = avgGuests.toFixed(1) + '名';
-  document.getElementById('kpi-resv-guests-vs').textContent = `${periodInfo.vsLabel} ${fmtVsPct(avgGuests, prevAvgGuests)}`;
-  const calcAvgWindow = (arr) => {
-    const valid = arr.filter(r => r.date && r.checkin && r.status !== 'システムキャンセル');
-    if (valid.length === 0) return null;
-    const total = valid.reduce((sum, r) => sum + Math.max(0, Math.floor((new Date(r.checkin) - new Date(r.date)) / 86400000)), 0);
-    return Math.round(total / valid.length);
+  // YoY / MoM / DoD comparison filters
+  const shiftDateFilter = (filterFn, shiftDays) => {
+    return r => {
+      const shifted = { ...r, date: r.date ? localDateStr(new Date(new Date(r.date).getTime() + shiftDays * 86400000)) : r.date };
+      return filterFn(shifted);
+    };
   };
-  const curWindow = calcAvgWindow(filtered);
-  const prevWindow = calcAvgWindow(prevFiltered);
-  document.getElementById('kpi-resv-window').textContent = curWindow !== null ? curWindow + '日' : '-';
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const buildYoyFilter = () => {
+    // Same period last year
+    const curStart = periodInfo._start;
+    const curEnd = periodInfo._end;
+    if (!curStart || !curEnd) return () => false;
+    const yoyStart = new Date(curStart); yoyStart.setFullYear(yoyStart.getFullYear() - 1);
+    const yoyEnd = new Date(curEnd); yoyEnd.setFullYear(yoyEnd.getFullYear() - 1);
+    const ys = localDateStr(yoyStart), ye = localDateStr(yoyEnd);
+    return r => r.date && r.date >= ys && r.date < ye;
+  };
+  const buildMomFilter = () => {
+    const curStart = periodInfo._start;
+    const curEnd = periodInfo._end;
+    if (!curStart || !curEnd) return () => false;
+    const momStart = new Date(curStart); momStart.setMonth(momStart.getMonth() - 1);
+    const momEnd = new Date(curEnd); momEnd.setMonth(momEnd.getMonth() - 1);
+    const ms = localDateStr(momStart), me = localDateStr(momEnd);
+    return r => r.date && r.date >= ms && r.date < me;
+  };
+  const buildDodFilter = () => {
+    const curStart = periodInfo._start;
+    const curEnd = periodInfo._end;
+    if (!curStart || !curEnd) return () => false;
+    const lenMs = curEnd - curStart;
+    const dodStart = new Date(curStart.getTime() - 86400000);
+    const dodEnd = new Date(dodStart.getTime() + lenMs);
+    const ds = localDateStr(dodStart), de = localDateStr(dodEnd);
+    return r => r.date && r.date >= ds && r.date < de;
+  };
+
+  const base = applySelectFilters(reservations);
+  const yoyFiltered = base.filter(buildYoyFilter());
+  const momFiltered = base.filter(buildMomFilter());
+  const dodFiltered = base.filter(buildDodFilter());
+
+  // KPI計算ヘルパー
+  const calcKpis = (arr) => {
+    const count = arr.length;
+    const cancel = arr.filter(r => r.status === 'システムキャンセル').length;
+    const confirmed = arr.filter(r => r.status !== 'システムキャンセル');
+    const nights = confirmed.reduce((s, r) => s + r.nights, 0);
+    const sales = confirmed.reduce((s, r) => s + (r.sales || 0), 0);
+    const cancelSales = arr.filter(r => r.status === 'システムキャンセル').reduce((s, r) => s + (r.sales || 0), 0);
+    const avgNights = confirmed.length > 0 ? nights / confirmed.length : 0;
+    const avgGuests = confirmed.length > 0 ? confirmed.reduce((s, r) => s + r.guestCount, 0) / confirmed.length : 0;
+    const adr = nights > 0 ? sales / nights : 0;
+    const validW = confirmed.filter(r => r.date && r.checkin);
+    const window = validW.length > 0 ? Math.round(validW.reduce((s, r) => s + Math.max(0, Math.floor((new Date(r.checkin) - new Date(r.date)) / 86400000)), 0) / validW.length) : null;
+    return { count, cancel, cancelSales, sales, adr, avgNights, avgGuests, window };
+  };
+
+  const cur = calcKpis(filtered);
+  const yoy = calcKpis(yoyFiltered);
+  const mom = calcKpis(momFiltered);
+  const dod = calcKpis(dodFiltered);
+
+  const fmtVs3 = (curVal, yoyVal, momVal, dodVal) => {
+    const fmt1 = (label, prev) => {
+      if (prev == null || prev === 0) return `${label} -`;
+      const pct = ((curVal - prev) / prev) * 100;
+      const sign = pct >= 0 ? '+' : '';
+      const cls = pct >= 0 ? 'positive' : 'negative';
+      return `<span class="${cls}">${label} ${sign}${pct.toFixed(1)}%</span>`;
+    };
+    return `${fmt1('YoY', yoyVal)} / ${fmt1('MoM', momVal)} / ${fmt1('DoD', dodVal)}`;
+  };
+
+  document.getElementById('kpi-resv-count').textContent = cur.count + '件';
+  document.getElementById('kpi-resv-count-vs-cnt').innerHTML = fmtVs3(cur.count, yoy.count, mom.count, dod.count);
+  document.getElementById('kpi-resv-sales').textContent = fmtYenFull(cur.sales);
+  document.getElementById('kpi-resv-count-vs').innerHTML = fmtVs3(cur.sales, yoy.sales, mom.sales, dod.sales);
+  document.getElementById('kpi-resv-adr').textContent = fmtYenFull(Math.round(cur.adr));
+  document.getElementById('kpi-resv-adr-vs').innerHTML = fmtVs3(cur.adr, yoy.adr, mom.adr, dod.adr);
+  document.getElementById('kpi-resv-nights').textContent = cur.avgNights.toFixed(1) + '泊';
+  document.getElementById('kpi-resv-nights-vs').innerHTML = fmtVs3(cur.avgNights, yoy.avgNights, mom.avgNights, dod.avgNights);
+  document.getElementById('kpi-resv-guests').textContent = cur.avgGuests.toFixed(1) + '名';
+  document.getElementById('kpi-resv-guests-vs').innerHTML = fmtVs3(cur.avgGuests, yoy.avgGuests, mom.avgGuests, dod.avgGuests);
+  document.getElementById('kpi-resv-window').textContent = cur.window !== null ? cur.window + '日' : '-';
   const windowVsEl = document.getElementById('kpi-resv-window-vs');
   if (windowVsEl) {
-    if (curWindow !== null && prevWindow !== null && prevWindow > 0) {
-      windowVsEl.textContent = `${periodInfo.vsLabel} ${fmtVsPct(curWindow, prevWindow)}`;
-    } else {
-      windowVsEl.textContent = `${periodInfo.vsLabel} -`;
-    }
+    windowVsEl.innerHTML = fmtVs3(cur.window || 0, yoy.window, mom.window, dod.window);
   }
 
   // Build watchlist lookup sets for badges
