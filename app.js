@@ -2672,14 +2672,34 @@ function renderReservationTab() {
   document.getElementById('kpi-resv-cancel-vs').textContent = `${periodInfo.vsLabel} ${fmtVsPct(cancelSales, prevCancelSales)}`;
   document.getElementById('kpi-resv-nights').textContent = avgNights.toFixed(1) + '泊';
   document.getElementById('kpi-resv-guests').textContent = avgGuests.toFixed(1) + '名';
+  const windowResv = confirmedOnly.filter(r => r.date && r.checkin);
+  if (windowResv.length > 0) {
+    const totalLead = windowResv.reduce((sum, r) => sum + Math.max(0, Math.floor((new Date(r.checkin) - new Date(r.date)) / 86400000)), 0);
+    document.getElementById('kpi-resv-window').textContent = Math.round(totalLead / windowResv.length) + '日';
+  } else {
+    document.getElementById('kpi-resv-window').textContent = '-';
+  }
+
+  // Build watchlist lookup sets for badges
+  const newPropNames = new Set(properties.filter(p => isNewProperty(p) && p.status === '稼働中' && !p.excludeKpi).map(p => p.name));
+  const watchPropNames = new Set();
+  properties.forEach(p => {
+    if (p.status !== '稼働中' || p.excludeKpi || isNewProperty(p)) return;
+    if (getWatchlistReasons(p).length > 0) watchPropNames.add(p.name);
+  });
 
   // Table（キャンセルは表示から除外）
   const tbody = document.getElementById('reservation-table');
   const displayResv = filtered.filter(r => r.status !== 'システムキャンセル' && r.status !== 'キャンセル').slice(0, 100);
   tbody.innerHTML = displayResv.map(r => {
     const statusBadge = r.status === '確認済み' ? 'badge-green' : r.status === 'システムキャンセル' ? 'badge-red' : 'badge-orange';
+    const prop = findPropByReservation(r);
+    const propName = prop ? prop.name : (r.propCode || r.property);
+    let propMarks = '';
+    if (prop && newPropNames.has(prop.name)) propMarks += ' <span class="badge-blue" style="font-size:10px;">🆕</span>';
+    if (prop && watchPropNames.has(prop.name)) propMarks += ' <span class="badge-orange" style="font-size:10px;">⚠️</span>';
     return `<tr>
-      <td>${(r.date || '').slice(0, 10)}</td><td>${r.channel}</td><td>${r.property}</td><td>${fmtYenFull(r.sales)}</td><td>${r.checkin}</td><td>${r.nights}泊</td><td>${r.guestCount}名</td><td>${r.checkout}</td><td>${r.guest}</td><td>${r.nationality}</td><td><span class="${statusBadge}">${r.status}</span></td><td>${fmtYenFull(r.received)}</td><td>${r.paid}</td><td>${r.id}</td>
+      <td>${(r.date || '').slice(0, 10)}</td><td>${r.channel}</td><td>${r.property}${propMarks}</td><td>${fmtYenFull(r.sales)}</td><td>${r.checkin}</td><td>${r.nights}泊</td><td>${r.guestCount}名</td><td>${r.checkout}</td><td>${r.guest}</td><td>${r.nationality}</td><td><span class="${statusBadge}">${r.status}</span></td><td>${fmtYenFull(r.received)}</td><td>${r.paid}</td><td>${r.id}</td>
     </tr>`;
   }).join('');
 }
