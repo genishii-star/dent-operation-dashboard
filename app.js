@@ -2670,14 +2670,28 @@ function renderReservationTab() {
   document.getElementById('kpi-resv-cancel-rate').textContent = totalCount > 0 ? 'キャンセル率 ' + fmtPct((cancelCount / totalCount) * 100) : '-';
   document.getElementById('kpi-resv-cancel-sales').textContent = fmtYenFull(cancelSales);
   document.getElementById('kpi-resv-cancel-vs').textContent = `${periodInfo.vsLabel} ${fmtVsPct(cancelSales, prevCancelSales)}`;
+  const prevAvgNights = prevConfirmed.length > 0 ? prevTotalNights / prevConfirmed.length : 0;
+  const prevAvgGuests = prevConfirmed.length > 0 ? prevConfirmed.reduce((s, r) => s + r.guestCount, 0) / prevConfirmed.length : 0;
   document.getElementById('kpi-resv-nights').textContent = avgNights.toFixed(1) + '泊';
+  document.getElementById('kpi-resv-nights-vs').textContent = `${periodInfo.vsLabel} ${fmtVsPct(avgNights, prevAvgNights)}`;
   document.getElementById('kpi-resv-guests').textContent = avgGuests.toFixed(1) + '名';
-  const windowResv = confirmedOnly.filter(r => r.date && r.checkin);
-  if (windowResv.length > 0) {
-    const totalLead = windowResv.reduce((sum, r) => sum + Math.max(0, Math.floor((new Date(r.checkin) - new Date(r.date)) / 86400000)), 0);
-    document.getElementById('kpi-resv-window').textContent = Math.round(totalLead / windowResv.length) + '日';
-  } else {
-    document.getElementById('kpi-resv-window').textContent = '-';
+  document.getElementById('kpi-resv-guests-vs').textContent = `${periodInfo.vsLabel} ${fmtVsPct(avgGuests, prevAvgGuests)}`;
+  const calcAvgWindow = (arr) => {
+    const valid = arr.filter(r => r.date && r.checkin && r.status !== 'システムキャンセル');
+    if (valid.length === 0) return null;
+    const total = valid.reduce((sum, r) => sum + Math.max(0, Math.floor((new Date(r.checkin) - new Date(r.date)) / 86400000)), 0);
+    return Math.round(total / valid.length);
+  };
+  const curWindow = calcAvgWindow(filtered);
+  const prevWindow = calcAvgWindow(prevFiltered);
+  document.getElementById('kpi-resv-window').textContent = curWindow !== null ? curWindow + '日' : '-';
+  const windowVsEl = document.getElementById('kpi-resv-window-vs');
+  if (windowVsEl) {
+    if (curWindow !== null && prevWindow !== null && prevWindow > 0) {
+      windowVsEl.textContent = `${periodInfo.vsLabel} ${fmtVsPct(curWindow, prevWindow)}`;
+    } else {
+      windowVsEl.textContent = `${periodInfo.vsLabel} -`;
+    }
   }
 
   // Build watchlist lookup sets for badges
