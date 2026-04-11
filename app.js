@@ -149,6 +149,12 @@ let currentFilters = {
   revenuePeriod: 'thisMonth',
   ownerProgressPeriod: 'thisMonth',
   propertyView: 'all',
+  propertyType: '全体',
+  propertyLayout: '全体',
+  propertySqm: '全体',
+  revenueType: '全体',
+  revenueLayout: '全体',
+  revenueSqm: '全体',
 };
 
 // ============================================================
@@ -308,6 +314,7 @@ function generatePropCode(propName, roomNum) {
 }
 
 function processData() {
+  invalidatePropStatsCache();
   // 物件名のマージ（旧名 → 新名）
   const PROPERTY_NAME_MERGE = {
     'HGK(旧)': 'HGK',
@@ -441,6 +448,9 @@ function processData() {
       licenseType: pm['許可種類'] || '',
       operationLimitDays: parseNum(pm['営業日数上限']) || 0,
       startDate: normalizeDate(pm['運用開始日'] || ''),
+      propType: pm['タイプ'] || '',
+      layout: pm['間取り'] || '',
+      sqm: parseNum(pm['平米数']) || 0,
     };
   }).filter(Boolean);
 
@@ -450,6 +460,27 @@ function processData() {
   properties.forEach(p => {
     window._propByName[p.name] = p;
     if (p.propName) window._propByPropName[p.propName] = p;
+  });
+
+  // Build daily data index by propCode+ym for fast lookup
+  window._dailyByPropYm = {};
+  rawDailyData.forEach(d => {
+    const date = normalizeDate(d['日付']);
+    const code = generatePropCode(d['物件名'] || '', d['ルーム番号'] || '');
+    const ym = getYearMonth(date);
+    const key = code + '|' + ym;
+    if (!window._dailyByPropYm[key]) window._dailyByPropYm[key] = [];
+    window._dailyByPropYm[key].push(d);
+  });
+
+  // Build reservation index by propCode for fast lookup
+  window._resvByProp = {};
+  reservations.forEach(r => {
+    const keys = new Set([r.propCode, r.property].filter(Boolean));
+    keys.forEach(k => {
+      if (!window._resvByProp[k]) window._resvByProp[k] = [];
+      window._resvByProp[k].push(r);
+    });
   });
 
   // Build owners array
@@ -584,13 +615,68 @@ function getTargetForProperty(prop, monthNum) {
   return prop.targetNormal;
 }
 
-function filterPropertiesByArea(area) {
-  if (!area || area === '全体') return properties;
-  return properties.filter(p => p.area === area);
+function filterPropertiesByArea(area, extraFilters) {
+  let result = (!area || area === '全体') ? properties : properties.filter(p => p.area === area);
+  if (extraFilters) {
+    if (extraFilters.type && extraFilters.type !== '全体') result = result.filter(p => p.propType === extraFilters.type);
+    if (extraFilters.layout && extraFilters.layout !== '全体') result = result.filter(p => p.layout === extraFilters.layout);
+    if (extraFilters.sqm && extraFilters.sqm !== '全体') result = result.filter(p => matchSqmRange(p.sqm, extraFilters.sqm));
+  }
+  return result;
 }
 
-function aggregateDailyForMonth(ym, areaFilter, excludeKpi) {
-  const filteredProps = filterPropertiesByArea(areaFilter);
+function matchSqmRange(sqm, range) {
+  if (range === '〜20m²') return sqm > 0 && sqm <= 20;
+  if (range === '20〜40m²') return sqm > 20 && sqm <= 40;
+  if (range === '40〜60m²') return sqm > 40 && sqm <= 60;
+  if (range === '60〜80m²') return sqm > 60 && sqm <= 80;
+  if (range === '80m²〜') return sqm > 80;
+  return true;
+}
+
+function getExtraFilters(tabId) {
+  return {
+    type: currentFilters[tabId + 'Type'] || '全体',
+    layout: currentFilters[tabId + 'Layout'] || '全体',
+    sqm: currentFilters[tabId + 'Sqm'] || '全体',
+  };
+}
+
+function setTypeFilter(el, tabId) {
+  el.parentElement.querySelectorAll('.pill').forEach(p => p.classList.remove('active'));
+  el.classList.add('active');
+  currentFilters[tabId + 'Type'] = el.dataset.type;
+  renderAll();
+  setTimeout(() => initChartsForTab(tabId), 50);
+}
+
+function setLayoutFilter(el, tabId) {
+  el.parentElement.querySelectorAll('.pill').forEach(p => p.classList.remove('active'));
+  el.classList.add('active');
+  currentFilters[tabId + 'Layout'] = el.dataset.layout;
+  renderAll();
+  setTimeout(() => initChartsForTab(tabId), 50);
+}
+
+function setSqmFilter(el, tabId) {
+  el.parentElement.querySelectorAll('.pill').forEach(p => p.classList.remove('active'));
+  el.classList.add('active');
+  currentFilters[tabId + 'Sqm'] = el.dataset.sqm;
+  renderAll();
+  setTimeout(() => initChartsForTab(tabId), 50);
+}
+
+function buildLayoutPills(tabId) {
+  const layouts = [...new Set(properties.map(p => p.layout).filter(Boolean))].sort();
+  const container = document.getElementById(tabId + '-layout-filter');
+  if (!container) return;
+  const current = currentFilters[tabId + 'Layout'] || '全体';
+  container.innerHTML = `<span class="pill ${current === '全体' ? 'active' : ''}" data-layout="全体" onclick="setLayoutFilter(this,'${tabId}')">全体</span>` +
+    layouts.map(l => `<span class="pill ${current === l ? 'active' : ''}" data-layout="${l}" onclick="setLayoutFilter(this,'${tabId}')">${l}</span>`).join('');
+}
+
+function aggregateDailyForMonth(ym, areaFilter, excludeKpi, extraFilters) {
+  const filteredProps = filterPropertiesByArea(areaFilter, extraFilters);
   const propNames = new Set(filteredProps.filter(p => !excludeKpi || !p.excludeKpi).map(p => p.name));
 
   // Filter daily data for this month and these properties
@@ -604,19 +690,28 @@ function aggregateDailyForMonth(ym, areaFilter, excludeKpi) {
   return { monthData, filteredProps: filteredProps.filter(p => !excludeKpi || !p.excludeKpi), propNames };
 }
 
+const _propStatsCache = {};
+let _propStatsCacheVer = 0;
+
+function invalidatePropStatsCache() {
+  _propStatsCacheVer++;
+  Object.keys(_propStatsCache).forEach(k => delete _propStatsCache[k]);
+}
+
 function computePropertyStats(propName, ym) {
+  const cacheKey = propName + '|' + ym;
+  if (_propStatsCache[cacheKey]) return _propStatsCache[cacheKey];
+
   const prop = findPropByName(propName);
   if (!prop) return null;
 
   const daysInMonth = getDaysInMonth(ym);
   const totalAvailableDays = daysInMonth * (prop.rooms || 1);
 
-  // 日次データ: 過去〜今日分の実績
-  const propDaily = rawDailyData.filter(d => {
-    const date = normalizeDate(d['日付']);
-    const code = generatePropCode(d['物件名'] || '', d['ルーム番号'] || '');
+  // 日次データ: 過去〜今日分の実績（インデックス使用）
+  const propDaily = (window._dailyByPropYm[propName + '|' + ym] || []).filter(d => {
     const status = d['状態'] || '';
-    return code === propName && getYearMonth(date) === ym && status !== 'システムキャンセル';
+    return status !== 'システムキャンセル';
   });
 
   // 日次データに含まれる日付のセット（重複防止用 + ユニーク日数カウント）
@@ -636,10 +731,14 @@ function computePropertyStats(propName, ym) {
   const monthStart = ym + '-01';
   const monthEnd = ym + '-' + String(daysInMonth).padStart(2, '0');
 
-  // 予約データから未来分を追加（propCode/property/propNameでマッチ）
-  const propReservations = reservations.filter(r => {
-    if (r.status === 'キャンセル' || r.status === 'システムキャンセル') return false;
-    return r.propCode === propName || r.property === propName || (prop && r.property === prop.propName);
+  // 予約データから未来分を追加（インデックス使用）
+  const _resvCandidates = new Set();
+  (window._resvByProp[propName] || []).forEach(r => _resvCandidates.add(r));
+  if (prop.propName && prop.propName !== propName) {
+    (window._resvByProp[prop.propName] || []).forEach(r => _resvCandidates.add(r));
+  }
+  const propReservations = [..._resvCandidates].filter(r => {
+    return r.status !== 'キャンセル' && r.status !== 'システムキャンセル';
   });
 
   let futureNights = 0;
@@ -684,7 +783,7 @@ function computePropertyStats(propName, ym) {
     channels[ch].sales += parseNum(d['売上合計']);
   });
 
-  return {
+  const result = {
     name: propName,
     ownerId: prop.ownerId,
     ownerName: prop.ownerName,
@@ -700,14 +799,16 @@ function computePropertyStats(propName, ym) {
     received: totalReceived,
     channels: channels,
   };
+  _propStatsCache[cacheKey] = result;
+  return result;
 }
 
 function computeOverallStats(ym, areaFilter, excludeKpi) {
   return computeOverallStatsMulti([ym], areaFilter, excludeKpi);
 }
 
-function computeOverallStatsMulti(months, areaFilter, excludeKpi) {
-  const { filteredProps } = aggregateDailyForMonth(months[0], areaFilter, excludeKpi);
+function computeOverallStatsMulti(months, areaFilter, excludeKpi, extraFilters) {
+  const { filteredProps } = aggregateDailyForMonth(months[0], areaFilter, excludeKpi, extraFilters);
 
   // Merge stats across months per property
   const propStatsMap = {};
@@ -2118,11 +2219,13 @@ function shiftPropertyCalendar(prefix, propertyName, delta) {
 // ============================================================
 function renderPropertyTab() {
   renderOrphanAlert('property-orphan-alert');
+  buildLayoutPills('property');
   const months = getSelectedMonths('property');
   const area = currentFilters.propertyArea;
   const excludeKpi = document.getElementById('excludeKpiToggle') && document.getElementById('excludeKpiToggle').checked;
+  const extra = getExtraFilters('property');
 
-  const overall = computeOverallStatsMulti(months, area, excludeKpi);
+  const overall = computeOverallStatsMulti(months, area, excludeKpi, extra);
 
   // KPIs
   document.getElementById('kpi-prop-count').textContent = overall.propertyCount + '件';
@@ -2133,7 +2236,7 @@ function renderPropertyTab() {
 
   // Table - use merged stats from overall
   const tbody = document.getElementById('property-table');
-  let filteredProps = filterPropertiesByArea(area);
+  let filteredProps = filterPropertiesByArea(area, extra);
   if (excludeKpi) filteredProps = filteredProps.filter(p => !p.excludeKpi);
 
   // Build latest reservation lookup per property
@@ -2585,12 +2688,14 @@ function renderReservationTab() {
 // Tab 5: 売上・稼働
 // ============================================================
 function renderRevenueTab() {
+  buildLayoutPills('revenue');
   const months = getSelectedMonths('revenue');
   const monthSet = new Set(months);
   const area = currentFilters.revenueArea;
   const excludeKpi = document.getElementById('excludeKpiToggleRev') && document.getElementById('excludeKpiToggleRev').checked;
+  const extra = getExtraFilters('revenue');
 
-  const overall = computeOverallStatsMulti(months, area, excludeKpi);
+  const overall = computeOverallStatsMulti(months, area, excludeKpi, extra);
 
   document.getElementById('kpi-rev-occ').textContent = fmtPct(overall.occ);
   document.getElementById('kpi-rev-adr').textContent = fmtYenFull(Math.round(overall.adr));
@@ -2598,18 +2703,35 @@ function renderRevenueTab() {
   document.getElementById('kpi-rev-sales').textContent = fmtYen(overall.totalSales);
   document.getElementById('kpi-rev-received').textContent = fmtYen(overall.totalReceived);
 
+  // 予約Window (booking lead time)
+  const extraFilteredNames = new Set(filterPropertiesByArea(area, extra).map(p => p.name));
+  const windowResv = reservations.filter(r => {
+    if (r.status === 'キャンセル' || r.status === 'システムキャンセル') return false;
+    if (!r.date || !r.checkin) return false;
+    if (!monthSet.has(getYearMonth(r.checkin))) return false;
+    const prop = findPropByReservation(r);
+    if (!prop) return false;
+    if (!extraFilteredNames.has(prop.name)) return false;
+    if (excludeKpi && prop.excludeKpi) return false;
+    return true;
+  });
+  if (windowResv.length > 0) {
+    const totalLead = windowResv.reduce((sum, r) => {
+      return sum + Math.max(0, Math.floor((new Date(r.checkin) - new Date(r.date)) / 86400000));
+    }, 0);
+    document.getElementById('kpi-rev-window').textContent = Math.round(totalLead / windowResv.length) + '日';
+  } else {
+    document.getElementById('kpi-rev-window').textContent = '-';
+  }
+
   // Channel performance table
   const confirmedResv = reservations.filter(r => {
     if (r.status === 'システムキャンセル') return false;
     if (!monthSet.has(getYearMonth(r.checkin))) return false;
-    if (area !== '全体') {
-      const prop = findPropByReservation(r);
-      if (!prop || prop.area !== area) return false;
-    }
-    if (excludeKpi) {
-      const prop = findPropByReservation(r);
-      if (prop && prop.excludeKpi) return false;
-    }
+    const prop = findPropByReservation(r);
+    if (!prop) return area === '全体';
+    if (!extraFilteredNames.has(prop.name)) return false;
+    if (excludeKpi && prop.excludeKpi) return false;
     return true;
   });
 

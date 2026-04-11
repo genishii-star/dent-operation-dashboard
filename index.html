@@ -369,6 +369,27 @@
     </div>
 
     <div class="filter-bar" style="margin-top:-12px;">
+      <label>タイプ</label>
+      <div class="filter-pills" id="property-type-filter">
+        <span class="pill active" data-type="全体" onclick="setTypeFilter(this,'property')">全体</span>
+        <span class="pill" data-type="一軒家" onclick="setTypeFilter(this,'property')">一軒家</span>
+        <span class="pill" data-type="マンション" onclick="setTypeFilter(this,'property')">マンション</span>
+        <span class="pill" data-type="ホテル" onclick="setTypeFilter(this,'property')">ホテル</span>
+      </div>
+      <label>間取り</label>
+      <div class="filter-pills" id="property-layout-filter"></div>
+      <label>平米数</label>
+      <div class="filter-pills" id="property-sqm-filter">
+        <span class="pill active" data-sqm="全体" onclick="setSqmFilter(this,'property')">全体</span>
+        <span class="pill" data-sqm="〜20m²" onclick="setSqmFilter(this,'property')">〜20m²</span>
+        <span class="pill" data-sqm="20〜40m²" onclick="setSqmFilter(this,'property')">20〜40m²</span>
+        <span class="pill" data-sqm="40〜60m²" onclick="setSqmFilter(this,'property')">40〜60m²</span>
+        <span class="pill" data-sqm="60〜80m²" onclick="setSqmFilter(this,'property')">60〜80m²</span>
+        <span class="pill" data-sqm="80m²〜" onclick="setSqmFilter(this,'property')">80m²〜</span>
+      </div>
+    </div>
+
+    <div class="filter-bar" style="margin-top:-12px;">
       <label>表示モード</label>
       <div class="filter-pills" id="property-view-filter">
         <span class="pill active" data-view="all" onclick="setPropertyView(this)">全物件</span>
@@ -499,13 +520,34 @@
       </div>
       <label class="checkbox-label"><input type="checkbox" id="excludeKpiToggleRev" onchange="renderAll()"> KPI除外物件を非表示</label>
     </div>
+    <div class="filter-bar" style="margin-top:-12px;">
+      <label>タイプ</label>
+      <div class="filter-pills" id="revenue-type-filter">
+        <span class="pill active" data-type="全体" onclick="setTypeFilter(this,'revenue')">全体</span>
+        <span class="pill" data-type="一軒家" onclick="setTypeFilter(this,'revenue')">一軒家</span>
+        <span class="pill" data-type="マンション" onclick="setTypeFilter(this,'revenue')">マンション</span>
+        <span class="pill" data-type="ホテル" onclick="setTypeFilter(this,'revenue')">ホテル</span>
+      </div>
+      <label>間取り</label>
+      <div class="filter-pills" id="revenue-layout-filter"></div>
+      <label>平米数</label>
+      <div class="filter-pills" id="revenue-sqm-filter">
+        <span class="pill active" data-sqm="全体" onclick="setSqmFilter(this,'revenue')">全体</span>
+        <span class="pill" data-sqm="〜20m²" onclick="setSqmFilter(this,'revenue')">〜20m²</span>
+        <span class="pill" data-sqm="20〜40m²" onclick="setSqmFilter(this,'revenue')">20〜40m²</span>
+        <span class="pill" data-sqm="40〜60m²" onclick="setSqmFilter(this,'revenue')">40〜60m²</span>
+        <span class="pill" data-sqm="60〜80m²" onclick="setSqmFilter(this,'revenue')">60〜80m²</span>
+        <span class="pill" data-sqm="80m²〜" onclick="setSqmFilter(this,'revenue')">80m²〜</span>
+      </div>
+    </div>
 
-    <div class="kpi-grid-5">
+    <div class="kpi-grid-6" id="revenue-kpi-grid">
       <div class="kpi-card"><div class="label">OCC</div><div class="value" id="kpi-rev-occ">-</div></div>
       <div class="kpi-card"><div class="label">ADR</div><div class="value" id="kpi-rev-adr">-</div></div>
       <div class="kpi-card"><div class="label">RevPAR</div><div class="value" id="kpi-rev-revpar">-</div></div>
       <div class="kpi-card"><div class="label">総販売額</div><div class="value" id="kpi-rev-sales">-</div></div>
       <div class="kpi-card"><div class="label">総受取金</div><div class="value" id="kpi-rev-received">-</div></div>
+      <div class="kpi-card"><div class="label">予約Window</div><div class="value" id="kpi-rev-window">-</div><div class="sub">予約〜CI平均</div></div>
     </div>
 
     <div class="chart-grid">
