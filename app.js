@@ -2344,6 +2344,8 @@ function toggleGroupedDrill(seriesBase, clickedRow) {
   const existing = document.getElementById('grouped-drill-row');
   if (existing) {
     destroyDrillCharts('grp');
+    destroyDrillCharts('grpProp');
+    _activeGroupedPropDetail = null;
     existing.remove();
   }
 
@@ -2365,8 +2367,8 @@ function toggleGroupedDrill(seriesBase, clickedRow) {
   const rows = seriesProps.map(p => {
     const stats = overall.stats.find(s => s.name === p.name);
     if (!stats) return '';
-    return `<tr>
-      <td>${p.name}</td><td>${fmtPct(stats.occ)}</td><td>${fmtYenFull(Math.round(stats.adr))}</td>
+    return `<tr class="clickable" onclick="openGroupedPropertyDetail('${p.name}', this)">
+      <td style="color:#007aff;text-decoration:underline;cursor:pointer;">${p.name}</td><td>${fmtPct(stats.occ)}</td><td>${fmtYenFull(Math.round(stats.adr))}</td>
       <td>${fmtYenFull(Math.round(stats.revpar))}</td><td>${stats.nights}泊</td>
       <td>${fmtYenFull(stats.sales)}</td><td>${fmtYenFull(stats.received)}</td>
     </tr>`;
@@ -2419,6 +2421,7 @@ function toggleGroupedDrill(seriesBase, clickedRow) {
       <thead><tr><th>部屋</th><th>OCC</th><th>ADR</th><th>RevPAR</th><th>販売泊数</th><th>販売金額</th><th>受取金</th></tr></thead>
       <tbody>${rows}</tbody>
     </table></div></div>
+    <div id="grouped-property-detail-container"></div>
   </div>`;
 
   setTimeout(() => {
@@ -2552,6 +2555,26 @@ function toggleGroupedDrill(seriesBase, clickedRow) {
   }, 100);
   setTimeout(initSortableHeaders, 150);
   drillRow.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+let _activeGroupedPropDetail = null;
+
+function openGroupedPropertyDetail(propertyName, clickedRow) {
+  const container = document.getElementById('grouped-property-detail-container');
+  if (!container) return;
+
+  // 同じ物件をクリック → 閉じる
+  if (_activeGroupedPropDetail === propertyName) {
+    container.innerHTML = '';
+    _activeGroupedPropDetail = null;
+    destroyDrillCharts('grpProp');
+    return;
+  }
+
+  _activeGroupedPropDetail = propertyName;
+  destroyDrillCharts('grpProp');
+  renderPropertyDetail(container, propertyName, 'grpProp');
+  container.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
 // ============================================================
