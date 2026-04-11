@@ -1725,10 +1725,49 @@ function renderPropertyDetail(container, propertyName, prefix) {
   let resvRows = propResv.map(r => `<tr><td>${(r.date || '').slice(0, 10)}</td><td>${r.channel}</td><td>${r.guest}</td><td>${r.checkin}</td><td>${r.checkout}</td><td>${r.nights}泊</td><td>${fmtYenFull(r.sales)}</td><td>${r.status}</td></tr>`).join('');
   if (!resvRows) resvRows = '<tr><td colspan="8" style="color:#999;text-align:center;">データなし</td></tr>';
 
+  // KPI: current, YoY, MoM
+  const curStats = computePropertyStats(propertyName, ym);
+  const [ymY, ymM] = ym.split('-').map(Number);
+  const momYm = `${ymM === 1 ? ymY - 1 : ymY}-${String(ymM === 1 ? 12 : ymM - 1).padStart(2, '0')}`;
+  const yoyYm = `${ymY - 1}-${String(ymM).padStart(2, '0')}`;
+  const momStats = computePropertyStats(propertyName, momYm);
+  const yoyStats = computePropertyStats(propertyName, yoyYm);
+
+  const cOcc = curStats ? curStats.occ : 0;
+  const cAdr = curStats ? curStats.adr : 0;
+  const cRevpar = curStats ? curStats.revpar : 0;
+  const cSales = curStats ? curStats.sales : 0;
+
+  const occVs = fmtVsLinePt(cOcc, yoyStats ? yoyStats.occ : null, momStats ? momStats.occ : null);
+  const adrVs = fmtVsLine(cAdr, yoyStats ? yoyStats.adr : null, momStats ? momStats.adr : null);
+  const revparVs = fmtVsLine(cRevpar, yoyStats ? yoyStats.revpar : null, momStats ? momStats.revpar : null);
+  const salesVs = fmtVsLine(cSales, yoyStats ? yoyStats.sales : null, momStats ? momStats.sales : null);
+
+  // Booking window (lead time): average days between booking date and check-in date
+  const activeResv = propResvAll.filter(r => r.status !== 'キャンセル' && r.status !== 'システムキャンセル' && r.date && r.checkin);
+  let avgLeadTime = null;
+  if (activeResv.length > 0) {
+    const totalLead = activeResv.reduce((sum, r) => {
+      const bookDate = new Date(r.date);
+      const ciDate = new Date(r.checkin);
+      return sum + Math.max(0, Math.floor((ciDate - bookDate) / 86400000));
+    }, 0);
+    avgLeadTime = Math.round(totalLead / activeResv.length);
+  }
+
+  const kpiHtml = `<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:20px;">
+    <div class="kpi-card"><div class="label">総販売額</div><div class="value">${fmtYen(cSales)}</div><div class="sub">${salesVs}</div></div>
+    <div class="kpi-card"><div class="label">OCC</div><div class="value">${fmtPct(cOcc)}</div><div class="sub">${occVs}</div></div>
+    <div class="kpi-card"><div class="label">ADR</div><div class="value">${fmtYenFull(Math.round(cAdr))}</div><div class="sub">${adrVs}</div></div>
+    <div class="kpi-card"><div class="label">RevPAR</div><div class="value">${fmtYenFull(Math.round(cRevpar))}</div><div class="sub">${revparVs}</div></div>
+    <div class="kpi-card"><div class="label">予約Window</div><div class="value">${avgLeadTime !== null ? avgLeadTime + '日' : '-'}</div><div class="sub">予約〜チェックイン平均</div></div>
+  </div>`;
+
   destroyDrillCharts(prefix);
 
   container.innerHTML = `<div class="drill-down show" style="margin-top:12px;">
     <h3>${prop.name} <span style="font-size:13px;color:#666;font-weight:400;">(${prop.ownerName} / ${prop.area})</span></h3>
+    ${kpiHtml}
     <div class="chart-grid">
       <div class="card"><h2>月別 販売金額/OCC推移</h2><canvas id="${prefix}ChartSalesOcc"></canvas></div>
       <div class="card"><h2>月別 販売金額/ADR推移</h2><canvas id="${prefix}ChartSalesAdr"></canvas></div>

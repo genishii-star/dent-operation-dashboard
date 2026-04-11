@@ -1,0 +1,711 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>Airbnb レビュー自動化 / 分析システム 仕様書 v0.2</title>
+<script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+<script>
+  mermaid.initialize({ startOnLoad: true, theme: 'default', securityLevel: 'loose', flowchart: { htmlLabels: true } });
+</script>
+<style>
+  :root {
+    --primary: #2c5282;
+    --secondary: #4a5568;
+    --accent: #ed8936;
+    --bg-light: #f7fafc;
+    --border: #cbd5e0;
+    --text: #1a202c;
+    --success: #38a169;
+    --warning: #d69e2e;
+    --danger: #e53e3e;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, "Hiragino Sans", "Yu Gothic", sans-serif;
+    color: var(--text);
+    line-height: 1.7;
+    max-width: 980px;
+    margin: 0 auto;
+    padding: 40px 50px;
+    background: white;
+    font-size: 14px;
+  }
+  .cover {
+    text-align: center;
+    padding: 120px 0 80px;
+    border-bottom: 4px double var(--primary);
+    margin-bottom: 60px;
+    page-break-after: always;
+  }
+  .cover h1 {
+    font-size: 32px;
+    color: var(--primary);
+    margin: 0 0 20px;
+    border: none;
+  }
+  .cover .version {
+    font-size: 18px;
+    color: var(--secondary);
+    margin-bottom: 60px;
+  }
+  .cover .meta {
+    display: inline-block;
+    text-align: left;
+    background: var(--bg-light);
+    padding: 24px 40px;
+    border-left: 5px solid var(--primary);
+    font-size: 14px;
+  }
+  .cover .meta div { margin: 6px 0; }
+  h1 {
+    color: var(--primary);
+    border-bottom: 3px solid var(--primary);
+    padding-bottom: 8px;
+    margin-top: 50px;
+    font-size: 22px;
+  }
+  h2 {
+    color: var(--primary);
+    border-left: 5px solid var(--primary);
+    padding-left: 12px;
+    margin-top: 36px;
+    font-size: 18px;
+  }
+  h3 {
+    color: var(--secondary);
+    margin-top: 24px;
+    font-size: 16px;
+  }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 16px 0;
+    font-size: 13px;
+  }
+  th, td {
+    border: 1px solid var(--border);
+    padding: 8px 12px;
+    text-align: left;
+    vertical-align: top;
+  }
+  th {
+    background: var(--primary);
+    color: white;
+    font-weight: 600;
+  }
+  tr:nth-child(even) { background: var(--bg-light); }
+  code {
+    background: #edf2f7;
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-family: "Menlo", "Courier New", monospace;
+    font-size: 12px;
+  }
+  pre {
+    background: #1a202c;
+    color: #e2e8f0;
+    padding: 16px;
+    border-radius: 6px;
+    overflow-x: auto;
+    font-size: 12px;
+    line-height: 1.5;
+  }
+  blockquote {
+    border-left: 4px solid var(--accent);
+    background: #fffaf0;
+    padding: 12px 18px;
+    margin: 16px 0;
+    color: var(--secondary);
+  }
+  .mermaid {
+    background: var(--bg-light);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 20px;
+    margin: 20px 0;
+    text-align: center;
+  }
+  .badge {
+    display: inline-block;
+    padding: 2px 10px;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 600;
+    color: white;
+  }
+  .badge-confirmed { background: var(--success); }
+  .badge-todo { background: var(--warning); }
+  .badge-risk { background: var(--danger); }
+  .badge-info { background: var(--primary); }
+  .section-page { page-break-before: always; }
+  ul, ol { padding-left: 24px; }
+  li { margin: 4px 0; }
+  .toc {
+    background: var(--bg-light);
+    padding: 24px 32px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    page-break-after: always;
+  }
+  .toc h2 { margin-top: 0; }
+  .toc ol { font-size: 14px; }
+  .legend {
+    display: flex;
+    gap: 16px;
+    flex-wrap: wrap;
+    font-size: 12px;
+    margin: 12px 0;
+  }
+  .legend span {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .legend .dot {
+    display: inline-block;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+  }
+  @media print {
+    body { padding: 20px; font-size: 11pt; }
+    .cover { padding: 80px 0 60px; }
+    h1, h2 { page-break-after: avoid; }
+    table, .mermaid { page-break-inside: avoid; }
+    .section-page { page-break-before: always; }
+    a { color: var(--text); text-decoration: none; }
+  }
+  .print-hint {
+    position: fixed;
+    top: 16px;
+    right: 16px;
+    background: var(--accent);
+    color: white;
+    padding: 10px 16px;
+    border-radius: 6px;
+    font-size: 12px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+  }
+  @media print { .print-hint { display: none; } }
+</style>
+</head>
+<body>
+
+<div class="print-hint">⌘+P → PDFとして保存</div>
+
+<!-- ============ COVER ============ -->
+<div class="cover">
+  <h1>Airbnb レビュー自動化<br>/ 分析システム 仕様書</h1>
+  <div class="version">Version 0.2 — Draft</div>
+  <div class="meta">
+    <div><strong>作成日:</strong> 2026-04-07</div>
+    <div><strong>作成者:</strong> 石井 + Claude</div>
+    <div><strong>会社:</strong> Dent Inc.</div>
+    <div><strong>対象システム:</strong> Operation Dashboard</div>
+    <div><strong>ステータス:</strong> ドラフト（オペレーションチーム共有用）</div>
+  </div>
+</div>
+
+<!-- ============ TOC ============ -->
+<div class="toc">
+  <h2>目次</h2>
+  <ol>
+    <li>目的とゴール</li>
+    <li>システム全体像</li>
+    <li>系統A: 投稿系（Chrome拡張統合）</li>
+    <li>系統B: 取得系（Playwright週1実行）</li>
+    <li>★低評価返信 承認フロー</li>
+    <li>データモデル</li>
+    <li>ダッシュボード表示</li>
+    <li>セキュリティ・リスク</li>
+    <li>ロードマップ</li>
+    <li>オペチーム依頼事項</li>
+  </ol>
+</div>
+
+<!-- ============ §1 ============ -->
+<h1>1. 目的とゴール</h1>
+
+<ol>
+  <li>Airbnb の <strong>ホスト→ゲスト レビュー</strong> を自動投稿し、運営工数をゼロにする</li>
+  <li>受信レビュー（ゲスト→ホスト）・プライベートフィードバック・★スコアを一元集約</li>
+  <li>★低評価レビューへの返信をドラフト生成し、承認フローで投稿</li>
+  <li>すべてを既存 operation dashboard（<code>index.html</code> のレビュータブ）に統合</li>
+</ol>
+
+<h3>期待効果</h3>
+<table>
+  <thead><tr><th>領域</th><th>現状</th><th>導入後</th></tr></thead>
+  <tbody>
+    <tr><td>レビュー投稿</td><td>各アカウント手動・抜け漏れ多発</td><td>毎日の同期に併走、自動投稿</td></tr>
+    <tr><td>★スコア把握</td><td>各アカウントログインして確認</td><td>ダッシュボードで横断比較</td></tr>
+    <tr><td>プライベートFB</td><td>気付かないことが多い</td><td>物件別に集約・要約</td></tr>
+    <tr><td>低評価対応</td><td>気付きが遅い・返信遅れ</td><td>Slack承認→自動投稿</td></tr>
+  </tbody>
+</table>
+
+<!-- ============ §2 ============ -->
+<h1 class="section-page">2. システム全体像</h1>
+
+<p>本システムは <strong>2つの独立した系統</strong> で構成される。両者は別々にデプロイ・運用でき、片方が壊れても他方は動く。</p>
+
+<div class="mermaid">
+graph TB
+  subgraph A["系統A: 投稿系（毎日）"]
+    direction TB
+    A1[既存 Chrome拡張<br>ワンクリック同期ボタン] --> A2[Airhost UI操作]
+    A2 --> A3["評論を書く" モーダル]
+    A3 --> A4[Claude API<br>本文生成]
+    A4 --> A5[投稿完了]
+  end
+  subgraph B["系統B: 取得系（週1）"]
+    direction TB
+    B1[launchd 月曜AM3時] --> B2[Playwright]
+    B2 --> B3[Airbnb 直接<br>10アカ巡回]
+    B3 --> B4[受信レビュー<br>★ / プライベートFB]
+    B4 --> B5[Claude API<br>分析]
+  end
+  A5 --> SHEETS[(Google Sheets)]
+  B5 --> SHEETS
+  SHEETS --> DASH[Dashboard<br>レビュータブ]
+  B5 --> SLACK[Slack承認<br>★3以下]
+  SLACK --> DASH
+  style A fill:#e6fffa,stroke:#319795
+  style B fill:#fff5f5,stroke:#c53030
+  style SHEETS fill:#fefcbf,stroke:#d69e2e
+  style DASH fill:#bee3f8,stroke:#2c5282
+</div>
+
+<div class="legend">
+  <span><span class="dot" style="background:#319795"></span>系統A: 投稿系（既存拡張に統合）</span>
+  <span><span class="dot" style="background:#c53030"></span>系統B: 取得系（Playwright独立）</span>
+  <span><span class="dot" style="background:#d69e2e"></span>データストア</span>
+  <span><span class="dot" style="background:#2c5282"></span>UI</span>
+</div>
+
+<h3>系統の役割分担</h3>
+<table>
+  <thead><tr><th></th><th>系統A: 投稿系</th><th>系統B: 取得系</th></tr></thead>
+  <tbody>
+    <tr><td>頻度</td><td>毎日（既存同期に併走）</td><td>週1（月曜AM3時）</td></tr>
+    <tr><td>経路</td><td>Airhost UI</td><td>Airbnb 直接</td></tr>
+    <tr><td>セッション数</td><td>1（Airhost）</td><td>10+（Airbnb各アカ）</td></tr>
+    <tr><td>実装</td><td>Chrome拡張に追加</td><td>Node.js + Playwright</td></tr>
+    <tr><td>BANリスク</td><td>極小（公式UI経由）</td><td>低（読み取り中心・週1）</td></tr>
+    <tr><td>ユーザー操作</td><td>既存ボタン1個</td><td>完全自動</td></tr>
+  </tbody>
+</table>
+
+<!-- ============ §3 ============ -->
+<h1 class="section-page">3. 系統A: 投稿系（Chrome拡張統合）</h1>
+
+<h2>3.1 トリガー</h2>
+<p>既存の Chrome 拡張ポップアップ「ワンクリック同期」ボタン押下時に併走。<br>
+<strong>ユーザー側の運用は現状から1ステップも増えない。</strong></p>
+
+<h2>3.2 フロー</h2>
+<div class="mermaid">
+sequenceDiagram
+  participant U as 石井さん
+  participant E as Chrome拡張
+  participant AH as Airhost
+  participant CL as Claude API
+  participant SH as Sheets
+  participant SL as Slack
+  U->>E: ワンクリック同期ボタン押下
+  E->>AH: 日次データCSV取得（既存）
+  E->>SH: 書き込み（既存）
+  E->>AH: 予約データCSV取得（既存）
+  E->>SH: 書き込み（既存）
+  Note over E,AH: ▼ 新規処理 ▼
+  E->>AH: チェックイン管理ページを開く
+  AH-->>E: 未投稿レビュー一覧
+  loop 各予約について
+    E->>AH: 催促OFF判定
+    alt OFF
+      E->>SH: スキップログ
+    else ON
+      E->>CL: 言語判定 & 本文生成
+      CL-->>E: レビュー文
+      E->>AH: 「評論を書く」モーダル入力→送信
+      E->>SH: 投稿ログ
+    end
+  end
+  E->>SL: 完了通知（同期+レビューサマリー）
+</div>
+
+<h2>3.3 レビュー本文生成仕様</h2>
+<table>
+  <thead><tr><th>項目</th><th>仕様</th></tr></thead>
+  <tbody>
+    <tr><td>生成元</td><td>Claude API（Sonnet推奨、コスト最適化）</td></tr>
+    <tr><td>言語</td><td>ゲスト名・国籍・予約言語から自動判定（日 / 英 / 中、デフォルト英）</td></tr>
+    <tr><td>文字数</td><td>各言語で2〜4文程度</td></tr>
+    <tr><td>内容</td><td>滞在日数・人数・物件名を反映、ブランドトーンに従う</td></tr>
+    <tr><td>★評価</td><td>3軸すべて5固定（清潔さ / チェックイン心得 / コミュニケーション）</td></tr>
+    <tr><td>推薦</td><td>Yes 固定</td></tr>
+    <tr><td>プライベートFB</td><td>Phase 1 では空欄</td></tr>
+  </tbody>
+</table>
+
+<h2>3.4 安全機構</h2>
+<table>
+  <thead><tr><th>機構</th><th>内容</th></tr></thead>
+  <tbody>
+    <tr><td><span class="badge badge-info">様子見モード</span></td><td>初期は「ドラフト生成のみ・実投稿しない」フラグで運用</td></tr>
+    <tr><td><span class="badge badge-info">ホワイトリスト</span></td><td>特定物件のみ自動投稿対象 → 段階的に拡大</td></tr>
+    <tr><td><span class="badge badge-info">投稿件数上限</span></td><td>1回の同期で最大10件程度</td></tr>
+    <tr><td><span class="badge badge-info">失敗時の継続</span></td><td>1件失敗しても次の予約へ進む</td></tr>
+    <tr><td><span class="badge badge-info">重複防止</span></td><td>投稿済み予約IDをスプシで管理、再投稿しない</td></tr>
+  </tbody>
+</table>
+
+<!-- ============ §4 ============ -->
+<h1 class="section-page">4. 系統B: 取得系（Playwright週1実行）</h1>
+
+<h2>4.1 実行環境</h2>
+<table>
+  <tbody>
+    <tr><td>実行基盤</td><td>ローカルMac（石井さんのMac）</td></tr>
+    <tr><td>実行方法</td><td>launchd（毎週月曜 AM 3:00）</td></tr>
+    <tr><td>実装言語</td><td>Node.js + Playwright (TypeScript)</td></tr>
+    <tr><td>セッション保存</td><td><code>sessions/account-NN.json</code>（暗号化推奨）</td></tr>
+    <tr><td>実行ディレクトリ</td><td><code>/operation/review/</code></td></tr>
+  </tbody>
+</table>
+
+<h2>4.2 実行フロー</h2>
+<div class="mermaid">
+flowchart TD
+  Start([月曜 AM3:00 launchd]) --> Loop{各アカウント}
+  Loop --> Restore[セッション復元<br>storageState]
+  Restore --> Fetch[Airbnb /hosting/reviews]
+  Fetch --> Get1[受信レビュー本文]
+  Fetch --> Get2[★スコア 6軸]
+  Fetch --> Get3[プライベートFB]
+  Get1 --> Sheets[(Sheets書き込み)]
+  Get2 --> Sheets
+  Get3 --> Sheets
+  Sheets --> Loop
+  Loop -->|全アカ完了| Analyze[Claude API 分析]
+  Analyze --> A1[ネガポジ判定]
+  Analyze --> A2[頻出キーワード]
+  Analyze --> A3[プライベートFB要約]
+  Analyze --> A4[トレンド計算]
+  A1 --> Reply{未返信レビュー}
+  A2 --> Reply
+  A3 --> Reply
+  A4 --> Reply
+  Reply -->|★4以上| Auto[自動投稿]
+  Reply -->|★3以下| Slack[Slack承認カード]
+  Reply -->|前回承認済み| Auto
+  Auto --> Done([完了通知])
+  Slack --> Done
+</div>
+
+<h2>4.3 機能一覧</h2>
+
+<h3>A. データ取得</h3>
+<table>
+  <thead><tr><th>#</th><th>機能</th><th>取得元</th></tr></thead>
+  <tbody>
+    <tr><td>A1</td><td>受信レビュー本文取得</td><td><code>/hosting/reviews</code></td></tr>
+    <tr><td>A2</td><td>★スコア取得（カテゴリ別6軸）</td><td>同上</td></tr>
+    <tr><td>A3</td><td>プライベートフィードバック取得</td><td>レビュー詳細</td></tr>
+    <tr><td>A4</td><td>ゲスト名・予約ID・物件・日付</td><td>同上</td></tr>
+    <tr><td>A5</td><td>レビュー記載率</td><td>物件統計ページ</td></tr>
+    <tr><td>A6</td><td>全体評価サマリー（リスティング単位）</td><td>リスティング管理</td></tr>
+  </tbody>
+</table>
+
+<h3>B. データ書き込み</h3>
+<table>
+  <thead><tr><th>#</th><th>機能</th><th>備考</th></tr></thead>
+  <tbody>
+    <tr><td>B1</td><td>レビュー返信の自動投稿</td><td>★4以上は完全自動 / ★3以下はSlack承認後</td></tr>
+  </tbody>
+</table>
+
+<h3>C. 分析（Claude APIで処理）</h3>
+<table>
+  <thead><tr><th>#</th><th>機能</th><th>処理</th></tr></thead>
+  <tbody>
+    <tr><td>C1</td><td>ネガポジ判定</td><td>全件をpos/neu/negに分類</td></tr>
+    <tr><td>C2</td><td>頻出キーワード抽出</td><td>ポジ・ネガそれぞれの上位語</td></tr>
+    <tr><td>C3</td><td>プライベートFB要約</td><td>物件別に「最近の指摘事項TOP3」</td></tr>
+    <tr><td>C4</td><td>物件別トレンド計算</td><td>月次★推移、レビュー数推移</td></tr>
+    <tr><td>C5</td><td>アラート判定</td><td>★急落・ネガ急増を検知してSlack通知</td></tr>
+  </tbody>
+</table>
+
+<h2>4.4 セッション管理</h2>
+<div class="mermaid">
+flowchart LR
+  subgraph Init["初回（1アカ約1分・計10分）"]
+    I1[npm run login] --> I2[ブラウザ起動]
+    I2 --> I3[手動ログイン<br>2FAも手動]
+    I3 --> I4[storageState保存]
+  end
+  subgraph Daily["通常運用"]
+    D1[launchd起動] --> D2[セッション復元]
+    D2 --> D3{有効?}
+    D3 -->|Yes| D4[処理実行]
+    D3 -->|No| D5[Slack通知<br>再ログイン依頼]
+  end
+  I4 -.継続.-> D2
+</div>
+
+<!-- ============ §5 ============ -->
+<h1 class="section-page">5. ★低評価返信 承認フロー</h1>
+
+<div class="mermaid">
+sequenceDiagram
+  participant B as 系統B
+  participant CL as Claude
+  participant SL as Slack
+  participant U as 承認者
+  participant AB as Airbnb
+  participant SH as Sheets
+  B->>B: 受信レビュー取得
+  B->>B: ★3以下を検出
+  B->>CL: 返信文ドラフト生成
+  CL-->>B: 提案返信
+  B->>SH: 状態=pending
+  B->>SL: 承認カード送信<br>[承認/編集/却下]
+  SL->>U: 通知
+  alt 承認
+    U->>SL: [承認] クリック
+    SL->>SH: 状態=approved
+    Note over SH,AB: 翌週の系統B実行時
+    B->>SH: approved を取得
+    B->>AB: 返信投稿
+    B->>SH: 状態=posted
+  else 編集
+    U->>SL: [編集] クリック
+    SL->>U: Dashboard 編集画面へ
+    U->>SH: 編集→保存（再びpending）
+  else 却下
+    U->>SL: [却下] クリック
+    SL->>SH: 状態=rejected
+  end
+</div>
+
+<h3>状態遷移</h3>
+<table>
+  <thead><tr><th>状態</th><th>説明</th></tr></thead>
+  <tbody>
+    <tr><td><code>none</code></td><td>未処理</td></tr>
+    <tr><td><code>draft</code></td><td>Claude生成済み</td></tr>
+    <tr><td><code>pending</code></td><td>承認待ち（Slack配信中）</td></tr>
+    <tr><td><code>approved</code></td><td>承認済み（次回実行で投稿）</td></tr>
+    <tr><td><code>posted</code></td><td>投稿完了</td></tr>
+    <tr><td><code>rejected</code></td><td>却下（投稿しない）</td></tr>
+  </tbody>
+</table>
+
+<!-- ============ §6 ============ -->
+<h1 class="section-page">6. データモデル</h1>
+
+<div class="mermaid">
+erDiagram
+  PROPERTY_MASTER ||--o{ RECEIVED_REVIEW : has
+  ACCOUNT ||--o{ RECEIVED_REVIEW : owns
+  ACCOUNT ||--o{ EXEC_LOG : runs
+  RECEIVED_REVIEW ||--o| EXEC_LOG : logged
+  PROPERTY_MASTER {
+    string property_code
+    string owner_id
+    string property_name
+    string area
+  }
+  ACCOUNT {
+    string account_id
+    string account_name
+    string email
+    string status
+    datetime session_updated
+  }
+  RECEIVED_REVIEW {
+    string review_id
+    string property_code
+    string reservation_id
+    string guest_name
+    date posted_date
+    int star_total
+    text public_body
+    text private_feedback
+    string sentiment
+    string reply_status
+    text reply_body
+  }
+  EXEC_LOG {
+    datetime executed_at
+    string system
+    string account_id
+    string reservation_id
+    string status
+    text error_message
+  }
+</div>
+
+<h3>新規シート一覧</h3>
+<table>
+  <thead><tr><th>シート名</th><th>用途</th><th>主要カラム</th></tr></thead>
+  <tbody>
+    <tr><td>受信レビュー</td><td>系統Bが書き込み・Dashboardが読む</td><td>レビューID / 物件 / ★ / 本文 / プライベートFB / 返信状態</td></tr>
+    <tr><td>レビュー実行ログ</td><td>系統A・Bの実行履歴</td><td>実行日時 / 系統 / アカ / 予約 / ステータス</td></tr>
+    <tr><td>アカウント管理</td><td>10アカの状態管理</td><td>アカID / メール / 2FA / 担当物件 / セッション更新日</td></tr>
+  </tbody>
+</table>
+
+<!-- ============ §7 ============ -->
+<h1 class="section-page">7. ダッシュボード表示</h1>
+
+<p>既存 <code>index.html</code> の「レビュー」タブ（現状プレースホルダ）に実装。</p>
+
+<div class="mermaid">
+graph TD
+  TAB[レビュータブ] --> D1[D1: サマリーカード<br>平均★/受信数/投稿数/記載率]
+  TAB --> D2[D2: 物件別スコアテーブル]
+  TAB --> D3[D3: レビュー一覧<br>フィルタ可]
+  TAB --> D4[D4: プライベートFB一覧]
+  TAB --> D5[D5: ネガポジ月次トレンド]
+  TAB --> D6[D6: 自動投稿実行ログ]
+  TAB --> D7[D7: 低評価返信 承認待ち]
+  TAB --> D8[D8: 低評価アラート]
+  style TAB fill:#bee3f8,stroke:#2c5282,stroke-width:3px
+</div>
+
+<table>
+  <thead><tr><th>#</th><th>機能</th><th>データソース</th></tr></thead>
+  <tbody>
+    <tr><td>D1</td><td>サマリーカード</td><td>受信レビュー + 実行ログ</td></tr>
+    <tr><td>D2</td><td>物件別スコアテーブル</td><td>受信レビュー</td></tr>
+    <tr><td>D3</td><td>レビュー一覧（フィルタ可）</td><td>受信レビュー</td></tr>
+    <tr><td>D4</td><td>プライベートFB一覧（物件別）</td><td>受信レビュー</td></tr>
+    <tr><td>D5</td><td>ネガポジ月次トレンドグラフ</td><td>受信レビュー</td></tr>
+    <tr><td>D6</td><td>自動投稿実行ログビューア</td><td>実行ログ</td></tr>
+    <tr><td>D7</td><td>低評価返信の承認待ち（編集→承認）</td><td>受信レビュー（pending）</td></tr>
+    <tr><td>D8</td><td>低評価アラート表示</td><td>分析結果</td></tr>
+  </tbody>
+</table>
+
+<!-- ============ §8 ============ -->
+<h1 class="section-page">8. セキュリティ・リスク</h1>
+
+<h2>8.1 セキュリティ要件</h2>
+<ul>
+  <li>Airbnbのセッション情報（<code>sessions/*.json</code>）は <strong>git にコミット禁止</strong></li>
+  <li><code>.gitignore</code> に <code>sessions/</code> を追加</li>
+  <li>macOS Keychain or sops で暗号化保存</li>
+  <li>Claude APIキーは環境変数管理</li>
+  <li>Slack Webhook URL も環境変数管理（過去にコミット履歴あり、再生成要）</li>
+</ul>
+
+<h2>8.2 リスクマトリクス</h2>
+<table>
+  <thead><tr><th>リスク</th><th>影響</th><th>対策</th></tr></thead>
+  <tbody>
+    <tr><td><span class="badge badge-risk">高</span> Airbnb 利用規約違反判定</td><td>アカウントBAN</td><td>系統Aは Airhost UI 経由でリスク低、系統Bは週1の低頻度</td></tr>
+    <tr><td><span class="badge badge-risk">中</span> Airhost DOM 変更</td><td>投稿失敗</td><td>セレクタ設定ファイル化・Slack通知</td></tr>
+    <tr><td><span class="badge badge-risk">中</span> Airbnb DOM 変更</td><td>取得失敗</td><td>同上</td></tr>
+    <tr><td><span class="badge badge-risk">中</span> 2FA による自動化失敗</td><td>ログイン不可</td><td>初回手動ログイン → セッション長期保持</td></tr>
+    <tr><td><span class="badge badge-risk">中</span> LLM 生成文の品質ばらつき</td><td>不適切メッセージ</td><td>様子見期間で完全手動承認</td></tr>
+    <tr><td><span class="badge badge-risk">高</span> 低評価返信の誤承認</td><td>火に油</td><td>Claude生成 + 人間承認の二重化</td></tr>
+  </tbody>
+</table>
+
+<!-- ============ §9 ============ -->
+<h1 class="section-page">9. ロードマップ</h1>
+
+<div class="mermaid">
+gantt
+  title 開発ロードマップ
+  dateFormat YYYY-MM-DD
+  axisFormat %m/%d
+  section Phase 0
+  オペチーム準備           :p0, 2026-04-08, 7d
+  section Phase 1 系統A
+  Chrome拡張実装           :p1, after p0, 10d
+  様子見モード1物件テスト  :p1b, after p1, 5d
+  ホワイトリスト段階展開   :p1c, after p1b, 7d
+  全物件展開               :p1d, after p1c, 5d
+  section Phase 2 取得系
+  Playwright基盤           :p2, after p1d, 7d
+  受信レビュー取得         :p2b, after p2, 5d
+  プライベートFB取得       :p2c, after p2b, 3d
+  launchd設定              :p2d, after p2c, 2d
+  section Phase 3 Dashboard
+  D1-D6 実装               :p3, after p2d, 10d
+  section Phase 4 返信
+  Slack承認カード          :p4, after p3, 5d
+  D7 承認UI                :p4b, after p4, 5d
+  自動投稿                 :p4c, after p4b, 3d
+  section Phase 5 分析
+  ネガポジ・キーワード     :p5, after p4c, 5d
+  トレンド・アラート       :p5b, after p5, 5d
+</div>
+
+<h3>各フェーズの完了条件</h3>
+<table>
+  <thead><tr><th>Phase</th><th>完了条件</th></tr></thead>
+  <tbody>
+    <tr><td>Phase 0</td><td>オペチームから依頼事項一式が揃う</td></tr>
+    <tr><td>Phase 1</td><td>全物件で自動投稿が安定稼働、エラー率5%未満</td></tr>
+    <tr><td>Phase 2</td><td>10アカ全件のレビュー取得が成功、週1で安定稼働</td></tr>
+    <tr><td>Phase 3</td><td>ダッシュボードで全レビューが閲覧・フィルタ可能</td></tr>
+    <tr><td>Phase 4</td><td>★3以下レビューの承認→投稿が一連で動作</td></tr>
+    <tr><td>Phase 5</td><td>ネガポジ・トレンド・アラートが月次で動作</td></tr>
+  </tbody>
+</table>
+
+<!-- ============ §10 ============ -->
+<h1 class="section-page">10. オペチーム依頼事項</h1>
+
+<blockquote>このセクションが埋まらないと開発に着手できません。</blockquote>
+
+<h3>A. Airbnb アカウント情報 <span class="badge badge-todo">TODO</span></h3>
+<ul>
+  <li>全アカウントの一覧（メール / 2FA有無 / ステータス）</li>
+  <li>各アカウントが管理している Airbnb リスティング一覧</li>
+  <li>物件マスタの物件コードとの対応表</li>
+</ul>
+
+<h3>B. レビュー文ガイドライン <span class="badge badge-todo">TODO</span></h3>
+<ul>
+  <li>自動生成のサンプル文（日/英/中で各3〜5パターン）に対するOK/NG判定</li>
+  <li>絶対に書いてはいけない表現</li>
+  <li>ブランドトーン（カジュアル / フォーマル）</li>
+</ul>
+
+<h3>C. Airhost UI 確認 <span class="badge badge-todo">TODO</span></h3>
+<ul>
+  <li>「評論を書く」モーダルのプライベートフィードバック欄の有無</li>
+  <li>催促OFF設定の場所と粒度（予約単位の確認）</li>
+  <li>未投稿レビューを一覧で抽出できる画面の特定</li>
+</ul>
+
+<h3>D. 運用ポリシー <span class="badge badge-todo">TODO</span></h3>
+<ul>
+  <li>自動投稿開始時のホワイトリスト物件（推奨: 5物件程度から）</li>
+  <li>様子見モード解除の判断基準</li>
+  <li>エラー時のエスカレーション先</li>
+  <li>★3以下返信の承認担当者</li>
+</ul>
+
+<h3>E. 確認済み事項 <span class="badge badge-confirmed">DONE</span></h3>
+<ul>
+  <li>Airhost に自動レビュー投稿機能は<strong>ない</strong>（Web調査済み）</li>
+  <li>Airhost UI から手動でレビュー投稿は可能（スクショ確認済み）</li>
+  <li>受信レビュー / ★スコア / プライベートFB / 返信は Airhost では取得・操作不可</li>
+  <li>10アカウント運用は都度ログアウト/ログイン方式</li>
+</ul>
+
+<hr style="margin: 60px 0 20px;">
+<p style="text-align: center; color: var(--secondary); font-size: 12px;">
+  Dent Inc. — Operation Dashboard / Review Automation System Spec v0.2<br>
+  2026-04-07
+</p>
+
+</body>
+</html>
