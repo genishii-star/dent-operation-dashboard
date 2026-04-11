@@ -2731,32 +2731,45 @@ function renderRevenueTab() {
 
   const overall = computeOverallStatsMulti(months, area, excludeKpi, extra);
 
+  // YoY / MoM comparison
+  const yoyMonths = months.map(ym => { const [y, m] = ym.split('-'); return `${Number(y) - 1}-${m}`; });
+  const momMonths = months.map(ym => { const [y, m] = ym.split('-').map(Number); const d = new Date(y, m - 2, 1); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; });
+  const yoyOverall = computeOverallStatsMulti(yoyMonths, area, excludeKpi, extra);
+  const momOverall = computeOverallStatsMulti(momMonths, area, excludeKpi, extra);
+
   document.getElementById('kpi-rev-occ').textContent = fmtPct(overall.occ);
+  document.getElementById('kpi-rev-occ-vs').innerHTML = fmtVsLinePt(overall.occ, yoyOverall.occ, momOverall.occ);
   document.getElementById('kpi-rev-adr').textContent = fmtYenFull(Math.round(overall.adr));
+  document.getElementById('kpi-rev-adr-vs').innerHTML = fmtVsLine(overall.adr, yoyOverall.adr, momOverall.adr);
   document.getElementById('kpi-rev-revpar').textContent = fmtYenFull(Math.round(overall.revpar));
+  document.getElementById('kpi-rev-revpar-vs').innerHTML = fmtVsLine(overall.revpar, yoyOverall.revpar, momOverall.revpar);
   document.getElementById('kpi-rev-sales').textContent = fmtYen(overall.totalSales);
+  document.getElementById('kpi-rev-sales-vs').innerHTML = fmtVsLine(overall.totalSales, yoyOverall.totalSales, momOverall.totalSales);
   document.getElementById('kpi-rev-received').textContent = fmtYen(overall.totalReceived);
+  document.getElementById('kpi-rev-received-vs').innerHTML = fmtVsLine(overall.totalReceived, yoyOverall.totalReceived, momOverall.totalReceived);
 
   // 予約Window (booking lead time)
   const extraFilteredNames = new Set(filterPropertiesByArea(area, extra).map(p => p.name));
-  const windowResv = reservations.filter(r => {
-    if (r.status === 'キャンセル' || r.status === 'システムキャンセル') return false;
-    if (!r.date || !r.checkin) return false;
-    if (!monthSet.has(getYearMonth(r.checkin))) return false;
-    const prop = findPropByReservation(r);
-    if (!prop) return false;
-    if (!extraFilteredNames.has(prop.name)) return false;
-    if (excludeKpi && prop.excludeKpi) return false;
-    return true;
-  });
-  if (windowResv.length > 0) {
-    const totalLead = windowResv.reduce((sum, r) => {
-      return sum + Math.max(0, Math.floor((new Date(r.checkin) - new Date(r.date)) / 86400000));
-    }, 0);
-    document.getElementById('kpi-rev-window').textContent = Math.round(totalLead / windowResv.length) + '日';
-  } else {
-    document.getElementById('kpi-rev-window').textContent = '-';
-  }
+  const calcRevWindowForMonths = (ms) => {
+    const mSet = new Set(ms);
+    const rvs = reservations.filter(r => {
+      if (r.status === 'キャンセル' || r.status === 'システムキャンセル') return false;
+      if (!r.date || !r.checkin) return false;
+      if (!mSet.has(getYearMonth(r.checkin))) return false;
+      const prop = findPropByReservation(r);
+      if (!prop) return false;
+      if (!extraFilteredNames.has(prop.name)) return false;
+      if (excludeKpi && prop.excludeKpi) return false;
+      return true;
+    });
+    if (rvs.length === 0) return null;
+    return Math.round(rvs.reduce((s, r) => s + Math.max(0, Math.floor((new Date(r.checkin) - new Date(r.date)) / 86400000)), 0) / rvs.length);
+  };
+  const curWindow = calcRevWindowForMonths(months);
+  const yoyWindow = calcRevWindowForMonths(yoyMonths);
+  const momWindow = calcRevWindowForMonths(momMonths);
+  document.getElementById('kpi-rev-window').textContent = curWindow !== null ? curWindow + '日' : '-';
+  document.getElementById('kpi-rev-window-vs').innerHTML = fmtVsLine(curWindow || 0, yoyWindow, momWindow);
 
   // Channel performance table
   const confirmedResv = reservations.filter(r => {
