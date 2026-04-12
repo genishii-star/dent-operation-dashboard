@@ -255,7 +255,7 @@ async function fetchAndUpdate() {
     fetchSheet('物件マスタ'),
     fetchSheet('オーナーマスタ'),
     fetchSheet('シーズンマスタ'),
-    fetchSheet('設定').catch(() => []),
+    fetch(sheetApiUrl('設定')).then(r => r.json()).catch(() => ({})),
   ]);
 
   rawReservations = resv;
@@ -264,13 +264,12 @@ async function fetchAndUpdate() {
   ownerMaster = ownMaster;
   seasonMaster = seasMaster;
 
-  // 最終同期タイムスタンプ（設定シートのヘッダー: 最終同期 | タイムスタンプ値）
-  if (settingsRaw.length > 0) {
-    // ヘッダーが「最終同期」の列の値を取得
-    const first = settingsRaw[0];
-    const syncTs = Object.values(first)[0] || '';
+  // 最終同期タイムスタンプ（設定シートはキー・バリュー形式: [[key, value], ...]）
+  const settingsRows = settingsRaw.values || [];
+  const syncRow = settingsRows.find(r => r[0] === '最終同期');
+  if (syncRow && syncRow[1]) {
     const el = document.getElementById('lastSynced');
-    if (el && syncTs) el.textContent = '最終同期: ' + syncTs;
+    if (el) el.textContent = '最終同期: ' + syncRow[1];
   }
 
   processData();
