@@ -2449,16 +2449,60 @@ function toggleGroupedDrill(seriesBase, clickedRow) {
     </tr>`;
   }).join('');
 
-  // Aggregate totals
-  const totalDays = months.reduce((s, ym) => s + getDaysInMonth(ym), 0);
-  let totalNights = 0, totalSales = 0, totalReceived = 0, totalAvailable = 0;
-  seriesProps.forEach(p => {
-    const stats = overall.stats.find(s => s.name === p.name);
-    if (stats) { totalNights += stats.nights; totalSales += stats.sales; totalReceived += stats.received; }
-    totalAvailable += totalDays * (p.rooms || 1);
+  // Aggregate totals for current / YoY / MoM periods
+  function aggSeriesStats(props, targetMonths) {
+    const td = targetMonths.reduce((s, ym) => s + getDaysInMonth(ym), 0);
+    let nights = 0, sales = 0, received = 0, avail = 0;
+    props.forEach(p => {
+      targetMonths.forEach(m => {
+        const s = computePropertyStats(p.name, m);
+        if (s) { nights += s.nights; sales += s.sales; received += s.received || 0; }
+      });
+      avail += td * (p.rooms || 1);
+    });
+    const occ = avail > 0 ? (nights / avail) * 100 : 0;
+    const adr = nights > 0 ? sales / nights : 0;
+    const revpar = avail > 0 ? sales / avail : 0;
+    return { nights, sales, received, occ, adr, revpar };
+  }
+
+  const curAgg = aggSeriesStats(seriesProps, months);
+  const totalNights = curAgg.nights, totalSales = curAgg.sales, totalReceived = curAgg.received;
+  const aggOcc = curAgg.occ;
+  const aggAdr = curAgg.adr;
+  const aggRevpar = curAgg.revpar;
+
+  // YoY
+  const yoyMonths = months.map(m => { const [y, mo] = m.split('-'); return `${Number(y) - 1}-${mo}`; });
+  const yoyAgg = aggSeriesStats(seriesProps, yoyMonths);
+  // MoM
+  const momMonths = months.map(m => {
+    const [y, mo] = m.split('-').map(Number);
+    const d = new Date(y, mo - 2, 1);
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
   });
-  const aggOcc = totalAvailable > 0 ? (totalNights / totalAvailable) * 100 : 0;
-  const aggAdr = totalNights > 0 ? totalSales / totalNights : 0;
+  const momAgg = aggSeriesStats(seriesProps, momMonths);
+
+  const salesVs = fmtVsLine(totalSales, yoyAgg.sales || null, momAgg.sales || null);
+  const occVs = fmtVsLinePt(aggOcc, yoyAgg.occ || null, momAgg.occ || null);
+  const adrVs = fmtVsLine(aggAdr, yoyAgg.adr || null, momAgg.adr || null);
+  const revparVs = fmtVsLine(aggRevpar, yoyAgg.revpar || null, momAgg.revpar || null);
+
+  // 予約Window (lead time)
+  const seriesPropNames = new Set(seriesProps.map(p => p.name));
+  const seriesResv = reservations.filter(r =>
+    seriesPropNames.has(r.propCode) || seriesPropNames.has(r.property) ||
+    seriesProps.some(p => r.property === p.propName)
+  ).filter(r => r.status !== 'キャンセル' && r.status !== 'システムキャンセル' && r.date && r.checkin);
+  let avgLeadTime = null;
+  if (seriesResv.length > 0) {
+    const totalLead = seriesResv.reduce((sum, r) => {
+      const bookDate = new Date(r.date);
+      const ciDate = new Date(r.checkin);
+      return sum + Math.max(0, Math.floor((ciDate - bookDate) / 86400000));
+    }, 0);
+    avgLeadTime = Math.round(totalLead / seriesResv.length);
+  }
 
   const ownerName = seriesProps[0] ? seriesProps[0].ownerName || '' : '';
   const areaName = seriesProps[0] ? seriesProps[0].area || '' : '';
@@ -2479,12 +2523,12 @@ function toggleGroupedDrill(seriesBase, clickedRow) {
 
   drillCell.innerHTML = `<div class="drill-down show">
     <h3>${seriesBase} シリーズ <span style="font-size:13px;color:#666;font-weight:400;">(${ownerName} / ${areaName} / ${seriesProps.length}室)</span></h3>
-    <div class="kpi-grid-5" style="margin-bottom:16px;">
-      <div class="kpi-card"><div class="label">OCC</div><div class="value">${fmtPct(aggOcc)}</div></div>
-      <div class="kpi-card"><div class="label">ADR</div><div class="value">${fmtYenFull(Math.round(aggAdr))}</div></div>
-      <div class="kpi-card"><div class="label">販売泊数</div><div class="value">${totalNights}泊</div></div>
-      <div class="kpi-card"><div class="label">販売金額</div><div class="value">${fmtYen(totalSales)}</div></div>
-      <div class="kpi-card"><div class="label">受取金</div><div class="value">${fmtYen(totalReceived)}</div></div>
+    <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:16px;">
+      <div class="kpi-card"><div class="label">総販売額</div><div class="value">${fmtYen(totalSales)}</div><div class="sub">${salesVs}</div></div>
+      <div class="kpi-card"><div class="label">OCC</div><div class="value">${fmtPct(aggOcc)}</div><div class="sub">${occVs}</div></div>
+      <div class="kpi-card"><div class="label">ADR</div><div class="value">${fmtYenFull(Math.round(aggAdr))}</div><div class="sub">${adrVs}</div></div>
+      <div class="kpi-card"><div class="label">RevPAR</div><div class="value">${fmtYenFull(Math.round(aggRevpar))}</div><div class="sub">${revparVs}</div></div>
+      <div class="kpi-card"><div class="label">予約Window</div><div class="value">${avgLeadTime !== null ? avgLeadTime + '日' : '-'}</div><div class="sub">予約〜チェックイン平均</div></div>
     </div>
     <div class="chart-grid">
       <div class="card"><h2>月別 販売金額/OCC推移</h2><canvas id="grpChartSalesOcc"></canvas></div>
