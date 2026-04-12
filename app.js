@@ -156,6 +156,7 @@ let currentFilters = {
   revenueLayout: '全体',
   revenueSqm: '全体',
   propDetailPeriod: 'thisMonth',
+  grpDrillPeriod: 'thisMonth',
 };
 
 // ============================================================
@@ -1909,7 +1910,12 @@ function renderPropertyDetail(container, propertyName, prefix) {
   const salesVs = fmtVsLine(cSales, yoyStats ? yoyStats.sales : null, momStats ? momStats.sales : null);
 
   // Booking window (lead time): average days between booking date and check-in date
-  const activeResv = propResvAll.filter(r => r.status !== 'キャンセル' && r.status !== 'システムキャンセル' && r.date && r.checkin);
+  const detailMonthSet = new Set(detailMonths);
+  const activeResv = propResvAll.filter(r => {
+    if (r.status === 'キャンセル' || r.status === 'システムキャンセル' || !r.date || !r.checkin) return false;
+    const ciYm = r.checkin.slice(0, 7);
+    return detailMonthSet.has(ciYm);
+  });
   let avgLeadTime = null;
   if (activeResv.length > 0) {
     const totalLead = activeResv.reduce((sum, r) => {
@@ -2414,7 +2420,17 @@ function renderGroupedPropertyView(months, area, excludeKpi, overall) {
   }).join('');
 }
 
-function toggleGroupedDrill(seriesBase, clickedRow) {
+let _lastGroupedDrillClickedRow = null;
+
+function setGrpDrillPeriod(el) {
+  currentFilters.grpDrillPeriod = el.dataset.period;
+  if (activeGroupedDrill) {
+    toggleGroupedDrill(activeGroupedDrill, _lastGroupedDrillClickedRow, true);
+  }
+}
+
+function toggleGroupedDrill(seriesBase, clickedRow, isRefresh) {
+  if (clickedRow) _lastGroupedDrillClickedRow = clickedRow;
   // 既存のドリルダウン行を削除
   const existing = document.getElementById('grouped-drill-row');
   if (existing) {
@@ -2424,13 +2440,14 @@ function toggleGroupedDrill(seriesBase, clickedRow) {
     existing.remove();
   }
 
-  if (activeGroupedDrill === seriesBase) {
+  if (activeGroupedDrill === seriesBase && !isRefresh) {
     activeGroupedDrill = null;
     return;
   }
   activeGroupedDrill = seriesBase;
 
-  const months = getSelectedMonths('property');
+  const grpPeriod = currentFilters.grpDrillPeriod || 'thisMonth';
+  const months = getSelectedMonths_custom(grpPeriod);
   const area = currentFilters.propertyArea;
   const excludeKpi = document.getElementById('excludeKpiToggle') && document.getElementById('excludeKpiToggle').checked;
   const overall = computeOverallStatsMulti(months, area, excludeKpi);
@@ -2488,12 +2505,15 @@ function toggleGroupedDrill(seriesBase, clickedRow) {
   const adrVs = fmtVsLine(aggAdr, yoyAgg.adr || null, momAgg.adr || null);
   const revparVs = fmtVsLine(aggRevpar, yoyAgg.revpar || null, momAgg.revpar || null);
 
-  // 予約Window (lead time)
+  // 予約Window (lead time) — チェックイン月が選択期間内の予約のみ
   const seriesPropNames = new Set(seriesProps.map(p => p.name));
-  const seriesResv = reservations.filter(r =>
-    seriesPropNames.has(r.propCode) || seriesPropNames.has(r.property) ||
-    seriesProps.some(p => r.property === p.propName)
-  ).filter(r => r.status !== 'キャンセル' && r.status !== 'システムキャンセル' && r.date && r.checkin);
+  const grpMonthSet = new Set(months);
+  const seriesResv = reservations.filter(r => {
+    if (r.status === 'キャンセル' || r.status === 'システムキャンセル' || !r.date || !r.checkin) return false;
+    if (!seriesPropNames.has(r.propCode) && !seriesPropNames.has(r.property) && !seriesProps.some(p => r.property === p.propName)) return false;
+    const ciYm = r.checkin.slice(0, 7);
+    return grpMonthSet.has(ciYm);
+  });
   let avgLeadTime = null;
   if (seriesResv.length > 0) {
     const totalLead = seriesResv.reduce((sum, r) => {
@@ -2523,6 +2543,12 @@ function toggleGroupedDrill(seriesBase, clickedRow) {
 
   drillCell.innerHTML = `<div class="drill-down show">
     <h3>${seriesBase} シリーズ <span style="font-size:13px;color:#666;font-weight:400;">(${ownerName} / ${areaName} / ${seriesProps.length}室)</span></h3>
+    <div class="filter-pills" style="margin-bottom:16px;">
+      <span class="pill${grpPeriod === 'thisMonth' ? ' active' : ''}" data-period="thisMonth" onclick="setGrpDrillPeriod(this)">今月</span>
+      <span class="pill${grpPeriod === 'lastMonth' ? ' active' : ''}" data-period="lastMonth" onclick="setGrpDrillPeriod(this)">前月</span>
+      <span class="pill${grpPeriod === 'last3Month' ? ' active' : ''}" data-period="last3Month" onclick="setGrpDrillPeriod(this)">3ヶ月前</span>
+      <span class="pill${grpPeriod === 'lastYear' ? ' active' : ''}" data-period="lastYear" onclick="setGrpDrillPeriod(this)">前年</span>
+    </div>
     <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:16px;">
       <div class="kpi-card"><div class="label">総販売額</div><div class="value">${fmtYen(totalSales)}</div><div class="sub">${salesVs}</div></div>
       <div class="kpi-card"><div class="label">OCC</div><div class="value">${fmtPct(aggOcc)}</div><div class="sub">${occVs}</div></div>
