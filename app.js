@@ -3772,6 +3772,7 @@ let _watchlistCounts = { newCount: 0, watchCount: 0 };
 
 function renderWatchlistTab() {
   if (!document.getElementById('tab-watchlist')) return;
+  _activeWatchlistDetail = null;
 
   // 新着物件
   const newProps = properties.filter(p => isNewProperty(p) && p.status === '稼働中' && !p.excludeKpi);
@@ -3820,7 +3821,7 @@ function renderWatchlistTab() {
         const bkPill = bkCount > 0
           ? `<span class="badge-green" style="margin-left:6px;">直近7日 ${bkCount}件予約</span>`
           : `<span class="badge-orange" style="margin-left:6px;">直近7日 0件</span>`;
-        return `<div class="watchlist-card">
+        return `<div class="watchlist-card clickable" onclick="toggleWatchlistDetail('${p.name}', event)">
           <div class="watchlist-card-header">
             <div class="watchlist-card-title">${p.name}</div>
             <div><span class="badge-blue">🆕 新着 ${months !== null ? months + 'ヶ月目' : ''}</span>${bkPill}</div>
@@ -3849,7 +3850,7 @@ function renderWatchlistTab() {
           const pctColor = sales.pct < WATCHLIST_SALES_RED ? '#ff3b30' : (sales.pct < WATCHLIST_SALES_YELLOW ? '#ff9500' : '#34c759');
           salesLine = `<div style="font-size:12px;margin:6px 0 4px;">当月売上達成率: <strong style="color:${pctColor};">${sales.pct.toFixed(0)}%</strong> <span style="color:#999;">(${fmtYen(sales.actual)} / 想定 ${fmtYen(sales.proratedTarget)})</span></div>`;
         }
-        return `<div class="watchlist-card">
+        return `<div class="watchlist-card clickable" onclick="toggleWatchlistDetail('${prop.name}', event)">
           <div class="watchlist-card-header">
             <div class="watchlist-card-title">${prop.name}</div>
             <div>${badges}</div>
@@ -3872,6 +3873,45 @@ function renderWatchlistTab() {
       badge.innerHTML = `⚠️ 要チェック: <strong>${watchProps.length}件</strong> &nbsp;|&nbsp; 🆕 新着: <strong>${newProps.length}件</strong> &nbsp; <a href="#" onclick="switchTab('watchlist');return false;" style="color:#007aff;text-decoration:none;font-weight:600;">→ タブを開く</a>`;
     }
   }
+}
+
+let _activeWatchlistDetail = null;
+
+function toggleWatchlistDetail(propertyName, event) {
+  // 詳細パネル内のクリックは無視
+  if (event.target.closest('#wl-detail-panel')) return;
+
+  // 既存の詳細パネルを削除
+  const existing = document.getElementById('wl-detail-panel');
+  if (existing) {
+    destroyDrillCharts('wl');
+    existing.remove();
+  }
+
+  // 同じ物件をクリック → 閉じる
+  if (_activeWatchlistDetail === propertyName) {
+    _activeWatchlistDetail = null;
+    return;
+  }
+  _activeWatchlistDetail = propertyName;
+
+  // クリックされたカードのすぐ下に詳細パネルを挿入
+  const card = event.target.closest('.watchlist-card');
+  if (!card) return;
+  const panel = document.createElement('div');
+  panel.id = 'wl-detail-panel';
+  panel.className = 'card';
+  panel.style.cssText = 'margin-top:8px; grid-column: 1 / -1;';
+  card.insertAdjacentElement('afterend', panel);
+
+  // renderPropertyDetail が期間ピルで #wlDetailContainer を参照するのでラッパーを用意
+  const inner = document.createElement('div');
+  inner.id = 'wlDetailContainer';
+  panel.appendChild(inner);
+
+  currentFilters.propDetailPeriod = 'thisMonth';
+  renderPropertyDetail(inner, propertyName, 'wl');
+  panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
 function initWatchlistCharts() {

@@ -36,7 +36,8 @@
     .alert-orphan ul { margin: 4px 0 0 0; padding-left: 18px; color: #666; }
     .alert-orphan li { margin: 2px 0; }
     .watchlist-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; }
-    .watchlist-card { background: #fafafa; border: 1px solid #eee; border-radius: 10px; padding: 14px; }
+    .watchlist-card { background: #fafafa; border: 1px solid #eee; border-radius: 10px; padding: 14px; cursor: pointer; transition: box-shadow 0.15s, border-color 0.15s; }
+    .watchlist-card:hover { border-color: #007aff; box-shadow: 0 2px 8px rgba(0,122,255,0.1); }
     .watchlist-card-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; margin-bottom: 4px; flex-wrap: wrap; }
     .watchlist-card-title { font-size: 14px; font-weight: 600; color: #1d1d1f; }
     .watchlist-card-meta { font-size: 11px; color: #999; margin-bottom: 10px; }
