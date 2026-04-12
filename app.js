@@ -155,6 +155,7 @@ let currentFilters = {
   revenueType: '全体',
   revenueLayout: '全体',
   revenueSqm: '全体',
+  propDetailPeriod: 'thisMonth',
 };
 
 // ============================================================
@@ -549,6 +550,25 @@ function getSelectedMonth(tabId) {
   return months[months.length - 1];
 }
 
+function getSelectedMonths_custom(period) {
+  const now = new Date();
+  const thisYm = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0');
+  if (period === 'thisMonth') return [thisYm];
+  if (period === 'lastMonth') {
+    const d = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    return [d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0')];
+  }
+  if (period === 'last3Month') {
+    const d = new Date(now.getFullYear(), now.getMonth() - 3, 1);
+    return [d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0')];
+  }
+  if (period === 'lastYear') {
+    const d = new Date(now.getFullYear() - 1, now.getMonth(), 1);
+    return [d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0')];
+  }
+  return [thisYm];
+}
+
 function getDaysInMonth(ym) {
   const [y, m] = ym.split('-').map(Number);
   return new Date(y, m, 0).getDate();
@@ -928,6 +948,12 @@ function setPeriodFilter(el, tabId) {
   currentFilters[tabId + 'Period'] = el.dataset.period;
   renderAll();
   setTimeout(() => initChartsForTab(tabId), 50);
+}
+
+function setPropDetailPeriod(el, containerSelector, propertyName, prefix) {
+  currentFilters.propDetailPeriod = el.dataset.period;
+  const container = document.querySelector(containerSelector);
+  if (container) renderPropertyDetail(container, propertyName, prefix);
 }
 
 // ============================================================
@@ -1827,7 +1853,10 @@ function renderPropertyDetail(container, propertyName, prefix) {
   const prop = findPropByName(propertyName);
   if (!prop) return;
 
-  const ym = getSelectedMonth('property');
+  // Use propDetailPeriod for month selection
+  const detailPeriod = currentFilters.propDetailPeriod || 'thisMonth';
+  const detailMonths = getSelectedMonths_custom(detailPeriod);
+  const ym = detailMonths[detailMonths.length - 1];
 
   // Get reservations for this property
   const propObj = prop;
@@ -1836,13 +1865,39 @@ function renderPropertyDetail(container, propertyName, prefix) {
   let resvRows = propResv.map(r => `<tr><td>${(r.date || '').slice(0, 10)}</td><td>${r.channel}</td><td>${r.guest}</td><td>${r.checkin}</td><td>${r.checkout}</td><td>${r.nights}泊</td><td>${fmtYenFull(r.sales)}</td><td>${r.status}</td></tr>`).join('');
   if (!resvRows) resvRows = '<tr><td colspan="8" style="color:#999;text-align:center;">データなし</td></tr>';
 
-  // KPI: current, YoY, MoM
-  const curStats = computePropertyStats(propertyName, ym);
-  const [ymY, ymM] = ym.split('-').map(Number);
-  const momYm = `${ymM === 1 ? ymY - 1 : ymY}-${String(ymM === 1 ? 12 : ymM - 1).padStart(2, '0')}`;
-  const yoyYm = `${ymY - 1}-${String(ymM).padStart(2, '0')}`;
-  const momStats = computePropertyStats(propertyName, momYm);
-  const yoyStats = computePropertyStats(propertyName, yoyYm);
+  // KPI: aggregate across selected months
+  function aggPropStats(propName, months) {
+    let totalSales = 0, totalOccDays = 0, totalDays = 0, totalRevenue = 0, count = 0;
+    months.forEach(m => {
+      const s = computePropertyStats(propName, m);
+      if (s) {
+        totalSales += s.sales;
+        totalOccDays += s.occ * getDaysInMonth(m);
+        totalDays += getDaysInMonth(m);
+        totalRevenue += s.adr * s.occ * getDaysInMonth(m);
+        count++;
+      } else {
+        totalDays += getDaysInMonth(m);
+      }
+    });
+    if (!totalDays) return null;
+    const occ = totalOccDays / totalDays;
+    const adr = totalOccDays > 0 ? totalSales / totalOccDays : 0;
+    const revpar = totalSales / totalDays;
+    return { sales: totalSales, occ, adr, revpar };
+  }
+
+  const curStats = aggPropStats(propertyName, detailMonths);
+  // YoY: shift each month by -1 year
+  const yoyMonths = detailMonths.map(m => { const [y, mo] = m.split('-'); return `${Number(y) - 1}-${mo}`; });
+  // MoM: shift each month by -1 month
+  const momMonths = detailMonths.map(m => {
+    const [y, mo] = m.split('-').map(Number);
+    const d = new Date(y, mo - 2, 1);
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+  });
+  const yoyStats = aggPropStats(propertyName, yoyMonths);
+  const momStats = aggPropStats(propertyName, momMonths);
 
   const cOcc = curStats ? curStats.occ : 0;
   const cAdr = curStats ? curStats.adr : 0;
@@ -1874,10 +1929,21 @@ function renderPropertyDetail(container, propertyName, prefix) {
     <div class="kpi-card"><div class="label">予約Window</div><div class="value">${avgLeadTime !== null ? avgLeadTime + '日' : '-'}</div><div class="sub">予約〜チェックイン平均</div></div>
   </div>`;
 
+  // Period pills for detail view
+  const dp = currentFilters.propDetailPeriod || 'thisMonth';
+  const periodPillsHtml = `<div class="filter-pills" style="margin-bottom:16px;" id="${prefix}DetailPeriodPills">
+    <span class="pill${dp === 'thisMonth' ? ' active' : ''}" data-period="thisMonth" onclick="setPropDetailPeriod(this,'#${prefix}DetailContainer','${propertyName}','${prefix}')">今月</span>
+    <span class="pill${dp === 'lastMonth' ? ' active' : ''}" data-period="lastMonth" onclick="setPropDetailPeriod(this,'#${prefix}DetailContainer','${propertyName}','${prefix}')">前月</span>
+    <span class="pill${dp === 'last3Month' ? ' active' : ''}" data-period="last3Month" onclick="setPropDetailPeriod(this,'#${prefix}DetailContainer','${propertyName}','${prefix}')">3ヶ月前</span>
+    <span class="pill${dp === 'lastYear' ? ' active' : ''}" data-period="lastYear" onclick="setPropDetailPeriod(this,'#${prefix}DetailContainer','${propertyName}','${prefix}')">前年</span>
+  </div>`;
+
   destroyDrillCharts(prefix);
 
+  container.id = prefix + 'DetailContainer';
   container.innerHTML = `<div class="drill-down show" style="margin-top:12px;">
     <h3>${prop.name} <span style="font-size:13px;color:#666;font-weight:400;">(${prop.ownerName} / ${prop.area})</span></h3>
+    ${periodPillsHtml}
     ${kpiHtml}
     <div class="chart-grid">
       <div class="card"><h2>月別 販売金額/OCC推移</h2><canvas id="${prefix}ChartSalesOcc"></canvas></div>
