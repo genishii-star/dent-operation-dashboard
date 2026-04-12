@@ -4352,7 +4352,7 @@ function renderShinpouTab() {
       statusBadge = 'badge-red';
       barClass = 'progress-red';
       overCount++;
-    } else if (pct >= 95) {
+    } else if (pct >= 90) {
       status = '残りわずか';
       statusBadge = 'badge-orange';
       barClass = 'progress-orange';
