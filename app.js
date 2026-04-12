@@ -248,12 +248,13 @@ async function fetchAndUpdate() {
   const detail = document.getElementById('loading-detail');
   if (detail) detail.textContent = '最新データを取得中...';
 
-  const [resv, daily, propMaster, ownMaster, seasMaster] = await Promise.all([
+  const [resv, daily, propMaster, ownMaster, seasMaster, settingsRaw] = await Promise.all([
     fetchSheet('予約データ'),
     fetchSheet('日次データ'),
     fetchSheet('物件マスタ'),
     fetchSheet('オーナーマスタ'),
     fetchSheet('シーズンマスタ'),
+    fetchSheet('設定').catch(() => []),
   ]);
 
   rawReservations = resv;
@@ -261,6 +262,15 @@ async function fetchAndUpdate() {
   propertyMaster = propMaster;
   ownerMaster = ownMaster;
   seasonMaster = seasMaster;
+
+  // 最終同期タイムスタンプ（設定シートのヘッダー: 最終同期 | タイムスタンプ値）
+  if (settingsRaw.length > 0) {
+    // ヘッダーが「最終同期」の列の値を取得
+    const first = settingsRaw[0];
+    const syncTs = Object.values(first)[0] || '';
+    const el = document.getElementById('lastSynced');
+    if (el && syncTs) el.textContent = '最終同期: ' + syncTs;
+  }
 
   processData();
   renderAll();
