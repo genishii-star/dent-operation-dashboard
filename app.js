@@ -45,6 +45,46 @@ const CHART_COLORS = {
 };
 const PALETTE = Object.values(CHART_COLORS);
 
+// 販売金額/OCC/ADRチャート共通のツールチップフォーマッター
+const salesChartTooltip = { callbacks: { label: ctx => { const v = ctx.parsed.y; const lbl = ctx.dataset.label || ''; if (lbl.includes('OCC')) return lbl + ': ' + v.toFixed(1) + '%'; return lbl + ': ¥' + Math.round(v).toLocaleString(); } } };
+
+// 日本の祝日（年ごとに月-日 → 祝日名）
+function getJapaneseHolidays(year) {
+  const fixed = [
+    [1,1,'元日'],[2,11,'建国記念の日'],[2,23,'天皇誕生日'],
+    [4,29,'昭和の日'],[5,3,'憲法記念日'],[5,4,'みどりの日'],[5,5,'こどもの日'],
+    [8,11,'山の日'],[11,3,'文化の日'],[11,23,'勤労感謝の日'],
+  ];
+  const holidays = {};
+  fixed.forEach(([m, d, name]) => { holidays[`${m}-${d}`] = name; });
+  // 成人の日（1月第2月曜）
+  const monday2nd = (m) => { let d = new Date(year, m - 1, 1); const dow = d.getDay(); const first = dow === 1 ? 1 : (8 - dow) % 7 + 1; return first + 7; };
+  holidays[`1-${monday2nd(1)}`] = '成人の日';
+  // 海の日（7月第3月曜）
+  const monday3rd = (m) => { let d = new Date(year, m - 1, 1); const dow = d.getDay(); const first = dow === 1 ? 1 : (8 - dow) % 7 + 1; return first + 14; };
+  holidays[`7-${monday3rd(7)}`] = '海の日';
+  // 敬老の日（9月第3月曜）
+  holidays[`9-${monday3rd(9)}`] = '敬老の日';
+  // スポーツの日（10月第2月曜）
+  holidays[`10-${monday2nd(10)}`] = 'スポーツの日';
+  // 春分の日・秋分の日（近似計算）
+  const shunbun = Math.floor(20.8431 + 0.242194 * (year - 1980) - Math.floor((year - 1980) / 4));
+  holidays[`3-${shunbun}`] = '春分の日';
+  const shubun = Math.floor(23.2488 + 0.242194 * (year - 1980) - Math.floor((year - 1980) / 4));
+  holidays[`9-${shubun}`] = '秋分の日';
+  // 振替休日: 祝日が日曜なら翌月曜
+  Object.keys(holidays).forEach(key => {
+    const [m, d] = key.split('-').map(Number);
+    const dt = new Date(year, m - 1, d);
+    if (dt.getDay() === 0) {
+      let sub = new Date(dt); sub.setDate(sub.getDate() + 1);
+      const subKey = `${sub.getMonth() + 1}-${sub.getDate()}`;
+      if (!holidays[subKey]) holidays[subKey] = '振替休日';
+    }
+  });
+  return holidays;
+}
+
 const SHEET_ID = '1C7EiYSz-3ohjTy3Ul5zdgqL8cDk24jPj3ySTsAcOPhA';
 const SHEET_GID_PROPERTY_MASTER = '416395562';
 const SHEET_GID_OWNER_MASTER = '907386098';
@@ -738,10 +778,18 @@ function computePropertyStats(propName, ym) {
   const daysInMonth = getDaysInMonth(ym);
   const totalAvailableDays = daysInMonth * (prop.rooms || 1);
 
-  // 日次データ: 過去〜今日分の実績（インデックス使用）
+  // 日次データ: 過去〜今日分の実績のみ信頼（未来分は予約データで補完するため除外）
+  const today = new Date().toISOString().split('T')[0];
   const propDaily = (window._dailyByPropYm[propName + '|' + ym] || []).filter(d => {
     const status = d['状態'] || '';
-    return status !== 'システムキャンセル';
+    if (status === 'システムキャンセル' || status === 'ブロックされた') return false;
+    const date = normalizeDate(d['日付']);
+    if (date > today) return false; // 未来分は予約データで補完
+    // クリーニング代のみの行を除外（チェックアウト日に清掃料だけ計上される）
+    const cleaningFee = parseNum(d['清掃料']);
+    const sales = parseNum(d['売上合計']);
+    if (cleaningFee > 0 && Math.abs(sales - cleaningFee) < 1) return false;
+    return true;
   });
 
   // 日次データに含まれる日付のセット（重複防止用 + ユニーク日数カウント）
@@ -756,7 +804,6 @@ function computePropertyStats(propName, ym) {
   let totalReceived = propDaily.reduce((s, d) => s + parseNum(d['受取金合計']), 0);
 
   // 予約データ: 日次データにない未来分の確定予約を補完
-  const today = new Date().toISOString().split('T')[0];
   const [ymY, ymM] = ym.split('-').map(Number);
   const monthStart = ym + '-01';
   const monthEnd = ym + '-' + String(daysInMonth).padStart(2, '0');
@@ -764,11 +811,9 @@ function computePropertyStats(propName, ym) {
   // 予約データから未来分を追加（インデックス使用）
   const _resvCandidates = new Set();
   (window._resvByProp[propName] || []).forEach(r => _resvCandidates.add(r));
-  if (prop.propName && prop.propName !== propName) {
-    (window._resvByProp[prop.propName] || []).forEach(r => _resvCandidates.add(r));
-  }
   const propReservations = [..._resvCandidates].filter(r => {
-    return r.status !== 'キャンセル' && r.status !== 'システムキャンセル';
+    if (r.status === 'キャンセル' || r.status === 'システムキャンセル' || r.status === 'ブロックされた') return false;
+    return r.propCode === propName || r.property === propName;
   });
 
   let futureNights = 0;
@@ -789,9 +834,10 @@ function computePropertyStats(propName, ym) {
       }
     }
     futureNights += monthNights;
-    // 売上・受取金を月内泊数で按分
+    // 売上・受取金を月内泊数で按分（清掃料を除外）
     if (monthNights > 0 && r.nights > 0) {
-      futureSales += (r.sales || 0) * (monthNights / r.nights);
+      const netSales = (r.sales || 0) - (r.cleaningFee || 0);
+      futureSales += netSales * (monthNights / r.nights);
       futureReceived += (r.received || 0) * (monthNights / r.nights);
     }
   });
@@ -1615,9 +1661,9 @@ function renderOwnerDetailCharts(ownerProps, ownerResvAll, prefix) {
       const avail = days * totalRooms;
       const occ = avail > 0 ? (mNights / avail) * 100 : 0;
       const adr = mNights > 0 ? mSales / mNights : 0;
-      occData.push(occ);
-      adrData.push(adr);
-      salesData.push(mSales);
+      occData.push(Math.round(occ * 10) / 10);
+      adrData.push(Math.round(adr));
+      salesData.push(Math.round(mSales));
       // 目標売上もオーナー全物件合算
       targetData.push(ownerProps.reduce((s, p) => s + getTargetForProperty(p, m), 0));
     }
@@ -1648,7 +1694,7 @@ function renderOwnerDetailCharts(ownerProps, ownerResvAll, prefix) {
             { ...targetLineDataset }
           ]
         },
-        options: { responsive: true, animation: { duration: 600, easing: 'easeOutQuart' }, plugins: { legend: { display: true } }, scales: { x: { grid: { display: false } }, y: { position: 'left', beginAtZero: true, title: { display: true, text: '販売金額 (¥)', font: { size: 11 } }, ticks: { callback: v => '¥' + (v / 10000).toFixed(0) + '万' } }, y1: { position: 'right', min: 0, max: 110, grid: { drawOnChartArea: false }, title: { display: true, text: 'OCC (%)', font: { size: 11 } } } } }
+        options: { responsive: true, animation: { duration: 600, easing: 'easeOutQuart' }, plugins: { legend: { display: true }, tooltip: salesChartTooltip }, scales: { x: { grid: { display: false } }, y: { position: 'left', beginAtZero: true, title: { display: true, text: '販売金額 (¥)', font: { size: 11 } }, ticks: { callback: v => '¥' + (v / 10000).toFixed(0) + '万' } }, y1: { position: 'right', min: 0, max: 110, grid: { drawOnChartArea: false }, title: { display: true, text: 'OCC (%)', font: { size: 11 } } } } }
       });
     }
 
@@ -1665,7 +1711,7 @@ function renderOwnerDetailCharts(ownerProps, ownerResvAll, prefix) {
             { ...targetLineDataset }
           ]
         },
-        options: { responsive: true, animation: { duration: 600, easing: 'easeOutQuart' }, plugins: { legend: { display: true } }, scales: { x: { grid: { display: false } }, y: { position: 'left', beginAtZero: true, title: { display: true, text: '販売金額 (¥)', font: { size: 11 } }, ticks: { callback: v => '¥' + (v / 10000).toFixed(0) + '万' } }, y1: { position: 'right', beginAtZero: true, grid: { drawOnChartArea: false }, title: { display: true, text: 'ADR (¥)', font: { size: 11 } }, ticks: { callback: v => '¥' + v.toLocaleString() } } } }
+        options: { responsive: true, animation: { duration: 600, easing: 'easeOutQuart' }, plugins: { legend: { display: true }, tooltip: salesChartTooltip }, scales: { x: { grid: { display: false } }, y: { position: 'left', beginAtZero: true, title: { display: true, text: '販売金額 (¥)', font: { size: 11 } }, ticks: { callback: v => '¥' + (v / 10000).toFixed(0) + '万' } }, y1: { position: 'right', beginAtZero: true, grid: { drawOnChartArea: false }, title: { display: true, text: 'ADR (¥)', font: { size: 11 } }, ticks: { callback: v => '¥' + v.toLocaleString() } } } }
       });
     }
 
@@ -1860,30 +1906,27 @@ function renderPropertyDetail(container, propertyName, prefix) {
 
   // Get reservations for this property
   const propObj = prop;
-  const propResvAll = reservations.filter(r => r.propCode === propertyName || r.property === propertyName || (propObj && r.property === propObj.propName));
+  const propResvAll = reservations.filter(r => r.propCode === propertyName || r.property === propertyName);
   const propResv = propResvAll.slice(0, 10);
   let resvRows = propResv.map(r => `<tr><td>${(r.date || '').slice(0, 10)}</td><td>${r.channel}</td><td>${r.guest}</td><td>${r.checkin}</td><td>${r.checkout}</td><td>${r.nights}泊</td><td>${fmtYenFull(r.sales)}</td><td>${r.status}</td></tr>`).join('');
   if (!resvRows) resvRows = '<tr><td colspan="8" style="color:#999;text-align:center;">データなし</td></tr>';
 
   // KPI: aggregate across selected months
   function aggPropStats(propName, months) {
-    let totalSales = 0, totalOccDays = 0, totalDays = 0, totalRevenue = 0, count = 0;
+    let totalSales = 0, totalNights = 0, totalAvailable = 0;
     months.forEach(m => {
       const s = computePropertyStats(propName, m);
+      const avail = getDaysInMonth(m) * (prop.rooms || 1);
       if (s) {
         totalSales += s.sales;
-        totalOccDays += s.occ * getDaysInMonth(m);
-        totalDays += getDaysInMonth(m);
-        totalRevenue += s.adr * s.occ * getDaysInMonth(m);
-        count++;
-      } else {
-        totalDays += getDaysInMonth(m);
+        totalNights += s.nights;
       }
+      totalAvailable += avail;
     });
-    if (!totalDays) return null;
-    const occ = totalOccDays / totalDays;
-    const adr = totalOccDays > 0 ? totalSales / totalOccDays : 0;
-    const revpar = totalSales / totalDays;
+    if (!totalAvailable) return null;
+    const occ = (totalNights / totalAvailable) * 100;
+    const adr = totalNights > 0 ? totalSales / totalNights : 0;
+    const revpar = adr * (occ / 100);
     return { sales: totalSales, occ, adr, revpar };
   }
 
@@ -1912,7 +1955,7 @@ function renderPropertyDetail(container, propertyName, prefix) {
   // Booking window (lead time): average days between booking date and check-in date
   const detailMonthSet = new Set(detailMonths);
   const activeResv = propResvAll.filter(r => {
-    if (r.status === 'キャンセル' || r.status === 'システムキャンセル' || !r.date || !r.checkin) return false;
+    if (r.status === 'キャンセル' || r.status === 'システムキャンセル' || r.status === 'ブロックされた' || !r.date || !r.checkin) return false;
     const ciYm = r.checkin.slice(0, 7);
     return detailMonthSet.has(ciYm);
   });
@@ -1994,9 +2037,9 @@ function renderPropertyDetail(container, propertyName, prefix) {
       const mym = `${y}-${String(m).padStart(2, '0')}`;
       monthLabels.push(`${m}月`);
       const stats = computePropertyStats(propertyName, mym);
-      occData.push(stats ? stats.occ : 0);
-      adrData.push(stats ? stats.adr : 0);
-      salesData.push(stats ? stats.sales : 0);
+      occData.push(stats ? Math.round(stats.occ * 10) / 10 : 0);
+      adrData.push(stats ? Math.round(stats.adr) : 0);
+      salesData.push(stats ? Math.round(stats.sales) : 0);
       targetData.push(getTargetForProperty(prop, m));
     }
     const targetLineDataset = {
@@ -2035,7 +2078,7 @@ function renderPropertyDetail(container, propertyName, prefix) {
             { ...targetLineDataset }
           ]
         },
-        options: { responsive: true, animation: { duration: 600, easing: 'easeOutQuart' }, plugins: { legend: { display: true } }, scales: { x: { grid: { display: false } }, y: { position: 'left', beginAtZero: true, title: { display: true, text: '販売金額 (¥)', font: { size: 11 } }, ticks: { callback: v => '¥' + (v/10000).toFixed(0) + '万' } }, y1: { position: 'right', min: 0, max: 110, grid: { drawOnChartArea: false }, title: { display: true, text: 'OCC (%)', font: { size: 11 } } } } }
+        options: { responsive: true, animation: { duration: 600, easing: 'easeOutQuart' }, plugins: { legend: { display: true }, tooltip: { callbacks: { label: ctx => { const v = ctx.parsed.y; if (ctx.dataset.yAxisID === 'y1') return ctx.dataset.label + ': ' + v.toFixed(1) + '%'; return ctx.dataset.label + ': ¥' + Math.round(v).toLocaleString(); } } } }, scales: { x: { grid: { display: false } }, y: { position: 'left', beginAtZero: true, title: { display: true, text: '販売金額 (¥)', font: { size: 11 } }, ticks: { callback: v => '¥' + (v/10000).toFixed(0) + '万' } }, y1: { position: 'right', min: 0, max: 110, grid: { drawOnChartArea: false }, title: { display: true, text: 'OCC (%)', font: { size: 11 } } } } }
       });
     }
 
@@ -2052,7 +2095,7 @@ function renderPropertyDetail(container, propertyName, prefix) {
             { ...targetLineDataset }
           ]
         },
-        options: { responsive: true, animation: { duration: 600, easing: 'easeOutQuart' }, plugins: { legend: { display: true } }, scales: { x: { grid: { display: false } }, y: { position: 'left', beginAtZero: true, title: { display: true, text: '販売金額 (¥)', font: { size: 11 } }, ticks: { callback: v => '¥' + (v/10000).toFixed(0) + '万' } }, y1: { position: 'right', beginAtZero: true, grid: { drawOnChartArea: false }, title: { display: true, text: 'ADR (¥)', font: { size: 11 } }, ticks: { callback: v => '¥' + v.toLocaleString() } } } }
+        options: { responsive: true, animation: { duration: 600, easing: 'easeOutQuart' }, plugins: { legend: { display: true }, tooltip: { callbacks: { label: ctx => { const v = ctx.parsed.y; if (ctx.dataset.yAxisID === 'y1') return ctx.dataset.label + ': ¥' + Math.round(v).toLocaleString(); return ctx.dataset.label + ': ¥' + Math.round(v).toLocaleString(); } } } }, scales: { x: { grid: { display: false } }, y: { position: 'left', beginAtZero: true, title: { display: true, text: '販売金額 (¥)', font: { size: 11 } }, ticks: { callback: v => '¥' + (v/10000).toFixed(0) + '万' } }, y1: { position: 'right', beginAtZero: true, grid: { drawOnChartArea: false }, title: { display: true, text: 'ADR (¥)', font: { size: 11 } }, ticks: { callback: v => '¥' + v.toLocaleString() } } } }
       });
     }
 
@@ -2200,14 +2243,18 @@ function renderPropertyCalendar(prefix, propertyName, offsetMonth) {
     const dailyMap = {};
     const coveredDates = new Set();
 
-    // 1) 日次データ（実績）
+    // 1) 日次データ（過去〜今日の実績のみ。未来分は予約データで補完）
     rawDailyData.forEach(d => {
       const date = normalizeDate(d['日付']);
+      if (date > today) return; // 未来の日次データは信頼しない
       const code = generatePropCode(d['物件名'] || '', d['ルーム番号'] || '');
       const status = d['状態'] || '';
-      if (code !== propName || getYearMonth(date) !== targetYm || status === 'システムキャンセル') return;
-      const day = parseInt(date.split('-')[2], 10);
+      if (code !== propName || getYearMonth(date) !== targetYm || status === 'システムキャンセル' || status === 'ブロックされた') return;
+      // クリーニング代のみの行を除外（チェックアウト日に清掃料だけ計上される）
+      const cleaningFee = parseNum(d['清掃料']);
       const sales = parseNum(d['売上合計']);
+      if (cleaningFee > 0 && Math.abs(sales - cleaningFee) < 1) return;
+      const day = parseInt(date.split('-')[2], 10);
       if (!dailyMap[day]) dailyMap[day] = { sales: 0, count: 0 };
       dailyMap[day].sales += sales;
       dailyMap[day].count += 1;
@@ -2216,12 +2263,13 @@ function renderPropertyCalendar(prefix, propertyName, offsetMonth) {
 
     // 2) 予約データから未来分を補完（日次データにない日のみ）
     const propResv = reservations.filter(r => {
-      if (r.status === 'キャンセル' || r.status === 'システムキャンセル') return false;
-      return r.propCode === propName || r.property === propName || (prop && r.property === prop.propName);
+      if (r.status === 'キャンセル' || r.status === 'システムキャンセル' || r.status === 'ブロックされた') return false;
+      return r.propCode === propName || r.property === propName;
     });
     propResv.forEach(r => {
       if (!r.checkin || !r.checkout || !r.nights || r.nights <= 0) return;
-      const dailyRate = Math.round((r.sales || 0) / r.nights);
+      const netSales = (r.sales || 0) - (r.cleaningFee || 0);
+      const dailyRate = Math.round(netSales / r.nights);
       const ci = new Date(r.checkin);
       const co = new Date(r.checkout);
       for (let d = new Date(ci); d < co; d.setDate(d.getDate() + 1)) {
@@ -2249,6 +2297,7 @@ function renderPropertyCalendar(prefix, propertyName, offsetMonth) {
   const daysInMonth = new Date(year, month, 0).getDate();
   const firstDow = new Date(year, month - 1, 1).getDay(); // 0=Sun
 
+  const holidays = getJapaneseHolidays(year);
   const dowLabels = ['日', '月', '火', '水', '木', '金', '土'];
   let html = '<div style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px;font-size:12px;">';
   // 曜日ヘッダー
@@ -2263,7 +2312,8 @@ function renderPropertyCalendar(prefix, propertyName, offsetMonth) {
     const thisAdr = thisYearAdr[day] || 0;
     const prevAdr = lastYearAdr[day] || 0;
     const dow = (firstDow + day - 1) % 7;
-    const dayColor = dow === 0 ? '#ff3b30' : dow === 6 ? '#007aff' : '#333';
+    const holidayName = holidays[`${month}-${day}`] || null;
+    const dayColor = (dow === 0 || holidayName) ? '#ff3b30' : dow === 6 ? '#007aff' : '#333';
 
     let diffHtml = '';
     if (thisAdr > 0 && prevAdr > 0) {
@@ -2278,7 +2328,7 @@ function renderPropertyCalendar(prefix, propertyName, offsetMonth) {
 
     const bgColor = thisAdr > 0 ? 'rgba(74,144,217,0.06)' : '#fafafa';
     html += `<div style="background:${bgColor};border-radius:6px;padding:4px 2px;text-align:center;min-height:60px;">
-      <div style="font-weight:600;color:${dayColor};margin-bottom:2px;">${day}</div>
+      <div style="font-weight:600;color:${dayColor};margin-bottom:2px;">${day}${holidayName ? `<span style="font-size:7px;font-weight:400;display:block;line-height:1;">${holidayName}</span>` : ''}</div>
       ${thisAdr > 0 ? `<div style="font-size:10px;color:#007aff;font-weight:600;">¥${thisAdr.toLocaleString()}</div>` : `<div style="font-size:10px;color:#ccc;">-</div>`}
       ${prevAdr > 0 ? `<div style="font-size:9px;color:#ff9500;">¥${prevAdr.toLocaleString()}</div>` : ''}
       ${diffHtml}
@@ -2509,7 +2559,7 @@ function toggleGroupedDrill(seriesBase, clickedRow, isRefresh) {
   const seriesPropNames = new Set(seriesProps.map(p => p.name));
   const grpMonthSet = new Set(months);
   const seriesResv = reservations.filter(r => {
-    if (r.status === 'キャンセル' || r.status === 'システムキャンセル' || !r.date || !r.checkin) return false;
+    if (r.status === 'キャンセル' || r.status === 'システムキャンセル' || r.status === 'ブロックされた' || !r.date || !r.checkin) return false;
     if (!seriesPropNames.has(r.propCode) && !seriesPropNames.has(r.property) && !seriesProps.some(p => r.property === p.propName)) return false;
     const ciYm = r.checkin.slice(0, 7);
     return grpMonthSet.has(ciYm);
@@ -2593,9 +2643,9 @@ function toggleGroupedDrill(seriesBase, clickedRow, isRefresh) {
       });
       const mOcc = mAvail > 0 ? (mNights / mAvail) * 100 : 0;
       const mAdr = mNights > 0 ? mSales / mNights : 0;
-      occData.push(mOcc);
-      adrData.push(mAdr);
-      salesData.push(mSales);
+      occData.push(Math.round(mOcc * 10) / 10);
+      adrData.push(Math.round(mAdr));
+      salesData.push(Math.round(mSales));
     }
     const currentIdx = 5;
 
@@ -2613,7 +2663,7 @@ function toggleGroupedDrill(seriesBase, clickedRow, isRefresh) {
           { type: 'line', label: 'OCC (%)', data: occData, borderColor: CHART_COLORS.blue, backgroundColor: 'rgba(74,144,217,0.08)', fill: true, yAxisID: 'y1', tension: 0.4, pointBorderColor: CHART_COLORS.blue },
           { type: 'bar', label: '販売金額', data: salesData, backgroundColor: blueBarColors, borderColor: barBorders, borderWidth: barBorderWidths, yAxisID: 'y' }
         ]},
-        options: { responsive: true, animation: { duration: 600, easing: 'easeOutQuart' }, plugins: { legend: { display: true } }, scales: { x: { grid: { display: false } }, y: { position: 'left', beginAtZero: true, title: { display: true, text: '販売金額 (¥)', font: { size: 11 } }, ticks: { callback: v => '¥' + (v/10000).toFixed(0) + '万' } }, y1: { position: 'right', min: 0, max: 110, grid: { drawOnChartArea: false }, title: { display: true, text: 'OCC (%)', font: { size: 11 } } } } }
+        options: { responsive: true, animation: { duration: 600, easing: 'easeOutQuart' }, plugins: { legend: { display: true }, tooltip: salesChartTooltip }, scales: { x: { grid: { display: false } }, y: { position: 'left', beginAtZero: true, title: { display: true, text: '販売金額 (¥)', font: { size: 11 } }, ticks: { callback: v => '¥' + (v/10000).toFixed(0) + '万' } }, y1: { position: 'right', min: 0, max: 110, grid: { drawOnChartArea: false }, title: { display: true, text: 'OCC (%)', font: { size: 11 } } } } }
       });
     }
 
@@ -2626,7 +2676,7 @@ function toggleGroupedDrill(seriesBase, clickedRow, isRefresh) {
           { type: 'line', label: 'ADR (¥)', data: adrData, borderColor: CHART_COLORS.orange, backgroundColor: 'rgba(245,166,35,0.08)', fill: true, yAxisID: 'y1', tension: 0.4, pointBorderColor: CHART_COLORS.orange },
           { type: 'bar', label: '販売金額', data: salesData, backgroundColor: orangeBarColors, borderColor: barBorders, borderWidth: barBorderWidths, yAxisID: 'y' }
         ]},
-        options: { responsive: true, animation: { duration: 600, easing: 'easeOutQuart' }, plugins: { legend: { display: true } }, scales: { x: { grid: { display: false } }, y: { position: 'left', beginAtZero: true, title: { display: true, text: '販売金額 (¥)', font: { size: 11 } }, ticks: { callback: v => '¥' + (v/10000).toFixed(0) + '万' } }, y1: { position: 'right', beginAtZero: true, grid: { drawOnChartArea: false }, title: { display: true, text: 'ADR (¥)', font: { size: 11 } }, ticks: { callback: v => '¥' + v.toLocaleString() } } } }
+        options: { responsive: true, animation: { duration: 600, easing: 'easeOutQuart' }, plugins: { legend: { display: true }, tooltip: salesChartTooltip }, scales: { x: { grid: { display: false } }, y: { position: 'left', beginAtZero: true, title: { display: true, text: '販売金額 (¥)', font: { size: 11 } }, ticks: { callback: v => '¥' + (v/10000).toFixed(0) + '万' } }, y1: { position: 'right', beginAtZero: true, grid: { drawOnChartArea: false }, title: { display: true, text: 'ADR (¥)', font: { size: 11 } }, ticks: { callback: v => '¥' + v.toLocaleString() } } } }
       });
     }
 
@@ -2663,7 +2713,7 @@ function toggleGroupedDrill(seriesBase, clickedRow, isRefresh) {
       const propObj = findPropByName(p.name);
       reservations.filter(r => {
         if (r.status === 'システムキャンセル') return false;
-        return r.propCode === p.name || r.property === p.name || (propObj && r.property === propObj.propName);
+        return r.propCode === p.name || r.property === p.name;
       }).forEach(r => {
         const nat = r.nationality || '不明';
         if (!grpNatAgg[nat]) grpNatAgg[nat] = { count: 0, sales: 0 };
@@ -2959,7 +3009,7 @@ function renderRevenueTab() {
   const calcRevWindowForMonths = (ms) => {
     const mSet = new Set(ms);
     const rvs = reservations.filter(r => {
-      if (r.status === 'キャンセル' || r.status === 'システムキャンセル') return false;
+      if (r.status === 'キャンセル' || r.status === 'システムキャンセル' || r.status === 'ブロックされた') return false;
       if (!r.date || !r.checkin) return false;
       if (!mSet.has(getYearMonth(r.checkin))) return false;
       const prop = findPropByReservation(r);
@@ -3394,7 +3444,7 @@ function initRevenueCharts() {
   const extra = getExtraFilters('revenue');
   const extraFilteredNames = new Set(filterPropertiesByArea(area, extra).map(p => p.name));
   const windowResv = reservations.filter(r => {
-    if (r.status === 'キャンセル' || r.status === 'システムキャンセル') return false;
+    if (r.status === 'キャンセル' || r.status === 'システムキャンセル' || r.status === 'ブロックされた') return false;
     if (!r.date || !r.checkin || !r.nights || r.nights <= 0) return false;
     if (!monthSet.has(getYearMonth(r.checkin))) return false;
     const prop = findPropByReservation(r);
@@ -3459,6 +3509,141 @@ function initRevenueCharts() {
         y1: { position: 'right', beginAtZero: true, grid: { drawOnChartArea: false }, title: { display: true, text: '平均売上 (¥)', font: { size: 11 } }, ticks: { callback: v => '¥' + (v/10000).toFixed(0) + '万' } },
       } }
     });
+  }
+
+  // ── OCC × ADR 4象限マトリクス ──
+  destroyChart('occAdrMatrix');
+  const overall = computeOverallStatsMulti(months, area, excludeKpi, extra);
+  const propStats = (overall.stats || []).filter(s => s.nights > 0);
+  const avgOcc = overall.occ;
+  const avgAdr = overall.adr;
+
+  // Quadrant classification
+  const QUADRANT_DEFS = [
+    { id: 'star',    label: '★ スター（高OCC × 高ADR）',     color: '#34C759', bg: '#34C75918', check: (o, a) => o >= avgOcc && a >= avgAdr },
+    { id: 'raise',   label: '↑ 値上げ余地（高OCC × 低ADR）', color: '#FF9500', bg: '#FF950018', check: (o, a) => o >= avgOcc && a < avgAdr },
+    { id: 'promo',   label: '↓ プロモ要（低OCC × 高ADR）',   color: '#5856D6', bg: '#5856D618', check: (o, a) => o < avgOcc && a >= avgAdr },
+    { id: 'problem', label: '⚠ 要改善（低OCC × 低ADR）',     color: '#FF3B30', bg: '#FF3B3018', check: (o, a) => o < avgOcc && a < avgAdr },
+  ];
+
+  const quadrants = { star: [], raise: [], promo: [], problem: [] };
+  propStats.forEach(s => {
+    const q = QUADRANT_DEFS.find(d => d.check(s.occ, s.adr));
+    if (q) quadrants[q.id].push(s);
+  });
+
+  // Area color mapping for scatter
+  const areaColorMap = { '大阪': CHART_COLORS.blue, '京都': CHART_COLORS.green, '東京': CHART_COLORS.orange, 'その他': CHART_COLORS.purple };
+  const maxSales = Math.max(...propStats.map(s => s.sales), 1);
+
+  const ctxMatrix = document.getElementById('chartOccAdrMatrix');
+  if (ctxMatrix && propStats.length > 0) {
+    // Group by area for legend
+    const areaGroups = {};
+    propStats.forEach(s => {
+      const prop = findPropByName(s.name);
+      const a = prop ? prop.area : 'その他';
+      if (!areaGroups[a]) areaGroups[a] = [];
+      areaGroups[a].push({ x: s.occ, y: Math.round(s.adr), r: Math.max(5, Math.sqrt(s.sales / maxSales) * 30), name: s.name, sales: s.sales, occ: s.occ, adr: s.adr });
+    });
+
+    const datasets = Object.entries(areaGroups).map(([a, pts]) => ({
+      label: a,
+      data: pts,
+      backgroundColor: (areaColorMap[a] || CHART_COLORS.purple) + '88',
+      borderColor: areaColorMap[a] || CHART_COLORS.purple,
+      borderWidth: 1.5,
+    }));
+
+    // Quadrant line plugin
+    const quadrantPlugin = {
+      id: 'quadrantLines',
+      beforeDraw(chart) {
+        const { ctx: c, chartArea: { left, right, top, bottom }, scales: { x, y } } = chart;
+        const xPx = x.getPixelForValue(avgOcc);
+        const yPx = y.getPixelForValue(avgAdr);
+        c.save();
+        c.setLineDash([6, 4]);
+        c.strokeStyle = '#86868b';
+        c.lineWidth = 1;
+        // Vertical line (avg OCC)
+        c.beginPath(); c.moveTo(xPx, top); c.lineTo(xPx, bottom); c.stroke();
+        // Horizontal line (avg ADR)
+        c.beginPath(); c.moveTo(left, yPx); c.lineTo(right, yPx); c.stroke();
+        c.setLineDash([]);
+        // Labels
+        c.font = '10px -apple-system, sans-serif';
+        c.fillStyle = '#86868b';
+        c.textAlign = 'center';
+        c.fillText('平均OCC ' + avgOcc.toFixed(1) + '%', xPx, bottom + 14);
+        c.save();
+        c.translate(left - 8, yPx);
+        c.rotate(-Math.PI / 2);
+        c.fillText('平均ADR ¥' + Math.round(avgAdr).toLocaleString(), 0, 0);
+        c.restore();
+        c.restore();
+      }
+    };
+
+    allCharts['occAdrMatrix'] = new Chart(ctxMatrix, {
+      type: 'bubble',
+      data: { datasets },
+      plugins: [quadrantPlugin],
+      options: {
+        responsive: true,
+        animation: { duration: 600, easing: 'easeOutQuart' },
+        plugins: {
+          legend: { position: 'top', labels: { font: { size: 11 }, padding: 16 } },
+          tooltip: {
+            callbacks: {
+              label: ctx => {
+                const d = ctx.raw;
+                return `${d.name}  OCC: ${d.occ.toFixed(1)}%  ADR: ¥${Math.round(d.adr).toLocaleString()}  売上: ${fmtYen(d.sales)}`;
+              }
+            }
+          }
+        },
+        scales: {
+          x: { title: { display: true, text: 'OCC（稼働率 %）', font: { size: 12 } }, min: 0, max: 100, ticks: { callback: v => v + '%' } },
+          y: { title: { display: true, text: 'ADR（平均客室単価 ¥）', font: { size: 12 } }, beginAtZero: true, ticks: { callback: v => '¥' + v.toLocaleString() } },
+        }
+      }
+    });
+  }
+
+  // Quadrant summary cards
+  const summaryEl = document.getElementById('occ-adr-quadrant-summary');
+  if (summaryEl) {
+    summaryEl.innerHTML = QUADRANT_DEFS.map(q => {
+      const items = quadrants[q.id];
+      const names = items.map(s => s.name).join(', ') || '-';
+      return `<div style="background:${q.bg};border:1px solid ${q.color}30;border-radius:8px;padding:10px 14px;">
+        <div style="font-weight:600;font-size:13px;color:${q.color};margin-bottom:4px;">${q.label}</div>
+        <div style="font-size:20px;font-weight:700;color:#1d1d1f;">${items.length}件</div>
+        <div style="font-size:11px;color:#86868b;margin-top:4px;line-height:1.4;word-break:break-all;">${names}</div>
+      </div>`;
+    }).join('');
+  }
+
+  // Quadrant detail table
+  const occAdrTable = document.getElementById('occ-adr-table');
+  if (occAdrTable) {
+    const labelMap = { star: '★ スター', raise: '↑ 値上げ余地', promo: '↓ プロモ要', problem: '⚠ 要改善' };
+    const colorMap = { star: '#34C759', raise: '#FF9500', promo: '#5856D6', problem: '#FF3B30' };
+    const sorted = propStats.slice().sort((a, b) => b.revpar - a.revpar);
+    occAdrTable.innerHTML = sorted.map(s => {
+      const prop = findPropByName(s.name);
+      const areaName = prop ? prop.area : '-';
+      const qId = QUADRANT_DEFS.find(d => d.check(s.occ, s.adr))?.id || 'problem';
+      return `<tr>
+        <td>${s.name}</td><td>${areaName}</td>
+        <td>${fmtPct(s.occ)}</td>
+        <td class="text-right">${fmtYenFull(Math.round(s.adr))}</td>
+        <td class="text-right">${fmtYenFull(Math.round(s.revpar))}</td>
+        <td class="text-right">${fmtYen(s.sales)}</td>
+        <td><span style="color:${colorMap[qId]};font-weight:600;font-size:12px;">${labelMap[qId]}</span></td>
+      </tr>`;
+    }).join('');
   }
 }
 
