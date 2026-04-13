@@ -567,6 +567,36 @@
     </div>
 
     <div class="card">
+      <h2>物件スコアカード</h2>
+      <p style="font-size:12px;color:#86868b;margin:-4px 0 12px;">目標達成（実績）× 先行ペース（30/60/90日OCC）で総合判定</p>
+      <div style="margin-bottom:12px;display:flex;flex-wrap:wrap;gap:16px;align-items:center;">
+        <div>
+          <label style="font-size:12px;font-weight:600;margin-right:6px;">表示</label>
+          <div class="filter-pills" id="scorecard-mode-pills" style="display:inline-flex;">
+            <span class="pill active" data-mode="all" onclick="setScorecardMode(this)">全物件</span>
+            <span class="pill" data-mode="grouped" onclick="setScorecardMode(this)">まとめ</span>
+          </div>
+        </div>
+        <div>
+          <label style="font-size:12px;font-weight:600;margin-right:6px;">日種</label>
+          <div class="filter-pills" id="scorecard-daytype-pills" style="display:inline-flex;">
+            <span class="pill active" data-daytype="total" onclick="setScorecardDayType(this)">全体</span>
+            <span class="pill" data-daytype="weekday" onclick="setScorecardDayType(this)">平日</span>
+            <span class="pill" data-daytype="holiday" onclick="setScorecardDayType(this)">休日</span>
+          </div>
+        </div>
+      </div>
+      <div id="prop-scorecard"></div>
+    </div>
+
+    <div class="card">
+      <h2>先行予約ペース（全物件横断）</h2>
+      <p style="font-size:12px;color:#86868b;margin:-4px 0 12px;">全物件合算の平日/休日別OCC・ADR。値上げ余地・プロモ要を自動判定</p>
+      <div id="pace-report-all"></div>
+      <div id="pace-report-by-prop"></div>
+    </div>
+
+    <div class="card">
       <h2>OCC × ADR 4象限マトリクス</h2>
       <p style="font-size:12px;color:#86868b;margin:-4px 0 12px;">各物件の稼働率とADRをプロット。バブルサイズ＝売上額。十字線＝全体平均</p>
       <canvas id="chartOccAdrMatrix" height="320"></canvas>

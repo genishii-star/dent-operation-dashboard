@@ -189,6 +189,8 @@ let currentFilters = {
   revenuePeriod: 'thisMonth',
   ownerProgressPeriod: 'thisMonth',
   propertyView: 'all',
+  scorecardMode: 'all',
+  scorecardDayType: 'total',
   propertyType: '全体',
   propertyLayout: '全体',
   propertySqm: '全体',
@@ -877,6 +879,269 @@ function computePropertyStats(propName, ym) {
   };
   _propStatsCache[cacheKey] = result;
   return result;
+}
+
+// 先行予約ペースレポート（平日/休日 × バケット別）
+// propNames: 物件コード配列, buckets: [{label, minDay, maxDay}]
+function computePaceReport(propNames, buckets) {
+  if (!buckets) buckets = [
+    { label: '0〜30日', minDay: 0, maxDay: 30 },
+    { label: '31〜60日', minDay: 31, maxDay: 60 },
+    { label: '61〜90日', minDay: 61, maxDay: 90 },
+  ];
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const todayStr = today.toISOString().split('T')[0];
+
+  // バケットごとの日付範囲を事前計算
+  const bucketRanges = buckets.map(b => {
+    const start = new Date(today); start.setDate(start.getDate() + b.minDay);
+    const end = new Date(today); end.setDate(end.getDate() + b.maxDay);
+    return { ...b, startStr: start.toISOString().split('T')[0], endStr: end.toISOString().split('T')[0] };
+  });
+
+  // 祝日キャッシュ（年をまたぐ可能性あり）
+  const holidayCache = {};
+  function getHolidays(y) { if (!holidayCache[y]) holidayCache[y] = getJapaneseHolidays(y); return holidayCache[y]; }
+
+  function isHolidayNight(date) {
+    const dow = date.getDay();
+    if (dow === 5 || dow === 6) return true; // 金・土泊
+    // 祝前日: 翌日が祝日
+    const next = new Date(date); next.setDate(next.getDate() + 1);
+    const hols = getHolidays(next.getFullYear());
+    if (hols[`${next.getMonth() + 1}-${next.getDate()}`]) return true;
+    return false;
+  }
+
+  // バケットごとに平日/休日のavailable日数をカウント
+  const propSet = new Set(propNames);
+  const totalRooms = propNames.reduce((s, pn) => { const p = findPropByName(pn); return s + (p ? (p.rooms || 1) : 1); }, 0);
+
+  const results = bucketRanges.map(br => {
+    let wdAvail = 0, hdAvail = 0;
+    for (let d = new Date(br.startStr); d <= new Date(br.endStr); d.setDate(d.getDate() + 1)) {
+      if (isHolidayNight(d)) { hdAvail += totalRooms; } else { wdAvail += totalRooms; }
+    }
+    return { ...br, wdAvail, hdAvail, wdNights: 0, hdNights: 0, wdSales: 0, hdSales: 0 };
+  });
+
+  // 予約データから未来の宿泊日を振り分け
+  const processedDates = new Set(); // propCode|date で重複防止
+  propNames.forEach(propName => {
+    const cands = new Set();
+    (window._resvByProp[propName] || []).forEach(r => cands.add(r));
+    [...cands].filter(r => {
+      if (r.status === 'キャンセル' || r.status === 'システムキャンセル' || r.status === 'ブロックされた') return false;
+      return r.propCode === propName || r.property === propName;
+    }).forEach(r => {
+      if (!r.checkin || !r.checkout || !r.nights || r.nights <= 0) return;
+      const netSales = (r.sales || 0) - (r.cleaningFee || 0);
+      const dailyRate = netSales / r.nights;
+      const ci = new Date(r.checkin);
+      const co = new Date(r.checkout);
+      for (let d = new Date(ci); d < co; d.setDate(d.getDate() + 1)) {
+        const ds = d.toISOString().split('T')[0];
+        if (ds <= todayStr) continue;
+        const dedupKey = propName + '|' + ds;
+        if (processedDates.has(dedupKey)) continue;
+        processedDates.add(dedupKey);
+        const isHol = isHolidayNight(d);
+        // どのバケットに入るか
+        const daysAhead = Math.floor((d - today) / 86400000);
+        const bucket = results.find(br => daysAhead >= br.minDay && daysAhead <= br.maxDay);
+        if (!bucket) continue;
+        if (isHol) { bucket.hdNights++; bucket.hdSales += dailyRate; }
+        else { bucket.wdNights++; bucket.wdSales += dailyRate; }
+      }
+    });
+  });
+
+  return results.map(br => ({
+    label: br.label,
+    weekday: {
+      occ: br.wdAvail > 0 ? (br.wdNights / br.wdAvail) * 100 : 0,
+      adr: br.wdNights > 0 ? Math.round(br.wdSales / br.wdNights) : 0,
+      nights: br.wdNights, avail: br.wdAvail,
+    },
+    holiday: {
+      occ: br.hdAvail > 0 ? (br.hdNights / br.hdAvail) * 100 : 0,
+      adr: br.hdNights > 0 ? Math.round(br.hdSales / br.hdNights) : 0,
+      nights: br.hdNights, avail: br.hdAvail,
+    },
+  }));
+}
+
+// ペースレポートHTML生成（物件詳細・全体横断の両方で使用）
+function renderPaceReportHtml(paceData, title) {
+  // 閾値: 休日OCC 85%超→値上げ余地, 平日OCC 30%未満→プロモ要（0-30日バケット）
+  const thresholds = [
+    { hdHigh: 85, wdLow: 30 },  // 0-30日
+    { hdHigh: 70, wdLow: 20 },  // 31-60日
+    { hdHigh: 40, wdLow: 10 },  // 61-90日
+  ];
+  function badge(occ, idx, isHoliday) {
+    const th = thresholds[idx] || thresholds[2];
+    if (isHoliday && occ >= th.hdHigh) return ' <span style="color:#ff9500;font-size:10px;font-weight:600;">値上げ余地</span>';
+    if (!isHoliday && occ > 0 && occ < th.wdLow) return ' <span style="color:#5856d6;font-size:10px;font-weight:600;">プロモ要</span>';
+    return '';
+  }
+
+  let html = `<div style="margin-bottom:20px;max-width:520px;">
+    <div style="font-size:13px;font-weight:600;color:#1d1d1f;margin-bottom:8px;">${title || '先行予約ペース'} <span style="font-size:11px;font-weight:400;color:#86868b;">（本日起点）</span></div>
+    <table style="width:100%;border-collapse:collapse;font-size:12px;table-layout:fixed;">
+      <thead><tr style="border-bottom:2px solid #e5e5ea;">
+        <th style="text-align:left;padding:5px 4px;color:#86868b;font-weight:500;width:22%;"></th>`;
+  paceData.forEach(b => { html += `<th style="text-align:center;padding:5px 4px;color:#86868b;font-weight:500;" colspan="1">${b.label}</th>`; });
+  html += `</tr></thead><tbody>`;
+
+  // 休日OCC行
+  html += `<tr style="border-bottom:1px solid #f0f0f0;"><td style="padding:5px 4px;font-weight:500;">休日 OCC</td>`;
+  paceData.forEach((b, i) => {
+    const v = b.holiday.occ;
+    const color = v >= (thresholds[i]||thresholds[2]).hdHigh ? '#ff9500' : '#1d1d1f';
+    html += `<td style="text-align:center;padding:5px 4px;font-weight:600;color:${color};">${fmtPct(v)}${badge(v, i, true)}</td>`;
+  });
+  html += `</tr>`;
+
+  // 平日OCC行
+  html += `<tr style="border-bottom:1px solid #f0f0f0;"><td style="padding:5px 4px;font-weight:500;">平日 OCC</td>`;
+  paceData.forEach((b, i) => {
+    const v = b.weekday.occ;
+    const color = v > 0 && v < (thresholds[i]||thresholds[2]).wdLow ? '#5856d6' : '#1d1d1f';
+    html += `<td style="text-align:center;padding:5px 4px;font-weight:600;color:${color};">${fmtPct(v)}${badge(v, i, false)}</td>`;
+  });
+  html += `</tr>`;
+
+  // 休日ADR行
+  html += `<tr style="border-bottom:1px solid #f0f0f0;"><td style="padding:5px 4px;font-weight:500;">休日 ADR</td>`;
+  paceData.forEach(b => { html += `<td style="text-align:center;padding:5px 4px;">${b.holiday.adr > 0 ? fmtYenFull(b.holiday.adr) : '-'}</td>`; });
+  html += `</tr>`;
+
+  // 平日ADR行
+  html += `<tr style="border-bottom:1px solid #f0f0f0;"><td style="padding:5px 4px;font-weight:500;">平日 ADR</td>`;
+  paceData.forEach(b => { html += `<td style="text-align:center;padding:5px 4px;">${b.weekday.adr > 0 ? fmtYenFull(b.weekday.adr) : '-'}</td>`; });
+  html += `</tr>`;
+
+  // 泊数行
+  html += `<tr><td style="padding:5px 4px;font-weight:500;">泊数</td>`;
+  paceData.forEach(b => {
+    const total = b.weekday.nights + b.holiday.nights;
+    const avail = b.weekday.avail + b.holiday.avail;
+    html += `<td style="text-align:center;padding:5px 4px;">${total}<span style="color:#86868b;font-size:10px;">/${avail}</span></td>`;
+  });
+  html += `</tr>`;
+
+  html += `</tbody></table></div>`;
+  return html;
+}
+
+// 平日/休日別のOCC・ADR・RevPAR を算出
+// 休日 = 金曜泊・土曜泊 + 祝前日泊、平日 = それ以外
+function computeWeekdayHolidayStats(propName, months) {
+  const prop = findPropByName(propName);
+  if (!prop) return null;
+  const rooms = prop.rooms || 1;
+
+  let wdNights = 0, wdSales = 0, wdAvail = 0;
+  let hdNights = 0, hdSales = 0, hdAvail = 0;
+
+  months.forEach(ym => {
+    const [y, m] = ym.split('-').map(Number);
+    const daysInMonth = getDaysInMonth(ym);
+    const holidays = getJapaneseHolidays(y);
+    // 翌月1日が祝日かチェック（月末が祝前日になる可能性）
+    const nextMonthHolidays = m === 12 ? getJapaneseHolidays(y + 1) : holidays;
+    const today = new Date().toISOString().split('T')[0];
+    const monthStart = ym + '-01';
+    const monthEnd = ym + '-' + String(daysInMonth).padStart(2, '0');
+
+    // 各日が休日泊かどうかを判定
+    function isHolidayNight(day) {
+      const dt = new Date(y, m - 1, day);
+      const dow = dt.getDay(); // 0=Sun
+      // 金曜泊(dow=5)・土曜泊(dow=6)
+      if (dow === 5 || dow === 6) return true;
+      // 祝前日泊: 翌日が祝日
+      const nextDay = day + 1;
+      if (nextDay <= daysInMonth) {
+        if (holidays[`${m}-${nextDay}`]) return true;
+      } else {
+        // 月末 → 翌月1日が祝日かチェック
+        const nm = m === 12 ? 1 : m + 1;
+        if (nextMonthHolidays[`${nm}-1`]) return true;
+      }
+      return false;
+    }
+
+    // 日ごとのavailableを平日/休日に振り分け
+    for (let day = 1; day <= daysInMonth; day++) {
+      if (isHolidayNight(day)) { hdAvail += rooms; } else { wdAvail += rooms; }
+    }
+
+    // 日次データから日別売上を取得（過去分）
+    const dailySales = {}; // day -> sales
+    const dailyDates = new Set();
+    const propDailyData = (window._dailyByPropYm[propName + '|' + ym] || []).filter(d => {
+      const status = d['状態'] || '';
+      if (status === 'システムキャンセル' || status === 'ブロックされた') return false;
+      const date = normalizeDate(d['日付']);
+      if (date > today) return false;
+      const cf = parseNum(d['清掃料']);
+      const sl = parseNum(d['売上合計']);
+      if (cf > 0 && Math.abs(sl - cf) < 1) return false;
+      return true;
+    });
+    propDailyData.forEach(d => {
+      const date = normalizeDate(d['日付']);
+      const day = parseInt(date.split('-')[2], 10);
+      const sales = parseNum(d['売上合計']);
+      if (!dailySales[day]) dailySales[day] = 0;
+      dailySales[day] += sales;
+      dailyDates.add(date);
+    });
+
+    // 予約データから未来分を補完
+    const _cands = new Set();
+    (window._resvByProp[propName] || []).forEach(r => _cands.add(r));
+    [..._cands].filter(r => {
+      if (r.status === 'キャンセル' || r.status === 'システムキャンセル' || r.status === 'ブロックされた') return false;
+      return r.propCode === propName || r.property === propName;
+    }).forEach(r => {
+      if (!r.checkin || !r.checkout || !r.nights || r.nights <= 0) return;
+      const netSales = (r.sales || 0) - (r.cleaningFee || 0);
+      const dailyRate = netSales / r.nights;
+      const ci = new Date(r.checkin);
+      const co = new Date(r.checkout);
+      for (let d = new Date(ci); d < co; d.setDate(d.getDate() + 1)) {
+        const ds = d.toISOString().split('T')[0];
+        if (ds < monthStart || ds > monthEnd || ds <= today || dailyDates.has(ds)) continue;
+        const day = d.getDate();
+        if (!dailySales[day]) dailySales[day] = 0;
+        dailySales[day] += dailyRate;
+        dailyDates.add(ds);
+      }
+    });
+
+    // 平日/休日に振り分け
+    dailyDates.forEach(ds => {
+      const day = parseInt(ds.split('-')[2], 10);
+      const s = dailySales[day] || 0;
+      if (isHolidayNight(day)) { hdNights++; hdSales += s; } else { wdNights++; wdSales += s; }
+    });
+  });
+
+  const wdOcc = wdAvail > 0 ? (wdNights / wdAvail) * 100 : 0;
+  const wdAdr = wdNights > 0 ? wdSales / wdNights : 0;
+  const wdRevpar = wdAdr * (wdOcc / 100);
+  const hdOcc = hdAvail > 0 ? (hdNights / hdAvail) * 100 : 0;
+  const hdAdr = hdNights > 0 ? hdSales / hdNights : 0;
+  const hdRevpar = hdAdr * (hdOcc / 100);
+
+  return {
+    weekday: { occ: wdOcc, adr: Math.round(wdAdr), revpar: Math.round(wdRevpar), nights: wdNights, avail: wdAvail },
+    holiday: { occ: hdOcc, adr: Math.round(hdAdr), revpar: Math.round(hdRevpar), nights: hdNights, avail: hdAvail },
+  };
 }
 
 function computeOverallStats(ym, areaFilter, excludeKpi) {
@@ -1885,6 +2150,42 @@ function togglePropertyDrill(propertyName, clickedRow) {
   drillRow.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
+// スコアカード表示モード切替
+function setScorecardMode(el) {
+  const pills = el.parentElement.querySelectorAll('.pill');
+  pills.forEach(p => p.classList.remove('active'));
+  el.classList.add('active');
+  currentFilters.scorecardMode = el.dataset.mode;
+  _scorecardCurrentProp = null;
+  initRevenueCharts();
+}
+function setScorecardDayType(el) {
+  const pills = el.parentElement.querySelectorAll('.pill');
+  pills.forEach(p => p.classList.remove('active'));
+  el.classList.add('active');
+  currentFilters.scorecardDayType = el.dataset.daytype;
+  _scorecardCurrentProp = null;
+  initRevenueCharts();
+}
+
+// スコアカードの物件クリック → ドリルダウン展開/閉じる
+let _scorecardCurrentProp = null;
+function toggleScorecardDetail(propertyName) {
+  const container = document.getElementById('scorecard-detail');
+  if (!container) return;
+  if (_scorecardCurrentProp === propertyName) {
+    // 同じ物件を再クリック → 閉じる
+    destroyDrillCharts('sc');
+    container.innerHTML = '';
+    _scorecardCurrentProp = null;
+    return;
+  }
+  _scorecardCurrentProp = propertyName;
+  currentFilters.propDetailPeriod = 'thisMonth';
+  renderPropertyDetail(container, propertyName, 'sc');
+  container.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
 function destroyDrillCharts(prefix) {
   if (chartInstances[prefix+'SalesOcc']) { chartInstances[prefix+'SalesOcc'].destroy(); delete chartInstances[prefix+'SalesOcc']; }
   if (chartInstances[prefix+'SalesAdr']) { chartInstances[prefix+'SalesAdr'].destroy(); delete chartInstances[prefix+'SalesAdr']; }
@@ -1977,6 +2278,60 @@ function renderPropertyDetail(container, propertyName, prefix) {
     <div class="kpi-card"><div class="label">予約Window</div><div class="value">${avgLeadTime !== null ? avgLeadTime + '日' : '-'}</div><div class="sub">予約〜チェックイン平均</div></div>
   </div>`;
 
+  // 平日/休日比較テーブル
+  const wdhdStats = computeWeekdayHolidayStats(propertyName, detailMonths);
+  let wdhdHtml = '';
+  if (wdhdStats) {
+    const wd = wdhdStats.weekday;
+    const hd = wdhdStats.holiday;
+    const occDiff = hd.occ - wd.occ;
+    const adrDiffPct = wd.adr > 0 ? ((hd.adr - wd.adr) / wd.adr * 100) : 0;
+    const revparDiffPct = wd.revpar > 0 ? ((hd.revpar - wd.revpar) / wd.revpar * 100) : 0;
+    const diffColor = v => v > 0 ? '#34c759' : v < 0 ? '#ff3b30' : '#999';
+    const diffSign = v => v > 0 ? '+' : '';
+    wdhdHtml = `<div style="margin-bottom:20px;max-width:520px;">
+      <div style="font-size:13px;font-weight:600;color:#1d1d1f;margin-bottom:8px;">平日 vs 休日 <span style="font-size:11px;font-weight:400;color:#86868b;">（休日＝金土泊＋祝前日泊）</span></div>
+      <table style="width:100%;border-collapse:collapse;font-size:12px;table-layout:fixed;">
+        <thead><tr style="border-bottom:2px solid #e5e5ea;">
+          <th style="text-align:left;padding:5px 4px;color:#86868b;font-weight:500;width:20%;"></th>
+          <th style="text-align:right;padding:5px 4px;color:#86868b;font-weight:500;width:28%;">平日</th>
+          <th style="text-align:right;padding:5px 4px;color:#86868b;font-weight:500;width:28%;">休日</th>
+          <th style="text-align:right;padding:5px 4px;color:#86868b;font-weight:500;width:24%;">差分</th>
+        </tr></thead>
+        <tbody>
+          <tr style="border-bottom:1px solid #f0f0f0;">
+            <td style="padding:5px 4px;font-weight:500;">OCC</td>
+            <td style="text-align:right;padding:5px 4px;">${fmtPct(wd.occ)}</td>
+            <td style="text-align:right;padding:5px 4px;font-weight:600;">${fmtPct(hd.occ)}</td>
+            <td style="text-align:right;padding:5px 4px;color:${diffColor(occDiff)};font-weight:600;">${diffSign(occDiff)}${occDiff.toFixed(1)}pt</td>
+          </tr>
+          <tr style="border-bottom:1px solid #f0f0f0;">
+            <td style="padding:5px 4px;font-weight:500;">ADR</td>
+            <td style="text-align:right;padding:5px 4px;">${fmtYenFull(wd.adr)}</td>
+            <td style="text-align:right;padding:5px 4px;font-weight:600;">${fmtYenFull(hd.adr)}</td>
+            <td style="text-align:right;padding:5px 4px;color:${diffColor(adrDiffPct)};font-weight:600;">${diffSign(adrDiffPct)}${Math.round(adrDiffPct)}%</td>
+          </tr>
+          <tr style="border-bottom:1px solid #f0f0f0;">
+            <td style="padding:5px 4px;font-weight:500;">RevPAR</td>
+            <td style="text-align:right;padding:5px 4px;">${fmtYenFull(wd.revpar)}</td>
+            <td style="text-align:right;padding:5px 4px;font-weight:600;">${fmtYenFull(hd.revpar)}</td>
+            <td style="text-align:right;padding:5px 4px;color:${diffColor(revparDiffPct)};font-weight:600;">${diffSign(revparDiffPct)}${Math.round(revparDiffPct)}%</td>
+          </tr>
+          <tr>
+            <td style="padding:5px 4px;font-weight:500;">泊数</td>
+            <td style="text-align:right;padding:5px 4px;">${wd.nights}泊<span style="color:#86868b;font-size:10px;">/${wd.avail}日</span></td>
+            <td style="text-align:right;padding:5px 4px;font-weight:600;">${hd.nights}泊<span style="color:#86868b;font-size:10px;">/${hd.avail}日</span></td>
+            <td style="text-align:right;padding:5px 4px;"></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>`;
+  }
+
+  // 先行予約ペースレポート
+  const paceData = computePaceReport([propertyName]);
+  const paceHtml = renderPaceReportHtml(paceData, '先行予約ペース');
+
   // Period pills for detail view
   const dp = currentFilters.propDetailPeriod || 'thisMonth';
   const periodPillsHtml = `<div class="filter-pills" style="margin-bottom:16px;" id="${prefix}DetailPeriodPills">
@@ -1993,6 +2348,8 @@ function renderPropertyDetail(container, propertyName, prefix) {
     <h3>${prop.name} <span style="font-size:13px;color:#666;font-weight:400;">(${prop.ownerName} / ${prop.area})</span></h3>
     ${periodPillsHtml}
     ${kpiHtml}
+    ${wdhdHtml}
+    ${paceHtml}
     <div class="chart-grid">
       <div class="card"><h2>月別 販売金額/OCC推移</h2><canvas id="${prefix}ChartSalesOcc"></canvas></div>
       <div class="card"><h2>月別 販売金額/ADR推移</h2><canvas id="${prefix}ChartSalesAdr"></canvas></div>
@@ -3509,6 +3866,175 @@ function initRevenueCharts() {
         y1: { position: 'right', beginAtZero: true, grid: { drawOnChartArea: false }, title: { display: true, text: '平均売上 (¥)', font: { size: 11 } }, ticks: { callback: v => '¥' + (v/10000).toFixed(0) + '万' } },
       } }
     });
+  }
+
+  // ── 物件スコアカード ──
+  const scorecardEl = document.getElementById('prop-scorecard');
+  if (scorecardEl) {
+    const scoreProps = filterPropertiesByArea(area, extra)
+      .filter(p => !excludeKpi || !p.excludeKpi)
+      .filter(p => p.status === '稼働中');
+    const curMonths = getSelectedMonths('revenue');
+    const scMode = currentFilters.scorecardMode || 'all';
+    const scDayType = currentFilters.scorecardDayType || 'total';
+
+    // スコア算出ヘルパー
+    function calcScore(propNames, label, areaName) {
+      let totalSales = 0, totalTarget = 0;
+      propNames.forEach(pn => {
+        const p = findPropByName(pn);
+        curMonths.forEach(m => {
+          const s = computePropertyStats(pn, m);
+          if (s) totalSales += s.sales;
+          if (p) totalTarget += getTargetForProperty(p, parseInt(m.split('-')[1], 10));
+        });
+      });
+      const targetPct = totalTarget > 0 ? (totalSales / totalTarget) * 100 : null;
+      const pace = computePaceReport(propNames);
+      const occFor = (b) => {
+        if (!b) return 0;
+        if (scDayType === 'weekday') return b.weekday.avail > 0 ? (b.weekday.nights / b.weekday.avail) * 100 : 0;
+        if (scDayType === 'holiday') return b.holiday.avail > 0 ? (b.holiday.nights / b.holiday.avail) * 100 : 0;
+        return (b.weekday.nights + b.holiday.nights) / Math.max(b.weekday.avail + b.holiday.avail, 1) * 100;
+      };
+      const occ30 = occFor(pace[0]), occ60 = occFor(pace[1]), occ90 = occFor(pace[2]);
+      function grade(val, green, yellow) { return val >= green ? 2 : val >= yellow ? 1 : 0; }
+      const tGrade = targetPct !== null ? grade(targetPct, 100, 80) : -1;
+      const g30 = grade(occ30, 80, 50), g60 = grade(occ60, 60, 30), g90 = grade(occ90, 20, 10);
+      const redCount = [tGrade, g30, g60, g90].filter(g => g === 0).length;
+      const allGreen = [tGrade, g30, g60, g90].every(g => g === 2 || g === -1);
+      const noRed = redCount === 0;
+      const overall = allGreen ? '◎' : noRed ? '○' : redCount <= 2 ? '△' : '✕';
+      const overallColor = allGreen ? '#34C759' : noRed ? '#007AFF' : redCount <= 2 ? '#FF9500' : '#FF3B30';
+      return { name: label, propNames, area: areaName, sales: totalSales, targetPct, occ30, occ60, occ90, tGrade, g30, g60, g90, overall, overallColor };
+    }
+
+    let scoreRows;
+    if (scMode === 'grouped') {
+      const groups = {};
+      scoreProps.forEach(p => {
+        const base = getSeriesBase(p.name);
+        if (!groups[base]) groups[base] = { props: [], area: p.area };
+        groups[base].props.push(p);
+      });
+      scoreRows = Object.entries(groups)
+        .filter(([_, g]) => g.props.length >= 2)
+        .map(([base, g]) => calcScore(g.props.map(p => p.name), base + '（' + g.props.length + '室）', g.area));
+    } else {
+      scoreRows = scoreProps.map(p => calcScore([p.name], p.name, p.area));
+    }
+
+    const overallOrder = { '✕': 0, '△': 1, '○': 2, '◎': 3 };
+    scoreRows.sort((a, b) => (overallOrder[a.overall] || 0) - (overallOrder[b.overall] || 0));
+
+    const gColors = ['#FF3B30', '#FF9500', '#34C759'];
+    const gBg = ['#FF3B3015', '#FF950015', '#34C75915'];
+    function cellStyle(g) { return `color:${gColors[g]};font-weight:600;background:${gBg[g]};`; }
+
+    let scHtml = `<div style="display:flex;flex-wrap:wrap;gap:12px;margin-bottom:12px;font-size:12px;">
+      <span><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:#34C759;"></span> 好調</span>
+      <span><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:#FF9500;"></span> 注意</span>
+      <span><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:#FF3B30;"></span> 要改善</span>
+      <span style="color:#86868b;">基準: 目標≧100%/80% ｜ 30日≧80%/50% ｜ 60日≧60%/30% ｜ 90日≧20%/10%</span>
+    </div>`;
+    const dayLabel = scDayType === 'weekday' ? '平日' : scDayType === 'holiday' ? '休日' : '';
+    const dayTag = dayLabel ? ` <span style="font-size:10px;color:#5856D6;">${dayLabel}</span>` : '';
+    scHtml += `<div class="table-wrap"><table style="width:100%;border-collapse:collapse;font-size:12px;">
+      <thead><tr style="border-bottom:2px solid #e5e5ea;">
+        <th style="text-align:left;padding:6px 4px;">物件</th>
+        <th style="text-align:left;padding:6px 4px;">エリア</th>
+        <th style="text-align:right;padding:6px 4px;">目標達成</th>
+        <th style="text-align:right;padding:6px 4px;">売上</th>
+        <th style="text-align:center;padding:6px 4px;">30日${dayTag}</th>
+        <th style="text-align:center;padding:6px 4px;">60日${dayTag}</th>
+        <th style="text-align:center;padding:6px 4px;">90日${dayTag}</th>
+        <th style="text-align:center;padding:6px 4px;">総合</th>
+      </tr></thead><tbody>`;
+
+    scoreRows.forEach(r => {
+      const clickName = r.propNames.length === 1 ? r.propNames[0] : r.propNames[0];
+      scHtml += `<tr style="border-bottom:1px solid #f0f0f0;">
+        <td style="padding:5px 4px;font-weight:600;"><a href="#" style="color:#007aff;text-decoration:none;" onclick="event.preventDefault();toggleScorecardDetail('${clickName}')">${r.name}</a></td>
+        <td style="padding:5px 4px;color:#86868b;">${r.area}</td>
+        <td style="text-align:right;padding:5px 4px;${r.tGrade >= 0 ? cellStyle(r.tGrade) : ''}border-radius:4px;">${r.targetPct !== null ? Math.round(r.targetPct) + '%' : '-'}</td>
+        <td style="text-align:right;padding:5px 4px;">${fmtYen(r.sales)}</td>
+        <td style="text-align:center;padding:5px 4px;${cellStyle(r.g30)}border-radius:4px;">${r.occ30.toFixed(0)}%</td>
+        <td style="text-align:center;padding:5px 4px;${cellStyle(r.g60)}border-radius:4px;">${r.occ60.toFixed(0)}%</td>
+        <td style="text-align:center;padding:5px 4px;${cellStyle(r.g90)}border-radius:4px;">${r.occ90.toFixed(0)}%</td>
+        <td style="text-align:center;padding:5px 4px;font-size:16px;font-weight:700;color:${r.overallColor};">${r.overall}</td>
+      </tr>`;
+    });
+    scHtml += '</tbody></table></div>';
+    scHtml += '<div id="scorecard-detail"></div>';
+    scorecardEl.innerHTML = scHtml;
+    setTimeout(initSortableHeaders, 50);
+  }
+
+  // ── 先行予約ペースレポート（全物件横断） ──
+  const paceAllEl = document.getElementById('pace-report-all');
+  const paceByPropEl = document.getElementById('pace-report-by-prop');
+  if (paceAllEl) {
+    const activePropNames = filterPropertiesByArea(area, extra)
+      .filter(p => !excludeKpi || !p.excludeKpi)
+      .filter(p => p.status === '稼働中')
+      .map(p => p.name);
+    const paceAll = computePaceReport(activePropNames);
+    paceAllEl.innerHTML = renderPaceReportHtml(paceAll, '全体');
+
+    // ペース4象限（0-30日バケット基準）
+    if (paceByPropEl) {
+      const hdThresh = 70; // 休日OCC高の閾値
+      const wdThresh = 40; // 平日OCC高の閾値
+      const quadrants = {
+        hotBoth:  { label: '全体好調', icon: '🔥', action: '全体値上げ検討', color: '#34C759', bg: '#34C75912', items: [] },
+        hotWdOnly:{ label: '平日だけ好調', icon: '🟡', action: '休日プロモ要', color: '#FF9500', bg: '#FF950012', items: [] },
+        hotHdOnly:{ label: '休日偏り', icon: '⚠', action: '休日値上げ＋平日プロモ', color: '#5856D6', bg: '#5856D612', items: [] },
+        cold:     { label: '予約不足', icon: '❄', action: 'リスティング改善', color: '#FF3B30', bg: '#FF3B3012', items: [] },
+      };
+      activePropNames.forEach(pn => {
+        const pace = computePaceReport([pn]);
+        const b0 = pace[0];
+        const hdHigh = b0.holiday.occ >= hdThresh;
+        const wdHigh = b0.weekday.occ >= wdThresh;
+        const qId = hdHigh && wdHigh ? 'hotBoth' : !hdHigh && wdHigh ? 'hotWdOnly' : hdHigh && !wdHigh ? 'hotHdOnly' : 'cold';
+        const prop = findPropByName(pn);
+        quadrants[qId].items.push({
+          name: pn, area: prop ? prop.area : '',
+          hdOcc: b0.holiday.occ, wdOcc: b0.weekday.occ,
+          hdAdr: b0.holiday.adr, wdAdr: b0.weekday.adr,
+        });
+      });
+
+      let qHtml = `<div style="margin-top:16px;font-size:13px;font-weight:600;color:#1d1d1f;margin-bottom:10px;">ペース4象限 <span style="font-size:11px;font-weight:400;color:#86868b;">（0〜30日 / 休日≧${hdThresh}% 平日≧${wdThresh}%）</span></div>`;
+      qHtml += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">';
+      Object.values(quadrants).forEach(q => {
+        const items = q.items.sort((a, b) => (b.hdOcc + b.wdOcc) - (a.hdOcc + a.wdOcc));
+        qHtml += `<div style="background:${q.bg};border:1px solid ${q.color}25;border-radius:10px;padding:12px 14px;">
+          <div style="font-weight:700;font-size:13px;color:${q.color};margin-bottom:2px;">${q.icon} ${q.label}</div>
+          <div style="font-size:11px;color:#86868b;margin-bottom:8px;">→ ${q.action}</div>
+          <div style="font-size:18px;font-weight:700;color:#1d1d1f;margin-bottom:6px;">${items.length}件</div>`;
+        if (items.length > 0) {
+          qHtml += `<table style="width:100%;border-collapse:collapse;font-size:11px;">
+            <thead><tr style="border-bottom:1px solid ${q.color}20;">
+              <th style="text-align:left;padding:3px 2px;color:#86868b;font-weight:500;">物件</th>
+              <th style="text-align:right;padding:3px 2px;color:#86868b;font-weight:500;">休日</th>
+              <th style="text-align:right;padding:3px 2px;color:#86868b;font-weight:500;">平日</th>
+            </tr></thead><tbody>`;
+          items.slice(0, 8).forEach(it => {
+            qHtml += `<tr style="border-bottom:1px solid ${q.color}10;">
+              <td style="padding:3px 2px;">${it.name}<span style="color:#aaa;font-size:9px;"> ${it.area}</span></td>
+              <td style="text-align:right;padding:3px 2px;font-weight:600;">${it.hdOcc.toFixed(0)}%</td>
+              <td style="text-align:right;padding:3px 2px;">${it.wdOcc.toFixed(0)}%</td>
+            </tr>`;
+          });
+          if (items.length > 8) qHtml += `<tr><td colspan="3" style="padding:3px 2px;color:#86868b;text-align:center;">他${items.length - 8}件</td></tr>`;
+          qHtml += `</tbody></table>`;
+        }
+        qHtml += `</div>`;
+      });
+      qHtml += '</div>';
+      paceByPropEl.innerHTML = qHtml;
+    }
   }
 
   // ── OCC × ADR 4象限マトリクス ──
