@@ -3804,36 +3804,81 @@ function toggleGroupedDrill(seriesBase, clickedRow, isRefresh) {
     const dailyLabels = [];
     const dailyOcc = [];
     const dailyBooked = [];
+    const dailyBlocked = [];
+    const dailySales = [];
     // 各物件の未来予約（キャンセル除く）をキャッシュ
-    const propResvMap = seriesProps.map(p => ({
-      propCode: p.name,
-      rooms: p.rooms || 1,
-      resv: reservations.filter(r =>
-        r.status !== 'キャンセル' && r.status !== 'システムキャンセル' && r.status !== 'ブロックされた' &&
+    const propResvMap = seriesProps.map(p => {
+      const all = reservations.filter(r =>
+        r.status !== 'キャンセル' && r.status !== 'システムキャンセル' &&
         (r.propCode === p.name || r.property === p.name)
-      ),
-    }));
+      );
+      return {
+        propCode: p.name,
+        rooms: p.rooms || 1,
+        resv: all.filter(r => r.status !== 'ブロックされた'),
+        blocked: all.filter(r => r.status === 'ブロックされた'),
+      };
+    });
     let todayIdx = 0;
     for (let i = -30; i < 90; i++) {
       const d = new Date(todayD); d.setDate(d.getDate() + i);
       dailyLabels.push(`${d.getMonth() + 1}/${d.getDate()}`);
       if (i === 0) todayIdx = dailyLabels.length - 1;
       const ds = d.toISOString().split('T')[0];
-      let bookedRooms = 0;
+      let bookedRooms = 0, blockedRooms = 0, daySales = 0;
       propResvMap.forEach(pp => {
-        const cnt = pp.resv.filter(r => r.checkin <= ds && ds < r.checkout).length;
-        bookedRooms += Math.min(cnt, pp.rooms);
+        const hits = pp.resv.filter(r => r.checkin <= ds && ds < r.checkout);
+        bookedRooms += Math.min(hits.length, pp.rooms);
+        hits.forEach(r => {
+          if (r.nights > 0) {
+            const net = (r.sales || 0) - (r.cleaningFee || 0);
+            daySales += net / r.nights;
+          }
+        });
+        const blk = pp.blocked.filter(r => r.checkin <= ds && ds < r.checkout).length;
+        blockedRooms += Math.min(blk, pp.rooms);
       });
       dailyOcc.push(Math.round((bookedRooms / totalRooms) * 1000) / 10);
       dailyBooked.push(bookedRooms);
+      dailyBlocked.push(blockedRooms);
+      dailySales.push(Math.round(daySales));
     }
     const ctxDaily = document.getElementById('grpChartDailyOcc');
     if (ctxDaily) {
+      const todayLinePlugin = {
+        id: 'todayLine',
+        afterDatasetsDraw(chart) {
+          const { ctx, chartArea: { top, bottom }, scales: { x } } = chart;
+          const xPos = x.getPixelForValue(todayIdx);
+          ctx.save();
+          ctx.strokeStyle = '#ff3b30';
+          ctx.lineWidth = 1.5;
+          ctx.setLineDash([5, 4]);
+          ctx.beginPath();
+          ctx.moveTo(xPos, top);
+          ctx.lineTo(xPos, bottom);
+          ctx.stroke();
+          ctx.fillStyle = '#ff3b30';
+          ctx.font = '10px sans-serif';
+          ctx.fillText('今日', xPos + 4, top + 12);
+          ctx.restore();
+        }
+      };
       chartInstances['grpDailyOcc'] = new Chart(ctxDaily, {
         type: 'line',
+        plugins: [todayLinePlugin],
         data: { labels: dailyLabels, datasets: [
-          { type: 'line', label: '日別OCC (%)', data: dailyOcc, borderColor: CHART_COLORS.blue, backgroundColor: 'rgba(74,144,217,0.15)', fill: true, tension: 0.25, pointRadius: 0, yAxisID: 'y' },
-          { type: 'line', label: '残室数', data: dailyBooked.map(b => totalRooms - b), borderColor: CHART_COLORS.orange, borderDash: [4, 3], backgroundColor: 'transparent', tension: 0.25, pointRadius: 0, yAxisID: 'y1' },
+          { type: 'line', label: '日別OCC (%)', data: dailyOcc, borderColor: CHART_COLORS.blue, backgroundColor: 'rgba(74,144,217,0.15)', fill: true, tension: 0.25, pointRadius: 0, yAxisID: 'y',
+            segment: {
+              borderColor: c => c.p1DataIndex < todayIdx ? 'rgba(74,144,217,0.35)' : CHART_COLORS.blue,
+              backgroundColor: c => c.p1DataIndex < todayIdx ? 'rgba(74,144,217,0.05)' : 'rgba(74,144,217,0.15)',
+            }
+          },
+          { type: 'line', label: '残室数', data: dailyBooked.map((b, i) => totalRooms - b - dailyBlocked[i]), borderColor: CHART_COLORS.orange, borderDash: [4, 3], backgroundColor: 'transparent', tension: 0.25, pointRadius: 0, yAxisID: 'y1',
+            segment: {
+              borderColor: c => c.p1DataIndex < todayIdx ? 'rgba(245,166,35,0.3)' : CHART_COLORS.orange,
+            }
+          },
         ]},
         options: {
           responsive: true,
@@ -3841,10 +3886,19 @@ function toggleGroupedDrill(seriesBase, clickedRow, isRefresh) {
           interaction: { mode: 'index', intersect: false },
           plugins: { legend: { display: true }, tooltip: { callbacks: {
             label: ctx => {
-              const booked = dailyBooked[ctx.dataIndex];
-              const remaining = totalRooms - booked;
-              if (ctx.dataset.yAxisID === 'y') return `OCC: ${ctx.parsed.y}%`;
-              return `残室: ${remaining}室 / ${totalRooms}室（予約 ${booked}室）`;
+              const i = ctx.dataIndex;
+              const booked = dailyBooked[i];
+              const blocked = dailyBlocked[i];
+              const remaining = totalRooms - booked - blocked;
+              const sales = dailySales[i];
+              if (ctx.datasetIndex === 0) {
+                return [
+                  `OCC: ${ctx.parsed.y}%`,
+                  `予約: ${booked}室 / ブロック: ${blocked}室 / 残: ${remaining}室（全${totalRooms}室）`,
+                  `売上: ¥${sales.toLocaleString()}`,
+                ];
+              }
+              return null;
             }
           } } },
           scales: {
