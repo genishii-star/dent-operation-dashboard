@@ -2715,6 +2715,7 @@ function destroyDrillCharts(prefix) {
   if (chartInstances[prefix+'SalesAdr']) { chartInstances[prefix+'SalesAdr'].destroy(); delete chartInstances[prefix+'SalesAdr']; }
   if (chartInstances[prefix+'Channel']) { chartInstances[prefix+'Channel'].destroy(); delete chartInstances[prefix+'Channel']; }
   if (chartInstances[prefix+'Nationality']) { chartInstances[prefix+'Nationality'].destroy(); delete chartInstances[prefix+'Nationality']; }
+  if (chartInstances[prefix+'DailyOcc']) { chartInstances[prefix+'DailyOcc'].destroy(); delete chartInstances[prefix+'DailyOcc']; }
 }
 
 // ============================================================
@@ -3657,6 +3658,10 @@ function toggleGroupedDrill(seriesBase, clickedRow, isRefresh) {
       <div class="card"><h2>チャネル別売上構成比</h2><canvas id="grpChartChannel"></canvas></div>
       <div class="card"><h2>ゲスト国籍別</h2><canvas id="grpChartNationality"></canvas></div>
     </div>
+    <div class="card">
+      <h2>日別稼働率（次90日） <span style="font-size:11px;color:#86868b;font-weight:400;">シリーズ全室合計</span></h2>
+      <canvas id="grpChartDailyOcc" height="140"></canvas>
+    </div>
     <div class="card"><h2>部屋別内訳</h2><div class="table-wrap"><table>
       <thead><tr><th>部屋</th><th>OCC</th><th>ADR</th><th>RevPAR</th><th>販売泊数</th><th>販売金額</th><th>受取金</th></tr></thead>
       <tbody>${rows}</tbody>
@@ -3790,6 +3795,63 @@ function toggleGroupedDrill(seriesBase, clickedRow, isRefresh) {
           },
           label: ctx => ctx.parsed.x.toFixed(1) + '% (' + grpNatTop[ctx.dataIndex][1].count + '件)'
         } } }, scales: { x: { beginAtZero: true, max: 100, grid: { display: false }, ticks: { callback: v => v + '%' } }, y: { grid: { display: false } } } }
+      });
+    }
+
+    // 日別稼働率（次90日）— シリーズ全室の合計ベース
+    const todayD = new Date(); todayD.setHours(0, 0, 0, 0);
+    const totalRooms = seriesProps.reduce((s, p) => s + (p.rooms || 1), 0) || 1;
+    const dailyLabels = [];
+    const dailyOcc = [];
+    const dailyBooked = [];
+    // 各物件の未来予約（キャンセル除く）をキャッシュ
+    const propResvMap = seriesProps.map(p => ({
+      propCode: p.name,
+      rooms: p.rooms || 1,
+      resv: reservations.filter(r =>
+        r.status !== 'キャンセル' && r.status !== 'システムキャンセル' && r.status !== 'ブロックされた' &&
+        (r.propCode === p.name || r.property === p.name)
+      ),
+    }));
+    for (let i = 0; i < 90; i++) {
+      const d = new Date(todayD); d.setDate(d.getDate() + i);
+      dailyLabels.push(`${d.getMonth() + 1}/${d.getDate()}`);
+      const ds = d.toISOString().split('T')[0];
+      let bookedRooms = 0;
+      propResvMap.forEach(pp => {
+        // 1物件複数部屋の場合、同日に重なる予約件数（上限=rooms）
+        const cnt = pp.resv.filter(r => r.checkin <= ds && ds < r.checkout).length;
+        bookedRooms += Math.min(cnt, pp.rooms);
+      });
+      dailyOcc.push(Math.round((bookedRooms / totalRooms) * 1000) / 10);
+      dailyBooked.push(bookedRooms);
+    }
+    const ctxDaily = document.getElementById('grpChartDailyOcc');
+    if (ctxDaily) {
+      chartInstances['grpDailyOcc'] = new Chart(ctxDaily, {
+        type: 'line',
+        data: { labels: dailyLabels, datasets: [
+          { type: 'line', label: '日別OCC (%)', data: dailyOcc, borderColor: CHART_COLORS.blue, backgroundColor: 'rgba(74,144,217,0.15)', fill: true, tension: 0.25, pointRadius: 0, yAxisID: 'y' },
+          { type: 'line', label: '残室数', data: dailyBooked.map(b => totalRooms - b), borderColor: CHART_COLORS.orange, borderDash: [4, 3], backgroundColor: 'transparent', tension: 0.25, pointRadius: 0, yAxisID: 'y1' },
+        ]},
+        options: {
+          responsive: true,
+          animation: { duration: 600, easing: 'easeOutQuart' },
+          interaction: { mode: 'index', intersect: false },
+          plugins: { legend: { display: true }, tooltip: { callbacks: {
+            label: ctx => {
+              const booked = dailyBooked[ctx.dataIndex];
+              const remaining = totalRooms - booked;
+              if (ctx.dataset.yAxisID === 'y') return `OCC: ${ctx.parsed.y}%`;
+              return `残室: ${remaining}室 / ${totalRooms}室（予約 ${booked}室）`;
+            }
+          } } },
+          scales: {
+            x: { ticks: { maxTicksLimit: 12 }, grid: { display: false } },
+            y: { position: 'left', beginAtZero: true, max: 100, title: { display: true, text: 'OCC (%)', font: { size: 11 } }, ticks: { callback: v => v + '%' } },
+            y1: { position: 'right', beginAtZero: true, max: totalRooms, grid: { drawOnChartArea: false }, title: { display: true, text: '残室数', font: { size: 11 } }, ticks: { stepSize: 1, precision: 0 } }
+          }
+        }
       });
     }
   }, 100);
