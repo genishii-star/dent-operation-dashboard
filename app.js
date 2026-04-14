@@ -3659,7 +3659,7 @@ function toggleGroupedDrill(seriesBase, clickedRow, isRefresh) {
       <div class="card"><h2>ゲスト国籍別</h2><canvas id="grpChartNationality"></canvas></div>
     </div>
     <div class="card">
-      <h2>日別稼働率（次90日） <span style="font-size:11px;color:#86868b;font-weight:400;">シリーズ全室合計</span></h2>
+      <h2>日別稼働率（過去30日〜次90日） <span style="font-size:11px;color:#86868b;font-weight:400;">シリーズ全室合計</span></h2>
       <canvas id="grpChartDailyOcc" height="140"></canvas>
     </div>
     <div class="card"><h2>部屋別内訳</h2><div class="table-wrap"><table>
@@ -3813,13 +3813,14 @@ function toggleGroupedDrill(seriesBase, clickedRow, isRefresh) {
         (r.propCode === p.name || r.property === p.name)
       ),
     }));
-    for (let i = 0; i < 90; i++) {
+    let todayIdx = 0;
+    for (let i = -30; i < 90; i++) {
       const d = new Date(todayD); d.setDate(d.getDate() + i);
       dailyLabels.push(`${d.getMonth() + 1}/${d.getDate()}`);
+      if (i === 0) todayIdx = dailyLabels.length - 1;
       const ds = d.toISOString().split('T')[0];
       let bookedRooms = 0;
       propResvMap.forEach(pp => {
-        // 1物件複数部屋の場合、同日に重なる予約件数（上限=rooms）
         const cnt = pp.resv.filter(r => r.checkin <= ds && ds < r.checkout).length;
         bookedRooms += Math.min(cnt, pp.rooms);
       });
