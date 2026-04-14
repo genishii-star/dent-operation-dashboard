@@ -37,6 +37,25 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       .catch(err => sendResponse({ success: false, error: err.message }));
     return true;
   }
+  if (msg.action === 'listSheets') {
+    handleListSheets(msg.spreadsheetId)
+      .then(result => sendResponse(result))
+      .catch(err => sendResponse({ error: err.message, sheetNames: [] }));
+    return true;
+  }
+  if (msg.action === 'openTab') {
+    chrome.tabs.create({ url: msg.url, active: false }, (tab) => {
+      if (chrome.runtime.lastError) sendResponse({ error: chrome.runtime.lastError.message });
+      else sendResponse({ success: true, tabId: tab.id });
+    });
+    return true;
+  }
+  if (msg.action === 'ensureAndWriteSheet') {
+    handleEnsureAndWrite(msg.spreadsheetId, msg.sheetName, msg.rows)
+      .then(result => sendResponse(result))
+      .catch(err => sendResponse({ success: false, error: err.message }));
+    return true;
+  }
 });
 
 async function handleReadSheet(sheetName) {
@@ -188,4 +207,49 @@ async function writeData(token, sheetId, sheetName, rows) {
       throw new Error(`書き込み失敗: ${err.error.message}`);
     }
   }
+}
+
+// シート名一覧を取得
+async function handleListSheets(spreadsheetId) {
+  const token = await getAuthToken();
+  const sid = spreadsheetId || SPREADSHEET_ID_DEFAULT;
+  const url = `https://sheets.googleapis.com/v4/spreadsheets/${sid}?fields=sheets(properties(title))`;
+  const res = await fetch(url, { headers: { 'Authorization': `Bearer ${token}` } });
+  if (!res.ok) throw new Error('シート一覧取得失敗');
+  const data = await res.json();
+  return { sheetNames: (data.sheets || []).map(s => s.properties.title) };
+}
+
+// AirDNA用: シートがなければ作成してからデータ書き込み
+async function handleEnsureAndWrite(spreadsheetId, sheetName, rows) {
+  const token = await getAuthToken();
+  const sid = spreadsheetId || SPREADSHEET_ID_DEFAULT;
+
+  // Check if sheet exists
+  const metaUrl = `https://sheets.googleapis.com/v4/spreadsheets/${sid}?fields=sheets(properties)`;
+  const metaRes = await fetch(metaUrl, { headers: { 'Authorization': `Bearer ${token}` } });
+  if (!metaRes.ok) throw new Error('シート情報取得失敗');
+  const meta = await metaRes.json();
+  const exists = meta.sheets.some(s => s.properties.title === sheetName);
+
+  // Create if not exists
+  if (!exists) {
+    const batchUrl = `https://sheets.googleapis.com/v4/spreadsheets/${sid}:batchUpdate`;
+    const batchRes = await fetch(batchUrl, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ requests: [{ addSheet: { properties: { title: sheetName, gridProperties: { rowCount: Math.max(rows.length + 10, 40), columnCount: Math.max((rows[0]?.length || 5) + 2, 10) } } } }] })
+    });
+    if (!batchRes.ok) {
+      const err = await batchRes.json();
+      throw new Error(`シート作成失敗: ${err.error?.message || 'unknown'}`);
+    }
+  }
+
+  // Resize, clear, write
+  await ensureSheetSize(token, sid, sheetName, rows.length, rows[0]?.length || 10);
+  await clearSheet(token, sid, sheetName);
+  await writeData(token, sid, sheetName, rows);
+
+  return { success: true, sheetName, rowCount: rows.length };
 }

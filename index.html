@@ -566,6 +566,16 @@
       </div>
     </div>
 
+    <div class="card" id="market-compare-section" style="display:none;">
+      <h2>市場比較（AirDNA）</h2>
+      <p style="font-size:12px;color:#86868b;margin:-4px 0 12px;">自社実績 vs エリア市場平均の推移比較</p>
+      <div class="chart-grid">
+        <div class="card"><h2>OCC比較</h2><canvas id="chartMarketOcc"></canvas></div>
+        <div class="card"><h2>ADR比較</h2><canvas id="chartMarketAdr"></canvas></div>
+      </div>
+      <div id="market-index-cards"></div>
+    </div>
+
     <div class="card">
       <h2>物件スコアカード</h2>
       <p style="font-size:12px;color:#86868b;margin:-4px 0 12px;">目標達成（実績）× 先行ペース（30/60/90日OCC）で総合判定</p>
@@ -590,8 +600,27 @@
     </div>
 
     <div class="card">
+      <h2>未来予約分析 <span style="font-size:11px;color:#86868b;font-weight:400;">（AirDNA市場データ・未来月は前年同月にフォールバック）</span></h2>
+      <p style="font-size:12px;color:#86868b;margin:-4px 0 12px;">自社の先行予約ペース・未来ADR・リードタイムを市場と比較</p>
+      <div class="chart-grid">
+        <div class="card">
+          <h2>未来OCC推移（次90日）</h2>
+          <canvas id="chartFutureOcc"></canvas>
+        </div>
+        <div class="card">
+          <h2>未来ADR推移（次180日）</h2>
+          <canvas id="chartFutureAdr"></canvas>
+        </div>
+      </div>
+      <div class="card">
+        <h2>リードタイム分布</h2>
+        <canvas id="chartLeadTime" height="180"></canvas>
+      </div>
+    </div>
+
+    <div class="card">
       <h2>先行予約ペース（全物件横断）</h2>
-      <p style="font-size:12px;color:#86868b;margin:-4px 0 12px;">全物件合算の平日/休日別OCC・ADR。値上げ余地・プロモ要を自動判定</p>
+      <p style="font-size:12px;color:#86868b;margin:-4px 0 12px;">全物件合算の平日/休日別OCC・ADR。値上げ余地・値下げ検討を自動判定</p>
       <div id="pace-report-all"></div>
       <div id="pace-report-by-prop"></div>
     </div>
