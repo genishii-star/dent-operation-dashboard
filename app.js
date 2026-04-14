@@ -627,6 +627,156 @@ function buildInsightsHtml(prop, curStats, wdhdStats, paceData) {
   </div>`;
 }
 
+// シリーズまとめの分析インサイト（ルールベース）
+function buildGroupInsightsHtml(seriesBase, seriesProps, curAgg, months) {
+  if (!seriesProps || !seriesProps.length) return '';
+  const insights = [];
+  const propNames = seriesProps.map(p => p.name);
+
+  // 1. 室間パフォーマンス格差
+  const perRoom = seriesProps.map(p => {
+    let nights = 0, sales = 0;
+    months.forEach(ym => {
+      const s = computePropertyStats(p.name, ym);
+      if (s) { nights += s.nights; sales += s.sales; }
+    });
+    const days = months.reduce((s, ym) => s + getDaysInMonth(ym), 0);
+    const avail = days * (p.rooms || 1);
+    return { name: p.name, occ: avail > 0 ? (nights / avail) * 100 : 0, sales };
+  });
+  if (perRoom.length >= 2) {
+    const occs = perRoom.map(r => r.occ);
+    const maxOcc = Math.max(...occs), minOcc = Math.min(...occs);
+    if (maxOcc - minOcc >= 30) {
+      const top = perRoom.reduce((a, b) => a.occ > b.occ ? a : b);
+      const bot = perRoom.reduce((a, b) => a.occ < b.occ ? a : b);
+      insights.push({ level: 'warning', icon: '⚠', category: '室間格差',
+        title: '室間の稼働差が大きい',
+        text: `最高 ${top.name}（${fmtPct(top.occ)}） vs 最低 ${bot.name}（${fmtPct(bot.occ)}） ＝ ${(maxOcc - minOcc).toFixed(0)}pt差。低稼働室の料金見直し・写真刷新を検討`
+      });
+    }
+  }
+
+  // 2. 不稼働室検出
+  const recentMonth = months[months.length - 1];
+  const inactive = seriesProps.filter(p => {
+    const s = computePropertyStats(p.name, recentMonth);
+    return s && s.nights === 0;
+  });
+  if (inactive.length > 0 && inactive.length < seriesProps.length) {
+    insights.push({ level: 'warning', icon: '🚫', category: '不稼働',
+      title: `${inactive.length}室が直近月ゼロ稼働`,
+      text: `${inactive.map(p => p.name).join(', ')} が${recentMonth}に0泊。リスティング停止・価格帯ミスマッチの可能性`
+    });
+  }
+
+  // 3. ペース（シリーズ全体）
+  const paceData = computePaceReport(propNames);
+  if (paceData && paceData.length >= 3) {
+    const occFor = (b) => {
+      const total = b.weekday.nights + b.holiday.nights;
+      const avail = b.weekday.avail + b.holiday.avail;
+      return avail > 0 ? (total / avail) * 100 : 0;
+    };
+    const occ30 = occFor(paceData[0]);
+    const occ90 = occFor(paceData[2]);
+    if (occ30 < 40) {
+      insights.push({ level: 'warning', icon: '⏰', category: 'ペース',
+        title: 'シリーズ全体で30日先ペース遅い',
+        text: `集約OCC ${fmtPct(occ30)}（基準80%）。全室で料金見直し or 販促強化を検討`
+      });
+    } else if (occ30 >= 85) {
+      insights.push({ level: 'success', icon: '🔥', category: 'ペース',
+        title: 'シリーズ全体が30日先で高稼働',
+        text: `集約OCC ${fmtPct(occ30)}。段階的な値上げ余地あり`
+      });
+    }
+    if (occ90 >= 30) {
+      insights.push({ level: 'success', icon: '📅', category: 'ペース',
+        title: 'シリーズ全体で早期予約が順調',
+        text: `91日先でも集約OCC ${fmtPct(occ90)}。長期の値上げ余地あり`
+      });
+    }
+  }
+
+  // 4. 目標達成（シリーズ合計）
+  const targetSum = seriesProps.reduce((s, p) => s + (p.targetNormal || 0) * months.length, 0);
+  if (targetSum > 0 && curAgg && curAgg.sales > 0) {
+    const achieve = (curAgg.sales / targetSum) * 100;
+    if (achieve >= 120) {
+      insights.push({ level: 'success', icon: '🎯', category: '目標',
+        title: 'シリーズ合計で目標大幅超過',
+        text: `合計売上が目標の${achieve.toFixed(0)}%。来期の目標引き上げを検討`
+      });
+    } else if (achieve < 70) {
+      insights.push({ level: 'warning', icon: '⚠', category: '目標',
+        title: 'シリーズ合計で目標未達リスク',
+        text: `合計売上が目標の${achieve.toFixed(0)}%。価格・販促の見直しが急務`
+      });
+    }
+  }
+
+  // 5. 市場比較（エリア全域 vs シリーズ集約）
+  const area = seriesProps[0] && seriesProps[0].area;
+  if (area && curAgg) {
+    const mk = resolveAreaMarketLookup(area);
+    if (mk.hasData) {
+      const now = new Date();
+      const recentYms = [];
+      for (let i = -11; i <= 0; i++) {
+        const d = new Date(now.getFullYear(), now.getMonth() + i, 1);
+        recentYms.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
+      }
+      const mktOccs = recentYms.map(ym => mk.occ(ym)).filter(v => v !== null);
+      const mktAvg = mktOccs.length ? mktOccs.reduce((s, v) => s + v, 0) / mktOccs.length : null;
+      if (mktAvg !== null) {
+        const diff = curAgg.occ - mktAvg;
+        if (diff > 10) {
+          insights.push({ level: 'success', icon: '🏆', category: '競争力',
+            title: `${area}全域平均を大きく上回る`,
+            text: `シリーズOCC ${fmtPct(curAgg.occ)} vs ${area}全域平均 ${fmtPct(mktAvg)}（+${diff.toFixed(1)}pt）。値上げで収益最大化の余地`
+          });
+        } else if (diff < -10) {
+          insights.push({ level: 'warning', icon: '📉', category: '競争力',
+            title: `${area}全域平均を下回る`,
+            text: `シリーズOCC ${fmtPct(curAgg.occ)} vs ${area}全域平均 ${fmtPct(mktAvg)}（${diff.toFixed(1)}pt）。リスティング・料金・写真のいずれかに改善余地`
+          });
+        }
+      }
+    }
+  }
+
+  if (insights.length === 0) {
+    insights.push({ level: 'info', icon: '✓', category: '総合',
+      title: 'シリーズ安定稼働中',
+      text: `${seriesProps.length}室すべて特記事項なし。市場動向を継続監視`
+    });
+  }
+
+  const levelColors = {
+    success: { bg: '#34C75912', border: '#34C759', text: '#34C759' },
+    warning: { bg: '#FF950012', border: '#FF9500', text: '#FF9500' },
+    info: { bg: '#007AFF12', border: '#007AFF', text: '#007AFF' },
+  };
+  const items = insights.map(ins => {
+    const c = levelColors[ins.level] || levelColors.info;
+    return `<div style="background:${c.bg};border-left:3px solid ${c.border};border-radius:6px;padding:10px 14px;margin-bottom:8px;">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
+        <span style="font-size:16px;">${ins.icon}</span>
+        <span style="font-weight:700;font-size:13px;color:${c.text};">${ins.title}</span>
+        <span style="font-size:10px;color:#86868b;margin-left:auto;background:rgba(0,0,0,0.04);padding:2px 6px;border-radius:4px;">${ins.category}</span>
+      </div>
+      <div style="font-size:12px;color:#1d1d1f;line-height:1.5;">${ins.text}</div>
+    </div>`;
+  }).join('');
+  return `<div style="margin-bottom:20px;">
+    <div style="font-size:13px;font-weight:600;color:#1d1d1f;margin-bottom:10px;">
+      🔍 シリーズ分析インサイト <span style="font-size:11px;font-weight:400;color:#86868b;">（${insights.length}件）</span>
+    </div>
+    ${items}
+  </div>`;
+}
+
 // 物件の市場比較HTMLを生成
 function buildMarketCompareHtml(prop, curStats) {
   if (!prop || !curStats) return '';
@@ -3652,6 +3802,7 @@ function toggleGroupedDrill(seriesBase, clickedRow, isRefresh) {
       <div class="kpi-card"><div class="label">RevPAR</div><div class="value">${fmtYenFull(Math.round(aggRevpar))}</div><div class="sub">${revparVs}</div></div>
       <div class="kpi-card"><div class="label">予約Window</div><div class="value">${avgLeadTime !== null ? avgLeadTime + '日' : '-'}</div><div class="sub">予約〜チェックイン平均</div></div>
     </div>
+    ${buildGroupInsightsHtml(seriesBase, seriesProps, curAgg, months)}
     <div class="chart-grid">
       <div class="card"><h2>月別 販売金額/OCC推移</h2><canvas id="grpChartSalesOcc"></canvas></div>
       <div class="card"><h2>月別 販売金額/ADR推移</h2><canvas id="grpChartSalesAdr"></canvas></div>
