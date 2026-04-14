@@ -2675,22 +2675,39 @@ function setScorecardDayType(el) {
   initRevenueCharts();
 }
 
-// スコアカードの物件クリック → ドリルダウン展開/閉じる
+// スコアカードの物件クリック → 行直下で展開/閉じる
 let _scorecardCurrentProp = null;
-function toggleScorecardDetail(propertyName) {
-  const container = document.getElementById('scorecard-detail');
-  if (!container) return;
+let _scorecardCurrentIdx = null;
+function toggleScorecardDetail(propertyName, idx) {
+  // 同じ物件再クリック → 閉じる
   if (_scorecardCurrentProp === propertyName) {
-    // 同じ物件を再クリック → 閉じる
     destroyDrillCharts('sc');
-    container.innerHTML = '';
+    const prevRow = document.getElementById('sc-detail-row-' + _scorecardCurrentIdx);
+    const prevInner = document.getElementById('sc-detail-inner-' + _scorecardCurrentIdx);
+    if (prevRow) prevRow.style.display = 'none';
+    if (prevInner) prevInner.innerHTML = '';
     _scorecardCurrentProp = null;
+    _scorecardCurrentIdx = null;
     return;
   }
+  // 既に別物件が開いていれば閉じる
+  if (_scorecardCurrentIdx !== null) {
+    destroyDrillCharts('sc');
+    const prevRow = document.getElementById('sc-detail-row-' + _scorecardCurrentIdx);
+    const prevInner = document.getElementById('sc-detail-inner-' + _scorecardCurrentIdx);
+    if (prevRow) prevRow.style.display = 'none';
+    if (prevInner) prevInner.innerHTML = '';
+  }
   _scorecardCurrentProp = propertyName;
+  _scorecardCurrentIdx = idx;
   currentFilters.propDetailPeriod = 'thisMonth';
-  renderPropertyDetail(container, propertyName, 'sc');
-  container.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  const row = document.getElementById('sc-detail-row-' + idx);
+  const inner = document.getElementById('sc-detail-inner-' + idx);
+  if (row && inner) {
+    row.style.display = '';
+    renderPropertyDetail(inner, propertyName, 'sc');
+    row.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
 }
 
 function destroyDrillCharts(prefix) {
@@ -2877,7 +2894,6 @@ function renderPropertyDetail(container, propertyName, prefix) {
       ${paceHtml}
       ${marketCompareHtml}
     </div>
-    ${futureAnalysisHtml}
     <div class="chart-grid">
       <div class="card"><h2>月別 販売金額/OCC推移</h2><canvas id="${prefix}ChartSalesOcc"></canvas></div>
       <div class="card"><h2>月別 販売金額/ADR推移</h2><canvas id="${prefix}ChartSalesAdr"></canvas></div>
@@ -2899,6 +2915,7 @@ function renderPropertyDetail(container, propertyName, prefix) {
         <span>🟦 今年</span><span>🟧 前年</span><span style="color:#34c759;">▲ 前年比UP</span><span style="color:#ff3b30;">▼ 前年比DOWN</span>
       </div>
     </div>
+    ${futureAnalysisHtml}
     <div class="card"><h2>予約一覧</h2><div class="table-wrap"><table>
       <thead><tr><th>予約日</th><th>予約サイト</th><th>ゲスト名</th><th>チェックイン</th><th>チェックアウト</th><th>泊数</th><th>販売金額</th><th>状態</th></tr></thead>
       <tbody>${resvRows}</tbody>
@@ -4892,10 +4909,11 @@ function initRevenueCharts() {
         <th style="text-align:center;padding:6px 4px;">総合</th>
       </tr></thead><tbody>`;
 
-    scoreRows.forEach(r => {
+    scoreRows.forEach((r, idx) => {
       const clickName = r.propNames.length === 1 ? r.propNames[0] : r.propNames[0];
+      const safeName = clickName.replace(/'/g, "\\'");
       scHtml += `<tr style="border-bottom:1px solid #f0f0f0;">
-        <td style="padding:5px 4px;font-weight:600;"><a href="#" style="color:#007aff;text-decoration:none;" onclick="event.preventDefault();toggleScorecardDetail('${clickName}')">${r.name}</a></td>
+        <td style="padding:5px 4px;font-weight:600;"><a href="#" style="color:#007aff;text-decoration:none;" onclick="event.preventDefault();toggleScorecardDetail('${safeName}', ${idx})">${r.name}</a></td>
         <td style="padding:5px 4px;color:#86868b;">${r.area}</td>
         <td style="text-align:right;padding:5px 4px;${r.tGrade >= 0 ? cellStyle(r.tGrade) : ''}border-radius:4px;">${r.targetPct !== null ? Math.round(r.targetPct) + '%' : '-'}</td>
         <td style="text-align:right;padding:5px 4px;">${fmtYen(r.sales)}</td>
@@ -4903,10 +4921,10 @@ function initRevenueCharts() {
         <td style="text-align:center;padding:5px 4px;${cellStyle(r.g60)}border-radius:4px;">${r.occ60.toFixed(0)}%</td>
         <td style="text-align:center;padding:5px 4px;${cellStyle(r.g90)}border-radius:4px;">${r.occ90.toFixed(0)}%</td>
         <td style="text-align:center;padding:5px 4px;font-size:16px;font-weight:700;color:${r.overallColor};">${r.overall}</td>
-      </tr>`;
+      </tr>
+      <tr class="sc-detail-row" id="sc-detail-row-${idx}" style="display:none;"><td colspan="8" style="padding:0;background:#fafafa;"><div id="sc-detail-inner-${idx}"></div></td></tr>`;
     });
     scHtml += '</tbody></table></div>';
-    scHtml += '<div id="scorecard-detail"></div>';
     scorecardEl.innerHTML = scHtml;
     setTimeout(initSortableHeaders, 50);
   }
