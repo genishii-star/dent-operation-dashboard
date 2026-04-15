@@ -199,7 +199,30 @@ let currentFilters = {
   revenueSqm: '全体',
   propDetailPeriod: 'thisMonth',
   grpDrillPeriod: 'thisMonth',
+  marketPeriod: 'last3',
+  marketCity: '大阪',
+  marketSubTab: 'top',
+  reservationView: 'all',
 };
+
+function setMarketSubTab(el) {
+  el.parentElement.querySelectorAll('.pill').forEach(p => p.classList.remove('active'));
+  el.classList.add('active');
+  currentFilters.marketSubTab = el.dataset.subtab;
+  document.querySelectorAll('.market-subtab').forEach(d => { d.style.display = 'none'; });
+  const target = document.getElementById('market-sub-' + el.dataset.subtab);
+  if (target) target.style.display = '';
+  renderMarketTab();
+  setTimeout(() => initMarketCharts(), 50);
+}
+
+function setReservationView(el) {
+  el.parentElement.querySelectorAll('.pill').forEach(p => p.classList.remove('active'));
+  el.classList.add('active');
+  currentFilters.reservationView = el.dataset.view;
+  renderReservationTab();
+  setTimeout(initReservationCharts, 30);
+}
 
 // ============================================================
 // Fetch all sheets
@@ -211,6 +234,34 @@ const MARKET_SHEET_IDS = {
   '京都': '1584vBGDI8AfvoG01Zns1iG5Ivat31azZnu56Uqsx9qY',
   '東京': '17T5gIbfabcVq_IMx0S6rWk6wwEfWpvAKTHCUTuGHUiI',
 };
+
+// e-Stat公的統計スプシ
+const ESTAT_SHEET_ID = '1d0dfPK79A9wXUyNqgGwbuq1aD5joIhcVvJ2uGiW2WQs';
+const ESTAT_SHEETS = [
+  'JNTO_訪日外客数', '宿泊統計_定員稼働率', '宿泊統計_延べ宿泊者数',
+  'インバウンド消費', 'CPI_宿泊', '国内旅行_消費動向'
+];
+
+async function fetchEstatSheets() {
+  const result = {};
+  await Promise.all(ESTAT_SHEETS.map(async name => {
+    try {
+      const url = `https://sheets.googleapis.com/v4/spreadsheets/${ESTAT_SHEET_ID}/values/${encodeURIComponent(name)}?key=${API_KEY}`;
+      const resp = await fetch(url);
+      if (!resp.ok) return;
+      const json = await resp.json();
+      const rows = json.values;
+      if (!rows || rows.length < 2) return;
+      const headers = rows[0];
+      result[name] = rows.slice(1).map(row => {
+        const obj = {};
+        headers.forEach((h, i) => { obj[h] = (row[i] !== undefined ? row[i] : ''); });
+        return obj;
+      });
+    } catch (e) { /* skip */ }
+  }));
+  return result;
+}
 
 async function fetchAirdnaSheets() {
   const result = {};
@@ -309,6 +360,7 @@ async function loadAllData() {
     ownerMaster = cached.ownMaster || [];
     seasonMaster = cached.seasMaster || [];
     window._airdnaSheets = cached.marketRaw || {};
+    window._estatSheets = cached.estatRaw || {};
     processData();
     renderAll();
     updateTimestamp();
@@ -336,7 +388,7 @@ async function fetchAndUpdate() {
   const detail = document.getElementById('loading-detail');
   if (detail) detail.textContent = '最新データを取得中...';
 
-  const [resv, daily, propMaster, ownMaster, seasMaster, settingsRaw, marketRaw] = await Promise.all([
+  const [resv, daily, propMaster, ownMaster, seasMaster, settingsRaw, marketRaw, estatRaw] = await Promise.all([
     fetchSheet('予約データ'),
     fetchSheet('日次データ'),
     fetchSheet('物件マスタ'),
@@ -344,6 +396,7 @@ async function fetchAndUpdate() {
     fetchSheet('シーズンマスタ'),
     fetch(sheetApiUrl('設定')).then(r => r.json()).catch(() => ({})),
     fetchAirdnaSheets().catch(() => ({})),
+    fetchEstatSheets().catch(() => ({})),
   ]);
 
   rawReservations = resv;
@@ -352,6 +405,7 @@ async function fetchAndUpdate() {
   ownerMaster = ownMaster;
   seasonMaster = seasMaster;
   window._airdnaSheets = marketRaw || {};
+  window._estatSheets = estatRaw || {};
 
   // 最終同期タイムスタンプ（設定シートはキー・バリュー形式: [[key, value], ...]）
   const settingsRows = settingsRaw.values || [];
@@ -366,7 +420,7 @@ async function fetchAndUpdate() {
   updateTimestamp();
 
   // キャッシュ保存
-  saveCache({ resv, daily, propMaster, ownMaster, seasMaster, marketRaw });
+  saveCache({ resv, daily, propMaster, ownMaster, seasMaster, marketRaw, estatRaw });
 }
 
 // ============================================================
@@ -1870,7 +1924,7 @@ function fmtPct(n) {
 function switchTab(id) {
   currentTabId = id;
   document.querySelectorAll('.tab-btn').forEach((btn, i) => {
-    const tabIds = ['daily','owner','property','reservation','revenue','review','watchlist','shinpou','pmbm'];
+    const tabIds = ['daily','owner','property','reservation','revenue','review','watchlist','shinpou','pmbm','market'];
     btn.classList.toggle('active', tabIds[i] === id);
   });
   document.querySelectorAll('.tab-content').forEach(tc => tc.classList.remove('active'));
@@ -2045,6 +2099,7 @@ const tabRenderers = {
   watchlist: renderWatchlistTab,
   shinpou: renderShinpouTab,
   pmbm: renderPmbmTab,
+  market: renderMarketTab,
 };
 const ALL_TAB_IDS = Object.keys(tabRenderers);
 
@@ -4273,7 +4328,37 @@ function renderReservationTab() {
 
   // Table（キャンセルは表示から除外）
   const tbody = document.getElementById('reservation-table');
-  const displayResv = filtered.filter(r => r.status !== 'システムキャンセル' && r.status !== 'キャンセル').slice(0, 100);
+  const thead = tbody && tbody.parentElement.querySelector('thead');
+  const validResv = filtered.filter(r => r.status !== 'システムキャンセル' && r.status !== 'キャンセル');
+  const viewMode = currentFilters.reservationView || 'all';
+
+  if (viewMode === 'grouped') {
+    // シリーズ集計テーブル
+    const agg = {};
+    validResv.forEach(r => {
+      const code = r.propCode || r.property || '';
+      const base = code ? getSeriesBase(code) : (r.property || 'その他');
+      if (!agg[base]) agg[base] = { count: 0, sales: 0, nights: 0, guests: 0, received: 0 };
+      agg[base].count++;
+      agg[base].sales += r.sales || 0;
+      agg[base].nights += r.nights || 0;
+      agg[base].guests += r.guestCount || 0;
+      agg[base].received += r.received || 0;
+    });
+    const rows = Object.entries(agg).sort((a, b) => b[1].count - a[1].count);
+    if (thead) thead.innerHTML = `<tr><th>シリーズ</th><th>予約数</th><th>GMV</th><th>ADR</th><th>平均泊数</th><th>平均ゲスト数</th><th>総受取金</th></tr>`;
+    tbody.innerHTML = rows.map(([base, s]) => {
+      const adr = s.nights > 0 ? Math.round(s.sales / s.nights) : 0;
+      const avgNights = s.count > 0 ? (s.nights / s.count).toFixed(1) : '-';
+      const avgGuests = s.count > 0 ? (s.guests / s.count).toFixed(1) : '-';
+      return `<tr><td style="font-weight:600;">${base}</td><td>${s.count}件</td><td>${fmtYenFull(s.sales)}</td><td>${fmtYenFull(adr)}</td><td>${avgNights}泊</td><td>${avgGuests}名</td><td>${fmtYenFull(s.received)}</td></tr>`;
+    }).join('');
+    return;
+  }
+
+  // 通常モード: 個別予約リスト
+  if (thead) thead.innerHTML = `<tr><th>予約日</th><th>予約サイト</th><th>物件名</th><th>販売額</th><th>チェックイン</th><th>泊数</th><th>ゲスト数</th><th>チェックアウト</th><th>ゲスト名</th><th>国籍</th><th>状態</th><th>受取金</th><th>支払済み</th><th>AirHost予約ID</th></tr>`;
+  const displayResv = validResv.slice(0, 100);
   tbody.innerHTML = displayResv.map(r => {
     const statusBadge = r.status === '確認済み' ? 'badge-green' : r.status === 'システムキャンセル' ? 'badge-red' : 'badge-orange';
     const prop = findPropByReservation(r);
@@ -4393,6 +4478,7 @@ function initChartsForTab(tabId) {
   if (tabId === 'revenue') initRevenueCharts();
   if (tabId === 'review') initReviewCharts();
   if (tabId === 'watchlist') initWatchlistCharts();
+  if (tabId === 'market') initMarketCharts();
 }
 
 function initDailyCharts() {
@@ -4638,14 +4724,22 @@ function initReservationCharts() {
     });
   }
 
-  // 物件別予約数（横棒、件数降順）
+  // 物件別予約数（横棒、件数降順）— グループ表示対応
   destroyChart('propertyBD');
   const propMap = {};
   const propSalesMap = {};
+  const viewMode = currentFilters.reservationView || 'all';
   filtered.forEach(r => {
-    const p = r.property || 'その他';
-    propMap[p] = (propMap[p] || 0) + 1;
-    propSalesMap[p] = (propSalesMap[p] || 0) + (r.sales || 0);
+    let key;
+    if (viewMode === 'grouped') {
+      const code = r.propCode || r.property || '';
+      const base = code ? getSeriesBase(code) : '';
+      key = base || r.property || 'その他';
+    } else {
+      key = r.property || 'その他';
+    }
+    propMap[key] = (propMap[key] || 0) + 1;
+    propSalesMap[key] = (propSalesMap[key] || 0) + (r.sales || 0);
   });
   const ctx4 = document.getElementById('chartPropertyBreakdown');
   if (ctx4) {
@@ -4697,6 +4791,92 @@ function initReservationCharts() {
       }
     });
   }
+}
+
+// 市場データ欠損チェック（物件マスタで使われている {area, ward, bedSuffix} × 3メトリクス）
+function renderMarketDataCoverage(areaFilter) {
+  const el = document.getElementById('market-data-coverage');
+  if (!el) return;
+  const adSheets = window._airdnaSheets || {};
+  const bedLabel = (n) => n === 0 ? 'Studio' : (n === 4 ? '4BR+' : `${n}BR`);
+
+  // 物件マスタから使用中の組み合わせを抽出
+  const combos = new Map(); // key: area|ward|bed → {area, ward, wardEn, bed, bedSuffix, propNames}
+  (propertyMaster || []).forEach(p => {
+    if (p.excludeKpi) return;
+    if (!p.area || !p.address) return;
+    if (areaFilter && areaFilter !== '全体' && p.area !== areaFilter) return;
+    const ward = extractWard(p.address);
+    const wardEn = wardJpToAirdna(ward, p.area, p.address);
+    const bed = layoutToBedrooms(p.layout);
+    if (!ward || !wardEn || bed === null) return;
+    const key = `${p.area}|${ward}|${bed}`;
+    if (!combos.has(key)) combos.set(key, { area: p.area, ward, wardEn, bed, bedSuffix: bedLabel(bed), propNames: [] });
+    combos.get(key).propNames.push(p.name);
+  });
+
+  // 各組で3シートの有無を確認
+  const metrics = ['occupancy', 'rates_summary', 'revenue_summary'];
+  const rows = [];
+  combos.forEach(c => {
+    const sheets = metrics.map(m => `AD_${c.area}_${c.wardEn}_${c.bedSuffix}_${m}`);
+    const missing = sheets.filter(s => !adSheets[s]);
+    if (missing.length === 0) return;
+    // フォールバック判定
+    const wardOnly = adSheets[`AD_${c.area}_${c.wardEn}_occupancy`];
+    const fallback = wardOnly ? `${c.ward}全体` : `${c.area}全域`;
+    rows.push({ ...c, missing, missingCount: missing.length, fallback });
+  });
+
+  if (combos.size === 0) {
+    el.innerHTML = '';
+    return;
+  }
+  // coverage情報がある場合はセクション自体も見えるように
+  const section = document.getElementById('market-compare-section');
+  if (section) section.style.display = '';
+  if (rows.length === 0) {
+    el.innerHTML = `<div style="background:#34C75912;border-left:3px solid #34C759;border-radius:6px;padding:8px 12px;font-size:12px;color:#1d1d1f;">
+      ✓ 市場データ完備: 使用中の ${combos.size} 組（区×間取り）すべて取得済み
+    </div>`;
+    return;
+  }
+
+  // 欠損一覧テーブル（折りたたみ）
+  rows.sort((a, b) => (a.area + a.ward).localeCompare(b.area + b.ward));
+  const totalMissing = rows.reduce((s, r) => s + r.missingCount, 0);
+  const tableRows = rows.map(r => `<tr style="border-bottom:1px solid #f0f0f0;">
+    <td style="padding:4px 8px;">${r.area}</td>
+    <td style="padding:4px 8px;">${r.ward}</td>
+    <td style="padding:4px 8px;">${r.bedSuffix}</td>
+    <td style="padding:4px 8px;text-align:right;color:#FF9500;font-weight:600;">${r.missingCount}/3</td>
+    <td style="padding:4px 8px;font-size:11px;color:#86868b;">${r.missing.map(s => s.split('_').pop()).join(', ')}</td>
+    <td style="padding:4px 8px;color:#86868b;">→ ${r.fallback}</td>
+    <td style="padding:4px 8px;font-size:11px;color:#86868b;">${r.propNames.length}室</td>
+  </tr>`).join('');
+
+  el.innerHTML = `<details style="background:#FF950012;border-left:3px solid #FF9500;border-radius:6px;padding:8px 12px;">
+    <summary style="font-size:12px;cursor:pointer;font-weight:600;color:#FF9500;">
+      ⚠ 要取得データあり: ${rows.length}組 / ${combos.size}組（計${totalMissing}シート欠損）— 展開して詳細表示
+    </summary>
+    <div style="margin-top:8px;font-size:11px;color:#86868b;">
+      対処: Chrome拡張で該当都市の「🛏 間取り別取得」を実行。既に存在するシートはスキップされます。
+    </div>
+    <div style="max-height:400px;overflow-y:auto;margin-top:8px;">
+      <table style="width:100%;border-collapse:collapse;font-size:12px;background:white;border-radius:4px;">
+        <thead><tr style="background:#f5f5f7;border-bottom:2px solid #e5e5ea;">
+          <th style="padding:6px 8px;text-align:left;">エリア</th>
+          <th style="padding:6px 8px;text-align:left;">区</th>
+          <th style="padding:6px 8px;text-align:left;">間取り</th>
+          <th style="padding:6px 8px;text-align:right;">欠損</th>
+          <th style="padding:6px 8px;text-align:left;">欠損メトリクス</th>
+          <th style="padding:6px 8px;text-align:left;">フォールバック先</th>
+          <th style="padding:6px 8px;text-align:left;">該当物件</th>
+        </tr></thead>
+        <tbody>${tableRows}</tbody>
+      </table>
+    </div>
+  </details>`;
 }
 
 // 未来予約分析（AirDNA市場データ vs 自社実予約）
@@ -4984,6 +5164,9 @@ function initRevenueCharts() {
   const marketSection = document.getElementById('market-compare-section');
   const adSheets = window._airdnaSheets || {};
   const adSheetNames = Object.keys(adSheets);
+
+  // 市場データ欠損チェック
+  renderMarketDataCoverage(area);
 
   // エリアフィルタに対応するシートを選択（AD_{エリア}_xxx）
   const mktArea = area === '全体' ? null : area;
@@ -6141,6 +6324,1343 @@ function renderPmbmTab() {
 }
 
 let _pmbmCharts = { monthly: null, rate: null, area: null };
+// ============================================================
+// マーケットタブ（AirDNA市場データの俯瞰・都市比較・インサイト）
+// ============================================================
+const MKT_CITIES = ['大阪', '京都', '東京'];
+const MKT_CITY_COLORS = { '大阪': '#007AFF', '京都': '#FF9500', '東京': '#34C759' };
+
+function setMarketPeriod(el) {
+  el.parentElement.querySelectorAll('.pill').forEach(p => p.classList.remove('active'));
+  el.classList.add('active');
+  currentFilters.marketPeriod = el.dataset.period;
+  renderMarketTab();
+  setTimeout(() => initMarketCharts(), 50);
+}
+
+function setMarketCity(el) {
+  el.parentElement.querySelectorAll('.pill').forEach(p => p.classList.remove('active'));
+  el.classList.add('active');
+  currentFilters.marketCity = el.dataset.city;
+  renderMarketTab();
+  setTimeout(() => initMarketCharts(), 50);
+}
+
+function mktSheet(name) { return (window._airdnaSheets || {})[name]; }
+function mktFirstValidField(sheet, fields) {
+  if (!sheet || !sheet.length) return null;
+  const keys = Object.keys(sheet[0]);
+  for (const f of fields) if (keys.includes(f)) return f;
+  return null;
+}
+function mktLatestMonth(city) {
+  const s = mktSheet(`AD_${city}全域_occupancy`);
+  if (!s) return null;
+  const yms = s.map(r => (r['Date'] || '').slice(0, 7)).filter(Boolean).sort();
+  return yms[yms.length - 1] || null;
+}
+function mktMonthsEndingAt(ym, count) {
+  if (!ym) return [];
+  const [y, m] = ym.split('-').map(Number);
+  const out = [];
+  for (let i = count - 1; i >= 0; i--) {
+    const d = new Date(y, m - 1 - i, 1);
+    out.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
+  }
+  return out;
+}
+function mktValue(sheet, field, ym) {
+  if (!sheet || !field) return null;
+  const row = sheet.find(r => (r['Date'] || '').slice(0, 7) === ym);
+  if (!row) return null;
+  const v = parseFloat(row[field]);
+  return isNaN(v) ? null : v;
+}
+function mktAvg(sheet, field, yms) {
+  if (!sheet || !field) return null;
+  const set = new Set(yms);
+  const vals = sheet.filter(r => set.has((r['Date'] || '').slice(0, 7)))
+    .map(r => parseFloat(r[field]))
+    .filter(v => !isNaN(v) && v > 0);
+  return vals.length ? vals.reduce((s, v) => s + v, 0) / vals.length : null;
+}
+function mktCityKpi(city, yms) {
+  const occS = mktSheet(`AD_${city}全域_occupancy`);
+  const adrS = mktSheet(`AD_${city}全域_rates_summary`);
+  const revS = mktSheet(`AD_${city}全域_revenue_summary`);
+  const occF = mktFirstValidField(occS, ['Rate', 'Occupancy', 'rate']);
+  const adrF = mktFirstValidField(adrS, ['Daily rate', 'Rate', 'daily_rate']);
+  const revF = mktFirstValidField(revS, ['Revenue', 'revenue']);
+  const occ = mktAvg(occS, occF, yms);
+  const adr = mktAvg(adrS, adrF, yms);
+  const revpar = (occ !== null && adr !== null) ? (occ / 100) * adr : null;
+  const revenue = mktAvg(revS, revF, yms);
+  return { occ, adr, revpar, revenue };
+}
+
+function mktEnumerateWards(city) {
+  const adSheets = window._airdnaSheets || {};
+  const prefix = `AD_${city}_`;
+  const wards = new Set();
+  Object.keys(adSheets).forEach(name => {
+    if (!name.startsWith(prefix)) return;
+    if (!name.endsWith('_occupancy')) return;
+    const rest = name.slice(prefix.length, -'_occupancy'.length);
+    // ward のみ（bedSuffix含まない）= パーツが1つ
+    if (!rest.includes('_')) wards.add(rest);
+  });
+  // エリア全域は除外
+  wards.delete('全域');
+  return [...wards];
+}
+
+// WARD_JP_TO_EN の逆引き（あいまい含む）
+function mktWardEnToJp(en, city) {
+  for (const [jp, m] of Object.entries(WARD_AMBIGUOUS)) {
+    if (m[city] === en) return jp;
+  }
+  for (const [jp, e] of Object.entries(WARD_JP_TO_EN)) {
+    if (e === en) return jp;
+  }
+  return en;
+}
+
+// ============================================================
+// e-Stat データアクセスヘルパ
+// ============================================================
+function estatSheet(name) { return (window._estatSheets || {})[name]; }
+function estatFindCol(row, candidates) {
+  const keys = Object.keys(row || {});
+  for (const c of candidates) {
+    const match = keys.find(k => k && k.indexOf(c) >= 0);
+    if (match) return match;
+  }
+  return null;
+}
+function estatExtractYm(s) {
+  if (!s) return '';
+  const m = String(s).match(/(\d{4})[^\d]?(\d{1,2})/);
+  if (!m) return '';
+  const y = m[1], mm = String(parseInt(m[2], 10)).padStart(2, '0');
+  return `${y}-${mm}`;
+}
+function estatParseVal(v) {
+  if (v === null || v === undefined) return NaN;
+  const n = parseFloat(String(v).replace(/[,\s]/g, ''));
+  return n;
+}
+function estatRecentYms(count, endYm) {
+  // endYm='2026-02' なら直近count月のYM配列（古い→新しい）
+  if (!endYm) return [];
+  const [y, m] = endYm.split('-').map(Number);
+  const out = [];
+  for (let i = count - 1; i >= 0; i--) {
+    const d = new Date(y, m - 1 - i, 1);
+    out.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
+  }
+  return out;
+}
+function estatLatestYm(sheetName) {
+  const sheet = estatSheet(sheetName);
+  if (!sheet || !sheet.length) return null;
+  const timeCol = estatFindCol(sheet[0], ['時間軸', '時点', '月']);
+  if (!timeCol) return null;
+  const yms = sheet.map(r => estatExtractYm(r[timeCol])).filter(Boolean);
+  return yms.sort().pop() || null;
+}
+
+// 国籍英→地域マッピング（主要国）
+const COUNTRY_REGION = {
+  '韓国': '東アジア', '中国': '東アジア', '台湾': '東アジア', '香港': '東アジア',
+  'タイ': '東南アジア', 'シンガポール': '東南アジア', 'マレーシア': '東南アジア', 'インドネシア': '東南アジア',
+  'フィリピン': '東南アジア', 'ベトナム': '東南アジア',
+  'インド': '南アジア',
+  '米国': '欧米豪', 'アメリカ': '欧米豪', 'カナダ': '欧米豪', '英国': '欧米豪', 'イギリス': '欧米豪',
+  'フランス': '欧米豪', 'ドイツ': '欧米豪', 'イタリア': '欧米豪', 'スペイン': '欧米豪',
+  'オーストラリア': '欧米豪',
+};
+function classifyRegion(country) {
+  if (!country) return 'その他';
+  for (const key of Object.keys(COUNTRY_REGION)) {
+    if (country.indexOf(key) >= 0) return COUNTRY_REGION[key];
+  }
+  return 'その他';
+}
+
+function renderMarketTab() {
+  const sub = currentFilters.marketSubTab || 'top';
+  if (sub === 'top') return renderMarketTopTab();
+  if (sub === 'macro') return renderMarketMacroTab();
+  return renderMarketAirdnaTab();
+}
+
+function renderMarketAirdnaTab() {
+  const basis = document.getElementById('mkt-data-basis');
+  const kpiEl = document.getElementById('mkt-kpi-grid');
+  const insightsEl = document.getElementById('mkt-insights');
+  const wardEl = document.getElementById('mkt-ward-rank');
+  if (!kpiEl) return;
+
+  // AirDNAデータが無い場合
+  const anyCityData = MKT_CITIES.some(c => mktSheet(`AD_${c}全域_occupancy`));
+  if (!anyCityData) {
+    kpiEl.innerHTML = `<div style="background:#FF950012;border-left:3px solid #FF9500;border-radius:6px;padding:12px 16px;font-size:13px;">
+      AirDNA市場データが未取得です。Chrome拡張の「🏙 3都市一括取得」で取得してください。
+    </div>`;
+    if (basis) basis.textContent = '';
+    if (insightsEl) insightsEl.innerHTML = '';
+    if (wardEl) wardEl.innerHTML = '';
+    return;
+  }
+
+  // 期間決定（各都市の最新月の最も古いもの基準に揃える）
+  const latestPerCity = MKT_CITIES.map(c => mktLatestMonth(c)).filter(Boolean);
+  const baseLatest = latestPerCity.sort()[0]; // 3都市共通の最新月
+  const period = currentFilters.marketPeriod || 'last3';
+  const count = period === 'latest' ? 1 : period === 'last3' ? 3 : period === 'last6' ? 6 : 12;
+  const selYms = mktMonthsEndingAt(baseLatest, count);
+  const prevYms = selYms.map(ym => { const [y, m] = ym.split('-'); return `${+y - 1}-${m}`; });
+
+  if (basis) basis.textContent = `基準月: ${baseLatest || '—'} / 集計: ${selYms[0]}〜${selYms[selYms.length - 1]}`;
+
+  // KPIカード（3都市 × OCC/ADR/RevPAR）
+  const cityKpis = {};
+  MKT_CITIES.forEach(c => { cityKpis[c] = { cur: mktCityKpi(c, selYms), prev: mktCityKpi(c, prevYms) }; });
+
+  const fmtDelta = (cur, prev, isPct) => {
+    if (cur === null || prev === null || prev === 0) return '';
+    const d = cur - prev;
+    const pct = (d / prev) * 100;
+    const sign = d >= 0 ? '+' : '';
+    const col = d >= 0 ? '#34C759' : '#FF3B30';
+    const valStr = isPct ? `${sign}${d.toFixed(1)}pt` : `${sign}${pct.toFixed(1)}%`;
+    return `<span style="color:${col};font-weight:600;">${valStr}</span>`;
+  };
+
+  kpiEl.innerHTML = `<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:16px;">
+    ${MKT_CITIES.map(c => {
+      const { cur, prev } = cityKpis[c];
+      const color = MKT_CITY_COLORS[c];
+      return `<div class="card" style="border-top:3px solid ${color};">
+        <div style="font-size:16px;font-weight:700;margin-bottom:12px;color:${color};">${c}</div>
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;">
+          <div>
+            <div style="font-size:11px;color:#86868b;">OCC</div>
+            <div style="font-size:20px;font-weight:700;">${cur.occ !== null ? cur.occ.toFixed(1) + '%' : '—'}</div>
+            <div style="font-size:11px;">YoY ${fmtDelta(cur.occ, prev.occ, true)}</div>
+          </div>
+          <div>
+            <div style="font-size:11px;color:#86868b;">ADR</div>
+            <div style="font-size:20px;font-weight:700;">${cur.adr !== null ? '¥' + Math.round(cur.adr).toLocaleString() : '—'}</div>
+            <div style="font-size:11px;">YoY ${fmtDelta(cur.adr, prev.adr, false)}</div>
+          </div>
+          <div>
+            <div style="font-size:11px;color:#86868b;">RevPAR</div>
+            <div style="font-size:20px;font-weight:700;">${cur.revpar !== null ? '¥' + Math.round(cur.revpar).toLocaleString() : '—'}</div>
+            <div style="font-size:11px;">YoY ${fmtDelta(cur.revpar, prev.revpar, false)}</div>
+          </div>
+        </div>
+      </div>`;
+    }).join('')}
+  </div>`;
+
+  // 区別ランキング
+  const city = currentFilters.marketCity || '大阪';
+  document.getElementById('mktWardRankTitle').textContent = `${city} 区別ランキング（RevPAR）`;
+  const wards = mktEnumerateWards(city);
+  const wardStats = wards.map(w => {
+    const occS = mktSheet(`AD_${city}_${w}_occupancy`);
+    const adrS = mktSheet(`AD_${city}_${w}_rates_summary`);
+    const occF = mktFirstValidField(occS, ['Rate', 'Occupancy', 'rate']);
+    const adrF = mktFirstValidField(adrS, ['Daily rate', 'Rate', 'daily_rate']);
+    const occ = mktAvg(occS, occF, selYms);
+    const adr = mktAvg(adrS, adrF, selYms);
+    const revpar = (occ !== null && adr !== null) ? (occ / 100) * adr : null;
+    return { en: w, jp: mktWardEnToJp(w, city), occ, adr, revpar };
+  }).filter(x => x.revpar !== null).sort((a, b) => b.revpar - a.revpar);
+
+  if (wardEl) {
+    if (wardStats.length === 0) {
+      wardEl.innerHTML = `<div style="font-size:12px;color:#86868b;">${city}の区別データが未取得です</div>`;
+    } else {
+      const top5 = wardStats.slice(0, 5);
+      const bot5 = wardStats.slice(-5).reverse();
+      const row = (r, rank) => `<tr style="border-bottom:1px solid #f0f0f0;">
+        <td style="padding:4px 6px;color:#86868b;width:28px;">${rank}</td>
+        <td style="padding:4px 6px;font-weight:600;">${r.jp}</td>
+        <td style="padding:4px 6px;text-align:right;">${r.occ !== null ? r.occ.toFixed(1) + '%' : '—'}</td>
+        <td style="padding:4px 6px;text-align:right;">${r.adr !== null ? '¥' + Math.round(r.adr).toLocaleString() : '—'}</td>
+        <td style="padding:4px 6px;text-align:right;font-weight:600;">¥${Math.round(r.revpar).toLocaleString()}</td>
+      </tr>`;
+      wardEl.innerHTML = `<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+        <div>
+          <div style="font-size:11px;font-weight:600;color:#34C759;margin-bottom:4px;">▲ 上位5区</div>
+          <table style="width:100%;border-collapse:collapse;font-size:12px;">
+            <thead><tr style="color:#86868b;font-size:10px;"><th></th><th style="text-align:left;padding:2px 6px;">区</th><th style="text-align:right;padding:2px 6px;">OCC</th><th style="text-align:right;padding:2px 6px;">ADR</th><th style="text-align:right;padding:2px 6px;">RevPAR</th></tr></thead>
+            <tbody>${top5.map((r, i) => row(r, i + 1)).join('')}</tbody>
+          </table>
+        </div>
+        <div>
+          <div style="font-size:11px;font-weight:600;color:#FF3B30;margin-bottom:4px;">▼ 下位5区</div>
+          <table style="width:100%;border-collapse:collapse;font-size:12px;">
+            <thead><tr style="color:#86868b;font-size:10px;"><th></th><th style="text-align:left;padding:2px 6px;">区</th><th style="text-align:right;padding:2px 6px;">OCC</th><th style="text-align:right;padding:2px 6px;">ADR</th><th style="text-align:right;padding:2px 6px;">RevPAR</th></tr></thead>
+            <tbody>${bot5.map((r, i) => row(r, wardStats.length - i)).join('')}</tbody>
+          </table>
+        </div>
+      </div>
+      <div style="font-size:11px;color:#86868b;margin-top:8px;">※ 全${wardStats.length}区を集計</div>`;
+    }
+  }
+
+  // 間取り別比較タイトル
+  const bedTitle = document.getElementById('mktBedCompareTitle');
+  if (bedTitle) bedTitle.textContent = `${city} 間取り別比較（OCC / ADR）`;
+
+  // インサイト
+  if (insightsEl) {
+    const insights = buildMarketInsights(cityKpis, city, wardStats, selYms);
+    insightsEl.innerHTML = insights;
+  }
+}
+
+// ============================================================
+// 観光統計（e-Stat）サブタブ
+// ============================================================
+function renderMarketMacroTab() {
+  const statusEl = document.getElementById('mkt-macro-data-status');
+  const hasData = Object.keys(window._estatSheets || {}).length > 0;
+  if (!hasData) {
+    if (statusEl) statusEl.innerHTML = `<div style="background:#FF950012;border-left:3px solid #FF9500;border-radius:6px;padding:12px 16px;font-size:13px;">観光統計データ未読込です。GASで <code>runAll()</code> を実行してください。</div>`;
+    return;
+  }
+  if (statusEl) {
+    const sheetCount = Object.keys(window._estatSheets).length;
+    statusEl.innerHTML = `<div style="font-size:11px;color:#86868b;">📊 読込済み ${sheetCount} シート / 最終同期: e-Stat 公的統計</div>`;
+  }
+}
+
+// 訪日月次集計（JNTO_訪日外客数シートから国籍別）
+function estatBuildVisitorsByMonth() {
+  const sheet = estatSheet('JNTO_訪日外客数');
+  if (!sheet || !sheet.length) return { yms: [], total: {}, byCountry: {} };
+  const countryCol = estatFindCol(sheet[0], ['国籍', '国']);
+  const timeCol = estatFindCol(sheet[0], ['時間軸', '時点', '月']);
+  const valCol = estatFindCol(sheet[0], ['値']);
+  if (!countryCol || !timeCol || !valCol) return { yms: [], total: {}, byCountry: {} };
+
+  const total = {}; // ym -> sum
+  const byCountry = {}; // country -> { ym -> val }
+  const ymSet = new Set();
+  sheet.forEach(r => {
+    const country = String(r[countryCol] || '').trim();
+    const ym = estatExtractYm(r[timeCol]);
+    const v = estatParseVal(r[valCol]);
+    if (!country || !ym || isNaN(v)) return;
+    // 「総数」系および地域集計は除外して国別のみ集計
+    if (country === '総数' || country === '総計' || country === '計' || country.indexOf('総数') >= 0) return;
+    const REGION_AGG = [
+      'アジア', '東アジア', '東南アジア', '南アジア',
+      '北アメリカ', '北米', '南アメリカ', '中南米',
+      'ヨーロッパ', '欧州', '西欧', '東欧', '北欧', '南欧',
+      'オセアニア', 'アフリカ', '中東',
+      'その他', 'その他の地域', '無国籍・その他'
+    ];
+    if (REGION_AGG.indexOf(country) >= 0) return;
+    ymSet.add(ym);
+    if (!byCountry[country]) byCountry[country] = {};
+    byCountry[country][ym] = (byCountry[country][ym] || 0) + v;
+    total[ym] = (total[ym] || 0) + v;
+  });
+  return { yms: [...ymSet].sort(), total, byCountry };
+}
+
+// 都道府県別OCC（宿泊統計_定員稼働率）
+function estatBuildPrefOcc() {
+  const sheet = estatSheet('宿泊統計_定員稼働率');
+  if (!sheet || !sheet.length) return { yms: [], byPref: {} };
+  const prefCol = estatFindCol(sheet[0], ['所在地', '都道府県']);
+  const typeCol = estatFindCol(sheet[0], ['宿泊施設タイプ', '施設タイプ']);
+  const timeCol = estatFindCol(sheet[0], ['時間軸', '時点', '月']);
+  const valCol = estatFindCol(sheet[0], ['値']);
+  if (!prefCol || !timeCol || !valCol) return { yms: [], byPref: {} };
+
+  // 「全施設タイプ」or 最初のタイプのみ集計（平均近似）
+  const byPref = {}; // pref -> {ym -> {sum, count}}
+  const ymSet = new Set();
+  sheet.forEach(r => {
+    const pref = String(r[prefCol] || '').trim();
+    const ym = estatExtractYm(r[timeCol]);
+    const v = estatParseVal(r[valCol]);
+    if (!pref || !ym || isNaN(v) || v <= 0) return;
+    ymSet.add(ym);
+    if (!byPref[pref]) byPref[pref] = {};
+    if (!byPref[pref][ym]) byPref[pref][ym] = { sum: 0, count: 0 };
+    byPref[pref][ym].sum += v;
+    byPref[pref][ym].count++;
+  });
+  // 平均化
+  const byPrefAvg = {};
+  Object.keys(byPref).forEach(p => {
+    byPrefAvg[p] = {};
+    Object.keys(byPref[p]).forEach(ym => {
+      const { sum, count } = byPref[p][ym];
+      byPrefAvg[p][ym] = count > 0 ? sum / count : 0;
+    });
+  });
+  return { yms: [...ymSet].sort(), byPref: byPrefAvg };
+}
+
+// 日本人国内旅行者数（国内旅行_消費動向）
+function estatBuildDomesticTravel() {
+  const sheet = estatSheet('国内旅行_消費動向');
+  if (!sheet || !sheet.length) return { yms: [], travelers: {}, spend: {} };
+  const timeCol = estatFindCol(sheet[0], ['時間軸', '時点', '月']);
+  const valCol = estatFindCol(sheet[0], ['値']);
+  const indicatorCol = estatFindCol(sheet[0], ['指標', '項目', '表側']);
+  if (!timeCol || !valCol) return { yms: [], travelers: {}, spend: {} };
+
+  const travelers = {}, spend = {};
+  const ymSet = new Set();
+  sheet.forEach(r => {
+    const ym = estatExtractYm(r[timeCol]);
+    const v = estatParseVal(r[valCol]);
+    if (!ym || isNaN(v)) return;
+    ymSet.add(ym);
+    const indicator = indicatorCol ? String(r[indicatorCol] || '') : '';
+    if (indicator.indexOf('延べ旅行者') >= 0 || indicator.indexOf('旅行者数') >= 0) {
+      travelers[ym] = (travelers[ym] || 0) + v;
+    }
+    if (indicator.indexOf('消費額') >= 0 || indicator.indexOf('消費単価') >= 0) {
+      spend[ym] = Math.max(spend[ym] || 0, v); // 単価は最大値を採用
+    }
+  });
+  return { yms: [...ymSet].sort(), travelers, spend };
+}
+
+// CPI宿泊料（CPI_宿泊）
+function estatBuildCpi() {
+  const sheet = estatSheet('CPI_宿泊');
+  if (!sheet || !sheet.length) return { yms: [], values: {} };
+  const timeCol = estatFindCol(sheet[0], ['時間軸', '時点', '月']);
+  const valCol = estatFindCol(sheet[0], ['値']);
+  if (!timeCol || !valCol) return { yms: [], values: {} };
+
+  const values = {};
+  const ymSet = new Set();
+  sheet.forEach(r => {
+    const ym = estatExtractYm(r[timeCol]);
+    const v = estatParseVal(r[valCol]);
+    if (!ym || isNaN(v) || v <= 0) return;
+    ymSet.add(ym);
+    values[ym] = v;
+  });
+  return { yms: [...ymSet].sort(), values };
+}
+
+// 延べ宿泊者数 外国人/日本人内訳
+function estatBuildForeignRatio() {
+  const sheet = estatSheet('宿泊統計_延べ宿泊者数');
+  if (!sheet || !sheet.length) return { yms: [], byPref: {} };
+  const prefCol = estatFindCol(sheet[0], ['所在地', '都道府県']);
+  const timeCol = estatFindCol(sheet[0], ['時間軸', '時点', '月']);
+  const valCol = estatFindCol(sheet[0], ['値']);
+  if (!prefCol || !timeCol || !valCol) return { yms: [], byPref: {} };
+
+  // 「外国人」「日本人」を含む列（表側分類）を探す
+  const catCols = Object.keys(sheet[0]).filter(k => {
+    const anyHas = sheet.slice(0, 20).some(r => {
+      const v = String(r[k] || '');
+      return v.indexOf('外国人') >= 0 || v.indexOf('日本人') >= 0;
+    });
+    return anyHas;
+  });
+  const catCol = catCols[0] || null;
+  if (!catCol) return { yms: [], byPref: {} };
+
+  const byPref = {}; // pref -> {ym -> {jp, fr}}
+  const ymSet = new Set();
+  sheet.forEach(r => {
+    const pref = String(r[prefCol] || '').trim();
+    const ym = estatExtractYm(r[timeCol]);
+    const v = estatParseVal(r[valCol]);
+    const cat = String(r[catCol] || '');
+    if (!pref || !ym || isNaN(v)) return;
+    ymSet.add(ym);
+    if (!byPref[pref]) byPref[pref] = {};
+    if (!byPref[pref][ym]) byPref[pref][ym] = { jp: 0, fr: 0 };
+    if (cat.indexOf('外国人') >= 0) byPref[pref][ym].fr += v;
+    else if (cat.indexOf('日本人') >= 0) byPref[pref][ym].jp += v;
+  });
+  return { yms: [...ymSet].sort(), byPref };
+}
+
+// ============================================================
+// TOPサブタブ
+// ============================================================
+function renderMarketTopTab() {
+  renderMarketTopKpi();
+  renderMarketTopInsights();
+}
+
+function renderMarketTopKpi() {
+  const el = document.getElementById('mkt-macro-kpi');
+  if (!el) return;
+  const v = estatBuildVisitorsByMonth();
+  const latest = v.yms[v.yms.length - 1];
+  const prev = latest ? `${parseInt(latest.slice(0, 4), 10) - 1}-${latest.slice(5)}` : null;
+  const totalLatest = latest ? v.total[latest] : null;
+  const totalPrev = prev ? v.total[prev] : null;
+  const yoy = (totalLatest && totalPrev) ? ((totalLatest - totalPrev) / totalPrev) * 100 : null;
+
+  const dom = estatBuildDomesticTravel();
+  const domLatest = dom.yms[dom.yms.length - 1];
+  const domPrev = domLatest ? `${parseInt(domLatest.slice(0, 4), 10) - 1}-${domLatest.slice(5)}` : null;
+  const domYoy = (dom.travelers[domLatest] && dom.travelers[domPrev]) ? ((dom.travelers[domLatest] - dom.travelers[domPrev]) / dom.travelers[domPrev]) * 100 : null;
+
+  const cpi = estatBuildCpi();
+  const cpiLatest = cpi.yms[cpi.yms.length - 1];
+  const cpiPrev = cpiLatest ? `${parseInt(cpiLatest.slice(0, 4), 10) - 1}-${cpiLatest.slice(5)}` : null;
+  const cpiYoy = (cpi.values[cpiLatest] && cpi.values[cpiPrev]) ? cpi.values[cpiLatest] - cpi.values[cpiPrev] : null;
+
+  const deltaHtml = (v, suffix, good) => {
+    if (v === null || v === undefined) return '—';
+    const col = (good ? v >= 0 : v < 0) ? '#34C759' : '#FF3B30';
+    const sign = v >= 0 ? '+' : '';
+    return `<span style="color:${col};font-weight:600;">${sign}${v.toFixed(1)}${suffix}</span>`;
+  };
+
+  el.innerHTML = `<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;">
+    <div class="kpi-card">
+      <div class="label">訪日客（最新月）</div>
+      <div class="value">${totalLatest ? Math.round(totalLatest).toLocaleString() : '—'}</div>
+      <div class="sub">YoY ${deltaHtml(yoy, '%', true)} <span style="color:#86868b;">📊e-Stat</span></div>
+    </div>
+    <div class="kpi-card">
+      <div class="label">日本人旅行者（最新月）</div>
+      <div class="value">${dom.travelers[domLatest] ? Math.round(dom.travelers[domLatest]).toLocaleString() : '—'}</div>
+      <div class="sub">YoY ${deltaHtml(domYoy, '%', true)} <span style="color:#86868b;">📊e-Stat</span></div>
+    </div>
+    <div class="kpi-card">
+      <div class="label">宿泊料CPI</div>
+      <div class="value">${cpi.values[cpiLatest] ? cpi.values[cpiLatest].toFixed(1) : '—'}</div>
+      <div class="sub">YoY ${deltaHtml(cpiYoy, 'pt', true)} <span style="color:#86868b;">📊e-Stat</span></div>
+    </div>
+    <div class="kpi-card">
+      <div class="label">3都市 市場OCC</div>
+      <div class="value" id="topKpiAirdnaOcc">—</div>
+      <div class="sub"><span style="color:#86868b;">📊AirDNA</span></div>
+    </div>
+  </div>`;
+
+  // AirDNA 3都市OCC平均（最新月）
+  const cityOccs = MKT_CITIES.map(c => {
+    const latest = mktLatestMonth(c);
+    if (!latest) return null;
+    const sheet = mktSheet(`AD_${c}全域_occupancy`);
+    const field = mktFirstValidField(sheet, ['Rate', 'Occupancy', 'rate']);
+    return mktValue(sheet, field, latest);
+  }).filter(v => v !== null);
+  if (cityOccs.length) {
+    const avg = cityOccs.reduce((s, v) => s + v, 0) / cityOccs.length;
+    const kpiEl = document.getElementById('topKpiAirdnaOcc');
+    if (kpiEl) kpiEl.textContent = avg.toFixed(1) + '%';
+  }
+}
+
+function renderMarketTopInsights() {
+  const el = document.getElementById('mkt-top-insights');
+  if (!el) return;
+  const insights = [];
+
+  const v = estatBuildVisitorsByMonth();
+  const latest = v.yms[v.yms.length - 1];
+  const prev = latest ? `${parseInt(latest.slice(0, 4), 10) - 1}-${latest.slice(5)}` : null;
+
+  // ① マクロ需要 vs 市場OCC
+  if (latest && prev) {
+    MKT_CITIES.forEach(c => {
+      const adLatest = mktLatestMonth(c);
+      if (!adLatest) return;
+      const sheet = mktSheet(`AD_${c}全域_occupancy`);
+      const f = mktFirstValidField(sheet, ['Rate', 'Occupancy', 'rate']);
+      const curOcc = mktValue(sheet, f, adLatest);
+      const [ay, am] = adLatest.split('-');
+      const prevYm = `${+ay - 1}-${am}`;
+      const prevOcc = mktValue(sheet, f, prevYm);
+      if (curOcc === null || prevOcc === null) return;
+      const occDiff = curOcc - prevOcc;
+
+      const visitorYoy = (v.total[latest] && v.total[prev]) ? ((v.total[latest] - v.total[prev]) / v.total[prev]) * 100 : null;
+      if (visitorYoy === null) return;
+      if (visitorYoy > 10 && occDiff < 0) {
+        insights.push({ level: 'warning', icon: '⚠', category: `${c}需要×供給`,
+          title: `${c}: 需要増(+${visitorYoy.toFixed(1)}%)に市場OCCが追従していない`,
+          text: `訪日客YoY +${visitorYoy.toFixed(1)}% に対し${c}市場OCCは ${occDiff.toFixed(1)}pt減。供給過多or価格抵抗の可能性`
+        });
+      } else if (visitorYoy > 10 && occDiff > 5) {
+        insights.push({ level: 'success', icon: '🔥', category: `${c}需要×供給`,
+          title: `${c}: 需要増×OCC伸長の追い風`,
+          text: `訪日客YoY +${visitorYoy.toFixed(1)}% かつ${c}OCC +${occDiff.toFixed(1)}pt。値上げで収益最大化の好機`
+        });
+      }
+    });
+  }
+
+  // ② 宿泊料CPI vs AirDNA ADR
+  const cpi = estatBuildCpi();
+  const cpiLatest = cpi.yms[cpi.yms.length - 1];
+  const cpiPrev = cpiLatest ? `${parseInt(cpiLatest.slice(0, 4), 10) - 1}-${cpiLatest.slice(5)}` : null;
+  if (cpiLatest && cpiPrev && cpi.values[cpiLatest] && cpi.values[cpiPrev]) {
+    const cpiYoy = ((cpi.values[cpiLatest] - cpi.values[cpiPrev]) / cpi.values[cpiPrev]) * 100;
+    // 自社ADR YoY
+    const now = new Date();
+    const curYm = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    const prevYm = `${now.getFullYear() - 1}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    const curStats = computeOverallStatsMulti([curYm], '全体', true);
+    const prevStats = computeOverallStatsMulti([prevYm], '全体', true);
+    if (curStats.adr > 0 && prevStats.adr > 0) {
+      const ourYoy = ((curStats.adr - prevStats.adr) / prevStats.adr) * 100;
+      const gap = ourYoy - cpiYoy;
+      if (gap < -3) {
+        insights.push({ level: 'warning', icon: '📉', category: '価格追従',
+          title: '自社ADRが宿泊料インフレに追従できていない',
+          text: `宿泊料CPI YoY +${cpiYoy.toFixed(1)}% vs 自社ADR YoY ${ourYoy >= 0 ? '+' : ''}${ourYoy.toFixed(1)}%（${gap.toFixed(1)}pt遅れ）。市場価格帯へ追従の余地`
+        });
+      } else if (gap > 5) {
+        insights.push({ level: 'success', icon: '🏆', category: '価格追従',
+          title: '自社ADRは市場インフレを先行',
+          text: `宿泊料CPI +${cpiYoy.toFixed(1)}% / 自社ADR +${ourYoy.toFixed(1)}%（+${gap.toFixed(1)}pt先行）`
+        });
+      }
+    }
+  }
+
+  // ③ インバウンド依存度
+  const dom = estatBuildDomesticTravel();
+  const domLatest = dom.yms[dom.yms.length - 1];
+  if (domLatest && dom.travelers[domLatest] && v.total[latest]) {
+    const ratio = v.total[latest] / (v.total[latest] + dom.travelers[domLatest]) * 100;
+    insights.push({ level: 'info', icon: '🌏', category: '依存度',
+      title: `国内宿泊市場のインバウンド比率: ${ratio.toFixed(1)}%`,
+      text: `訪日客 ${Math.round(v.total[latest]).toLocaleString()} / 日本人旅行者 ${Math.round(dom.travelers[domLatest]).toLocaleString()}。自社ポートフォリオのインバウンド依存度と照らして方向性判断を`
+    });
+  }
+
+  // ④ 国別伸び率トップ
+  if (latest && prev) {
+    const growth = [];
+    Object.keys(v.byCountry).forEach(country => {
+      const cur = v.byCountry[country][latest];
+      const pv = v.byCountry[country][prev];
+      if (!cur || !pv || pv < 1000) return;
+      growth.push({ country, yoy: ((cur - pv) / pv) * 100, cur });
+    });
+    growth.sort((a, b) => b.yoy - a.yoy);
+    const top3 = growth.slice(0, 3);
+    if (top3.length > 0) {
+      insights.push({ level: 'info', icon: '📈', category: '国別トレンド',
+        title: '訪日客YoY伸長トップ3',
+        text: top3.map(g => `${g.country} +${g.yoy.toFixed(0)}%`).join(' / ') + '。自社ゲスト構成比と比較して狙う国を検討'
+      });
+    }
+  }
+
+  // ⑤ デフォルト
+  if (insights.length === 0) {
+    insights.push({ level: 'info', icon: '✓', category: '総合', title: 'データ不足', text: '十分な比較データが揃うまでお待ちください' });
+  }
+
+  const levelColors = {
+    success: { bg: '#34C75912', border: '#34C759', text: '#34C759' },
+    warning: { bg: '#FF950012', border: '#FF9500', text: '#FF9500' },
+    info: { bg: '#007AFF12', border: '#007AFF', text: '#007AFF' },
+  };
+  el.innerHTML = insights.map(ins => {
+    const c = levelColors[ins.level] || levelColors.info;
+    return `<div style="background:${c.bg};border-left:3px solid ${c.border};border-radius:6px;padding:10px 14px;margin-bottom:8px;">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
+        <span style="font-size:16px;">${ins.icon}</span>
+        <span style="font-weight:700;font-size:13px;color:${c.text};">${ins.title}</span>
+        <span style="font-size:10px;color:#86868b;margin-left:auto;background:rgba(0,0,0,0.04);padding:2px 6px;border-radius:4px;">${ins.category}</span>
+      </div>
+      <div style="font-size:12px;color:#1d1d1f;line-height:1.5;">${ins.text}</div>
+    </div>`;
+  }).join('');
+}
+
+function buildMarketInsights(cityKpis, focusCity, wardStats, selYms) {
+  const list = [];
+  // YoY 各都市のRevPAR伸び率
+  const yoys = MKT_CITIES.map(c => {
+    const { cur, prev } = cityKpis[c];
+    if (!cur.revpar || !prev.revpar) return null;
+    return { city: c, pct: ((cur.revpar - prev.revpar) / prev.revpar) * 100, cur: cur.revpar };
+  }).filter(Boolean);
+  if (yoys.length >= 2) {
+    const sorted = [...yoys].sort((a, b) => b.pct - a.pct);
+    list.push({ level: sorted[0].pct >= 0 ? 'success' : 'warning', icon: '📈', category: 'YoY',
+      title: `最もRevPAR伸長: ${sorted[0].city}（${sorted[0].pct >= 0 ? '+' : ''}${sorted[0].pct.toFixed(1)}%）`,
+      text: yoys.map(y => `${y.city}: ${y.pct >= 0 ? '+' : ''}${y.pct.toFixed(1)}%`).join(' / ')
+    });
+  }
+  // 3都市のOCC比較
+  const occs = MKT_CITIES.map(c => ({ city: c, v: cityKpis[c].cur.occ })).filter(x => x.v !== null);
+  if (occs.length >= 2) {
+    const max = occs.reduce((a, b) => a.v > b.v ? a : b);
+    const min = occs.reduce((a, b) => a.v < b.v ? a : b);
+    const gap = max.v - min.v;
+    if (gap >= 5) {
+      list.push({ level: 'info', icon: '🏙', category: '都市間OCC',
+        title: `${max.city}が最高稼働（${max.v.toFixed(1)}%）`,
+        text: `${min.city}（${min.v.toFixed(1)}%）との差 ${gap.toFixed(1)}pt。${max.city}は供給増のタイミングの可能性、${min.city}は価格調整の余地`
+      });
+    }
+  }
+  // 3都市のADR比較
+  const adrs = MKT_CITIES.map(c => ({ city: c, v: cityKpis[c].cur.adr })).filter(x => x.v !== null);
+  if (adrs.length >= 2) {
+    const max = adrs.reduce((a, b) => a.v > b.v ? a : b);
+    const min = adrs.reduce((a, b) => a.v < b.v ? a : b);
+    const gapPct = ((max.v - min.v) / min.v) * 100;
+    list.push({ level: 'info', icon: '💴', category: '都市間ADR',
+      title: `最高ADR: ${max.city}（¥${Math.round(max.v).toLocaleString()}）`,
+      text: `最安 ${min.city}（¥${Math.round(min.v).toLocaleString()}）比 +${gapPct.toFixed(1)}%`
+    });
+  }
+  // 区ランキング（トップ格差）
+  if (wardStats && wardStats.length >= 5) {
+    const top = wardStats[0], bot = wardStats[wardStats.length - 1];
+    const gapPct = ((top.revpar - bot.revpar) / bot.revpar) * 100;
+    list.push({ level: 'info', icon: '📍', category: `${focusCity}区別`,
+      title: `最高 ${top.jp}（¥${Math.round(top.revpar).toLocaleString()}） vs 最低 ${bot.jp}（¥${Math.round(bot.revpar).toLocaleString()}）`,
+      text: `RevPAR差 ${gapPct.toFixed(0)}%。立地・価格帯戦略の参考に`
+    });
+  }
+  // 自社 vs 市場（全体OCC）
+  try {
+    const ourOcc = MKT_CITIES.map(c => {
+      const props = (propertyMaster || []).filter(p => p.area === c && !p.excludeKpi);
+      let nights = 0, avail = 0;
+      selYms.forEach(ym => {
+        const days = getDaysInMonth(ym);
+        props.forEach(p => {
+          const s = computePropertyStats(p.name, ym);
+          if (s) nights += s.nights;
+          avail += days * (p.rooms || 1);
+        });
+      });
+      return { city: c, occ: avail > 0 ? (nights / avail) * 100 : null };
+    });
+    ourOcc.forEach(o => {
+      if (o.occ === null) return;
+      const mktOcc = cityKpis[o.city].cur.occ;
+      if (mktOcc === null) return;
+      const diff = o.occ - mktOcc;
+      if (Math.abs(diff) >= 5) {
+        list.push({
+          level: diff >= 0 ? 'success' : 'warning',
+          icon: diff >= 0 ? '🏆' : '⚠',
+          category: '自社vs市場',
+          title: `${o.city}: 自社 ${o.occ.toFixed(1)}% vs 市場 ${mktOcc.toFixed(1)}%（${diff >= 0 ? '+' : ''}${diff.toFixed(1)}pt）`,
+          text: diff >= 0 ? '市場平均を上回る。ADR見直しで収益最大化可能' : 'リスティング・価格帯・写真の改善余地'
+        });
+      }
+    });
+  } catch (e) {}
+
+  if (list.length === 0) {
+    list.push({ level: 'info', icon: '✓', category: '総合', title: '3都市とも安定推移', text: '特記すべき乖離・トレンド転換は見られません' });
+  }
+
+  const levelColors = {
+    success: { bg: '#34C75912', border: '#34C759', text: '#34C759' },
+    warning: { bg: '#FF950012', border: '#FF9500', text: '#FF9500' },
+    info: { bg: '#007AFF12', border: '#007AFF', text: '#007AFF' },
+  };
+  return list.map(ins => {
+    const c = levelColors[ins.level] || levelColors.info;
+    return `<div style="background:${c.bg};border-left:3px solid ${c.border};border-radius:6px;padding:10px 14px;margin-bottom:8px;">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
+        <span style="font-size:16px;">${ins.icon}</span>
+        <span style="font-weight:700;font-size:13px;color:${c.text};">${ins.title}</span>
+        <span style="font-size:10px;color:#86868b;margin-left:auto;background:rgba(0,0,0,0.04);padding:2px 6px;border-radius:4px;">${ins.category}</span>
+      </div>
+      <div style="font-size:12px;color:#1d1d1f;line-height:1.5;">${ins.text}</div>
+    </div>`;
+  }).join('');
+}
+
+const _mktCharts = {};
+function initMarketCharts() {
+  Object.keys(_mktCharts).forEach(k => {
+    if (_mktCharts[k]) { try { _mktCharts[k].destroy(); } catch (e) {} _mktCharts[k] = null; }
+  });
+  const sub = currentFilters.marketSubTab || 'top';
+  if (sub === 'top') return initMarketTopCharts();
+  if (sub === 'macro') return initMarketMacroCharts();
+  return initMarketAirdnaCharts();
+}
+
+// ============================================================
+// TOPサブタブのチャート
+// ============================================================
+function initMarketTopCharts() {
+  // ① 需要×供給マトリクス
+  const ctxMatrix = document.getElementById('mktTopMatrix');
+  if (ctxMatrix) {
+    const v = estatBuildVisitorsByMonth();
+    const latest = v.yms[v.yms.length - 1];
+    const prev = latest ? `${parseInt(latest.slice(0, 4), 10) - 1}-${latest.slice(5)}` : null;
+    const points = [];
+    // 3都市同じX軸（全国YoY）で重なるので、都市別booking_demand YoYをX軸に使う
+    MKT_CITIES.forEach(c => {
+      const occLatest = mktLatestMonth(c);
+      if (!occLatest) return;
+      const occSheet = mktSheet(`AD_${c}全域_occupancy`);
+      const occ = mktValue(occSheet, mktFirstValidField(occSheet, ['Rate', 'Occupancy', 'rate']), occLatest);
+      // 都市別需要YoY: booking_demand の nights booked 前年同月比
+      const bdSheet = mktSheet(`AD_${c}全域_booking_demand`);
+      const bdField = mktFirstValidField(bdSheet, ['Booking demand nights booked', 'Nights booked', 'nights_booked']);
+      const prevYm = `${parseInt(occLatest.slice(0, 4), 10) - 1}-${occLatest.slice(5)}`;
+      const bdCur = mktValue(bdSheet, bdField, occLatest);
+      const bdPrev = mktValue(bdSheet, bdField, prevYm);
+      const demandYoy = (bdCur && bdPrev) ? ((bdCur - bdPrev) / bdPrev) * 100 : null;
+      if (occ === null || demandYoy === null) return;
+      points.push({ x: demandYoy, y: occ, city: c });
+    });
+    _mktCharts.topMatrix = new Chart(ctxMatrix, {
+      type: 'scatter',
+      data: { datasets: points.map(p => ({
+        label: p.city, data: [{ x: p.x, y: p.y }],
+        backgroundColor: MKT_CITY_COLORS[p.city], pointRadius: 14, pointHoverRadius: 18,
+      })) },
+      options: {
+        responsive: true,
+        plugins: { legend: { display: true }, tooltip: { callbacks: { label: ctx => `${ctx.dataset.label}: 需要YoY ${ctx.parsed.x.toFixed(1)}% / 市場OCC ${ctx.parsed.y.toFixed(1)}%` } } },
+        scales: {
+          x: { title: { display: true, text: '都市別 需要YoY伸び率 (%)（AirDNA booking_demand）' }, ticks: { callback: v => (v >= 0 ? '+' : '') + v + '%' } },
+          y: { title: { display: true, text: '市場OCC (%)（AirDNA）' }, beginAtZero: true, max: 100, ticks: { callback: v => v + '%' } }
+        }
+      }
+    });
+  }
+
+  // ② 国別訪日構成 vs 自社ゲスト構成
+  const ctxCountry = document.getElementById('mktTopCountryCompare');
+  if (ctxCountry) {
+    const v = estatBuildVisitorsByMonth();
+    const recent = v.yms.slice(-3);
+    const estatAgg = {};
+    recent.forEach(ym => {
+      Object.keys(v.byCountry).forEach(c => { estatAgg[c] = (estatAgg[c] || 0) + (v.byCountry[c][ym] || 0); });
+    });
+    const estatTotal = Object.values(estatAgg).reduce((s, x) => s + x, 0) || 1;
+    const estatRanked = Object.entries(estatAgg).sort((a, b) => b[1] - a[1]).slice(0, 10);
+    // 自社国別（直近3ヶ月・日本人除外で訪日外国人と同列比較）
+    const now = new Date();
+    const selfCountries = {};
+    const threeMonthsAgo = new Date(now.getFullYear(), now.getMonth() - 3, 1);
+    const NAT_ALIAS = {
+      'South Korea': '韓国', 'Korea': '韓国', '大韓民国': '韓国',
+      'Taiwan': '台湾', '中華民国': '台湾',
+      'China': '中国', '中華人民共和国': '中国', 'PRC': '中国',
+      'United States': '米国', 'USA': '米国', 'US': '米国', 'アメリカ': '米国',
+      'Hong Kong': '中国〔香港〕', '香港': '中国〔香港〕',
+      'Thailand': 'タイ',
+      'Australia': 'オーストラリア', '豪州': 'オーストラリア',
+      'Philippines': 'フィリピン',
+      'Singapore': 'シンガポール',
+      'Malaysia': 'マレーシア',
+    };
+    const normalizeNat = (n) => {
+      const s = String(n || '').trim();
+      if (NAT_ALIAS[s]) return NAT_ALIAS[s];
+      return s;
+    };
+    reservations.forEach(r => {
+      if (r.status === 'キャンセル' || r.status === 'システムキャンセル' || r.status === 'ブロックされた') return;
+      if (!r.checkin) return;
+      const ci = new Date(r.checkin);
+      if (ci < threeMonthsAgo || ci > now) return;
+      const nat = normalizeNat(r.nationality);
+      if (!nat || nat === '日本' || nat === 'Japan' || nat === '日本国') return; // 外国人のみ
+      selfCountries[nat] = (selfCountries[nat] || 0) + 1;
+    });
+    const selfTotal = Object.values(selfCountries).reduce((s, x) => s + x, 0) || 1;
+    const labels = estatRanked.map(([c]) => c);
+    const estatPcts = estatRanked.map(([, v]) => (v / estatTotal) * 100);
+    const selfPcts = labels.map(l => {
+      let sum = 0;
+      Object.keys(selfCountries).forEach(sc => {
+        if (sc === l || sc.indexOf(l) >= 0 || l.indexOf(sc) >= 0) sum += selfCountries[sc];
+      });
+      return (sum / selfTotal) * 100;
+    });
+    _mktCharts.topCountry = new Chart(ctxCountry, {
+      type: 'bar',
+      data: { labels, datasets: [
+        { label: '訪日構成比（e-Stat・外国人のみ）', data: estatPcts, backgroundColor: '#007AFFCC' },
+        { label: '自社外国人ゲスト構成比', data: selfPcts, backgroundColor: '#FF9500CC' },
+      ]},
+      options: {
+        responsive: true,
+        plugins: { legend: { display: true }, tooltip: { callbacks: { label: ctx => `${ctx.dataset.label}: ${ctx.parsed.y.toFixed(1)}%` } } },
+        scales: { x: { grid: { display: false } }, y: { beginAtZero: true, title: { display: true, text: '構成比 (%)' }, ticks: { callback: v => v + '%' } } }
+      }
+    });
+  }
+
+  // ③ 宿泊料CPI vs AirDNA ADR vs 自社ADR
+  const ctxPrice = document.getElementById('mktTopPriceCompare');
+  if (ctxPrice) {
+    const cpi = estatBuildCpi();
+    const yms = cpi.yms.slice(-24);
+    const labels = yms.map(ym => ym.slice(2).replace('-', '/'));
+    const cpiData = yms.map(ym => cpi.values[ym] || null);
+    // AirDNA の rates_summary は未取得のため使用不可（occupancy/booking_demand のみ取得中）
+    // 自社ADR
+    const selfData = yms.map(ym => {
+      const s = computeOverallStatsMulti([ym], '全体', true);
+      return s.adr > 0 ? s.adr : null;
+    });
+    // インデックス化（基準=最初のnull以外の値）
+    const norm = (arr) => {
+      const base = arr.find(v => v !== null);
+      return base ? arr.map(v => v !== null ? (v / base) * 100 : null) : arr;
+    };
+    _mktCharts.topPrice = new Chart(ctxPrice, {
+      type: 'line',
+      data: { labels, datasets: [
+        { label: '宿泊料CPI（e-Stat, 指数）', data: norm(cpiData), borderColor: '#007AFF', backgroundColor: 'transparent', tension: 0.3, spanGaps: true, pointRadius: 0 },
+        { label: '自社ADR（指数化）', data: norm(selfData), borderColor: '#34C759', backgroundColor: 'transparent', tension: 0.3, spanGaps: true, pointRadius: 2 },
+      ]},
+      options: {
+        responsive: true,
+        interaction: { mode: 'index', intersect: false },
+        plugins: { legend: { display: true }, tooltip: { callbacks: { label: ctx => `${ctx.dataset.label}: ${ctx.parsed.y !== null ? ctx.parsed.y.toFixed(1) : '—'}` } } },
+        scales: { x: { ticks: { maxTicksLimit: 12 }, grid: { display: false } }, y: { title: { display: true, text: '指数（開始時=100）' } } }
+      }
+    });
+  }
+
+  // ④ 訪日客数 vs 日本人旅行者数
+  const ctxInDom = document.getElementById('mktTopInboundVsDomestic');
+  if (ctxInDom) {
+    const v = estatBuildVisitorsByMonth();
+    const dom = estatBuildDomesticTravel();
+    const yms = [...new Set([...v.yms, ...dom.yms])].sort().slice(-24);
+    const labels = yms.map(ym => ym.slice(2).replace('-', '/'));
+    _mktCharts.topInDom = new Chart(ctxInDom, {
+      type: 'line',
+      data: { labels, datasets: [
+        { label: '訪日客数（e-Stat）', data: yms.map(ym => v.total[ym] || null), borderColor: '#007AFF', backgroundColor: '#007AFF22', fill: true, tension: 0.3, yAxisID: 'y', spanGaps: true, pointRadius: 0 },
+        { label: '日本人延べ旅行者数（e-Stat）', data: yms.map(ym => dom.travelers[ym] || null), borderColor: '#FF9500', backgroundColor: 'transparent', tension: 0.3, yAxisID: 'y1', spanGaps: true, pointRadius: 0, borderDash: [4, 3] },
+      ]},
+      options: {
+        responsive: true,
+        plugins: { legend: { display: true }, tooltip: { callbacks: { label: ctx => `${ctx.dataset.label}: ${ctx.parsed.y !== null ? Math.round(ctx.parsed.y).toLocaleString() : '—'}` } } },
+        scales: {
+          x: { ticks: { maxTicksLimit: 12 }, grid: { display: false } },
+          y: { position: 'left', beginAtZero: true, title: { display: true, text: '訪日客数' } },
+          y1: { position: 'right', beginAtZero: true, grid: { drawOnChartArea: false }, title: { display: true, text: '日本人旅行者数' } }
+        }
+      }
+    });
+  }
+
+  // ⑤ 先行予約ペース（AirDNA booking_demand + 自社）
+  const ctxBD = document.getElementById('mktTopBookingDemand');
+  if (ctxBD) {
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const labels = [];
+    const dates = [];
+    for (let i = 0; i < 90; i++) {
+      const d = new Date(today); d.setDate(d.getDate() + i);
+      labels.push(`${d.getMonth() + 1}/${d.getDate()}`);
+      dates.push(d.toISOString().split('T')[0]);
+    }
+    // AirDNA booking_demand は月次なので日次には展開できない → 月次値を日次に適用（単位: 予約済物件数）
+    const airdnaSeries = MKT_CITIES.map(c => {
+      const sheet = mktSheet(`AD_${c}全域_booking_demand`);
+      const f = mktFirstValidField(sheet, ['Booking demand booked properties', 'Booked properties', 'booked_properties']);
+      return {
+        city: c,
+        data: dates.map(d => {
+          const ym = d.slice(0, 7);
+          return sheet ? mktValue(sheet, f, ym) : null;
+        })
+      };
+    });
+    // 自社先行OCC（properties 配列から、KPI対象のみ）
+    const targetProps = (typeof properties !== 'undefined' ? properties : []).filter(p => !p.excludeKpi);
+    const totalRooms = targetProps.reduce((s, p) => s + (p.rooms || 1), 0) || 1;
+    const selfData = dates.map(ds => {
+      let booked = 0;
+      targetProps.forEach(p => {
+        const has = reservations.some(r =>
+          r.status !== 'キャンセル' && r.status !== 'システムキャンセル' && r.status !== 'ブロックされた' &&
+          (r.propCode === p.name || r.property === p.propName) &&
+          r.checkin <= ds && ds < r.checkout
+        );
+        if (has) booked += (p.rooms || 1);
+      });
+      return Math.round((booked / totalRooms) * 1000) / 10;
+    });
+    // 7日移動平均
+    const selfSmoothed = selfData.map((_, i) => {
+      const slice = selfData.slice(Math.max(0, i - 3), Math.min(selfData.length, i + 4));
+      return Math.round(slice.reduce((s, v) => s + v, 0) / slice.length);
+    });
+
+    _mktCharts.topBD = new Chart(ctxBD, {
+      type: 'line',
+      data: { labels, datasets: [
+        { label: '自社先行OCC（7日MA, 左軸%）', data: selfSmoothed, borderColor: '#34C759', backgroundColor: '#34C75922', fill: true, tension: 0.3, pointRadius: 0, yAxisID: 'y' },
+        ...airdnaSeries.filter(s => s.data.some(v => v !== null)).map(s => ({
+          label: `${s.city} 市場予約済物件数（AirDNA, 右軸）`, data: s.data, borderColor: MKT_CITY_COLORS[s.city], backgroundColor: 'transparent', tension: 0.3, pointRadius: 0, borderDash: [4, 3], spanGaps: true, yAxisID: 'y1'
+        }))
+      ]},
+      options: {
+        responsive: true,
+        plugins: { legend: { display: true }, tooltip: { callbacks: { label: ctx => {
+          const isSelf = ctx.dataset.yAxisID === 'y';
+          return `${ctx.dataset.label}: ${ctx.parsed.y !== null ? (isSelf ? ctx.parsed.y + '%' : Math.round(ctx.parsed.y).toLocaleString()) : '—'}`;
+        } } } },
+        scales: {
+          x: { ticks: { maxTicksLimit: 12 }, grid: { display: false } },
+          y: { position: 'left', beginAtZero: true, max: 100, title: { display: true, text: '自社OCC (%)' }, ticks: { callback: v => v + '%' } },
+          y1: { position: 'right', beginAtZero: true, grid: { drawOnChartArea: false }, title: { display: true, text: '市場予約済物件数' } }
+        }
+      }
+    });
+  }
+
+  // ⑥ 季節性ヒートマップ（24ヶ月×3都市）
+  const heatEl = document.getElementById('mktTopSeasonHeat');
+  if (heatEl) {
+    const v = estatBuildVisitorsByMonth();
+    const yms = v.yms.slice(-24);
+    // 月ごとの訪日客総数を、過去2年の月別で集計。都市粒度は無いので全国総数
+    const vals = yms.map(ym => v.total[ym] || 0);
+    const max = Math.max(...vals, 1);
+    const colorFor = (val) => {
+      const intensity = Math.min(1, val / max);
+      const r = Math.round(255 - intensity * 100);
+      const g = Math.round(255 - intensity * 170);
+      const b = Math.round(255 - intensity * 50);
+      return `rgb(${r},${g},${b})`;
+    };
+    heatEl.innerHTML = `<div style="overflow-x:auto;"><table style="border-collapse:collapse;font-size:11px;">
+      <thead><tr>${yms.map(ym => `<th style="padding:4px 6px;text-align:center;font-weight:400;color:#86868b;">${ym.slice(2).replace('-', '/')}</th>`).join('')}</tr></thead>
+      <tbody><tr>${yms.map((ym, i) => `<td title="${Math.round(vals[i]).toLocaleString()}" style="padding:10px 6px;text-align:center;background:${colorFor(vals[i])};color:#1d1d1f;min-width:50px;border:1px solid #fff;">${Math.round(vals[i] / 10000)}万</td>`).join('')}</tr></tbody>
+    </table></div>
+    <div style="font-size:11px;color:#86868b;margin-top:6px;">全国訪日客数（万人/月）— 色濃い=多い</div>`;
+  }
+}
+
+// ============================================================
+// 観光統計サブタブのチャート
+// ============================================================
+function initMarketMacroCharts() {
+  const v = estatBuildVisitorsByMonth();
+  const yms12 = v.yms.slice(-12);
+  const labels = yms12.map(ym => ym.slice(2).replace('-', '/'));
+
+  // 訪日月次推移（YoY棒+線）
+  const ctxVT = document.getElementById('macroVisitorsTrend');
+  if (ctxVT) {
+    const totals = yms12.map(ym => v.total[ym] || 0);
+    const yoys = yms12.map(ym => {
+      const [y, m] = ym.split('-'); const pv = `${+y - 1}-${m}`;
+      const cur = v.total[ym], prev = v.total[pv];
+      return (cur && prev) ? ((cur - prev) / prev) * 100 : null;
+    });
+    _mktCharts.macroVT = new Chart(ctxVT, {
+      type: 'bar',
+      data: { labels, datasets: [
+        { type: 'bar', label: '訪日客数', data: totals, backgroundColor: '#007AFFCC', yAxisID: 'y' },
+        { type: 'line', label: 'YoY (%)', data: yoys, borderColor: '#FF3B30', backgroundColor: 'transparent', tension: 0.3, yAxisID: 'y1', spanGaps: true, pointRadius: 3 },
+      ]},
+      options: {
+        responsive: true,
+        plugins: { legend: { display: true }, tooltip: { callbacks: { label: ctx => ctx.dataset.yAxisID === 'y' ? `${Math.round(ctx.parsed.y).toLocaleString()}人` : `YoY ${ctx.parsed.y !== null ? (ctx.parsed.y >= 0 ? '+' : '') + ctx.parsed.y.toFixed(1) + '%' : '—'}` } } },
+        scales: { x: { grid: { display: false } }, y: { position: 'left', beginAtZero: true, title: { display: true, text: '訪日客数' } }, y1: { position: 'right', grid: { drawOnChartArea: false }, title: { display: true, text: 'YoY (%)' }, ticks: { callback: val => (val >= 0 ? '+' : '') + val + '%' } } }
+      }
+    });
+  }
+
+  // 国別Top10（最新月）
+  const ctxT10 = document.getElementById('macroCountryTop10');
+  if (ctxT10) {
+    const latest = v.yms[v.yms.length - 1];
+    if (latest) {
+      const ranks = Object.entries(v.byCountry).map(([c, map]) => [c, map[latest] || 0])
+        .filter(([, n]) => n > 0).sort((a, b) => b[1] - a[1]).slice(0, 10);
+      _mktCharts.macroT10 = new Chart(ctxT10, {
+        type: 'bar',
+        data: { labels: ranks.map(r => r[0]), datasets: [{ label: latest, data: ranks.map(r => r[1]), backgroundColor: PALETTE.slice(0, 10) }] },
+        options: { indexAxis: 'y', responsive: true, plugins: { legend: { display: false }, tooltip: { callbacks: { label: ctx => `${Math.round(ctx.parsed.x).toLocaleString()}人` } } }, scales: { x: { beginAtZero: true, ticks: { callback: val => Math.round(val / 1000) + 'k' } }, y: { grid: { display: false } } } }
+      });
+    }
+  }
+
+  // 国別YoY
+  const ctxYoy = document.getElementById('macroCountryYoy');
+  if (ctxYoy) {
+    const latest = v.yms[v.yms.length - 1];
+    if (latest) {
+      const [y, m] = latest.split('-');
+      const prevYm = `${+y - 1}-${m}`;
+      const yoys = Object.entries(v.byCountry).map(([c, map]) => {
+        const cur = map[latest], prev = map[prevYm];
+        if (!cur || !prev || prev < 500) return null;
+        return { country: c, yoy: ((cur - prev) / prev) * 100, cur };
+      }).filter(Boolean).sort((a, b) => b.cur - a.cur).slice(0, 10);
+      _mktCharts.macroYoy = new Chart(ctxYoy, {
+        type: 'bar',
+        data: { labels: yoys.map(y => y.country), datasets: [{ label: 'YoY', data: yoys.map(y => y.yoy), backgroundColor: yoys.map(y => y.yoy >= 0 ? '#34C759CC' : '#FF3B30CC') }] },
+        options: { indexAxis: 'y', responsive: true, plugins: { legend: { display: false }, tooltip: { callbacks: { label: ctx => (ctx.parsed.x >= 0 ? '+' : '') + ctx.parsed.x.toFixed(1) + '%' } } }, scales: { x: { title: { display: true, text: 'YoY (%)' }, ticks: { callback: v => (v >= 0 ? '+' : '') + v + '%' } }, y: { grid: { display: false } } } }
+      });
+    }
+  }
+
+  // 地域別構成比推移（直近12ヶ月）
+  const ctxRegion = document.getElementById('macroRegionMix');
+  if (ctxRegion) {
+    const regions = ['東アジア', '東南アジア', '南アジア', '欧米豪', 'その他'];
+    const datasets = regions.map(r => {
+      const data = yms12.map(ym => {
+        let sum = 0;
+        Object.keys(v.byCountry).forEach(c => {
+          if (classifyRegion(c) === r) sum += (v.byCountry[c][ym] || 0);
+        });
+        return sum;
+      });
+      return { label: r, data, backgroundColor: null, stack: 'region' };
+    });
+    const palette = ['#007AFFCC', '#FF9500CC', '#34C759CC', '#AF52DECC', '#86868bCC'];
+    datasets.forEach((d, i) => d.backgroundColor = palette[i]);
+    _mktCharts.macroRegion = new Chart(ctxRegion, {
+      type: 'bar', data: { labels, datasets },
+      options: { responsive: true, plugins: { legend: { display: true } }, scales: { x: { stacked: true, grid: { display: false } }, y: { stacked: true, beginAtZero: true, title: { display: true, text: '訪日客数（人）' } } } }
+    });
+  }
+
+  // 日本人 延べ旅行者数 & 消費単価
+  const dom = estatBuildDomesticTravel();
+  const domYms = dom.yms.slice(-12);
+  const domLabels = domYms.map(ym => ym.slice(2).replace('-', '/'));
+  const ctxDT = document.getElementById('macroDomesticTravelers');
+  if (ctxDT) {
+    _mktCharts.macroDT = new Chart(ctxDT, {
+      type: 'bar',
+      data: { labels: domLabels, datasets: [{ label: '延べ旅行者数', data: domYms.map(ym => dom.travelers[ym] || 0), backgroundColor: '#FF9500CC' }] },
+      options: { responsive: true, plugins: { legend: { display: false } }, scales: { x: { grid: { display: false } }, y: { beginAtZero: true } } }
+    });
+  }
+  const ctxDS = document.getElementById('macroDomesticSpend');
+  if (ctxDS) {
+    _mktCharts.macroDS = new Chart(ctxDS, {
+      type: 'line',
+      data: { labels: domLabels, datasets: [{ label: '消費単価', data: domYms.map(ym => dom.spend[ym] || null), borderColor: '#34C759', backgroundColor: '#34C75922', fill: true, tension: 0.3, spanGaps: true }] },
+      options: { responsive: true, plugins: { legend: { display: false } }, scales: { x: { grid: { display: false } }, y: { beginAtZero: false } } }
+    });
+  }
+
+  // 都道府県別OCC（3都市）
+  const ctxPO = document.getElementById('macroPrefOcc');
+  if (ctxPO) {
+    const pref = estatBuildPrefOcc();
+    const prefYms = pref.yms.slice(-12);
+    const prefLabels = prefYms.map(ym => ym.slice(2).replace('-', '/'));
+    const targets = ['大阪府', '京都府', '東京都'];
+    const colors = ['#007AFF', '#FF9500', '#34C759'];
+    const datasets = targets.map((p, i) => {
+      const data = prefYms.map(ym => pref.byPref[p] ? pref.byPref[p][ym] || null : null);
+      return { label: p, data, borderColor: colors[i], backgroundColor: colors[i] + '22', tension: 0.3, pointRadius: 2, spanGaps: true };
+    });
+    _mktCharts.macroPO = new Chart(ctxPO, {
+      type: 'line', data: { labels: prefLabels, datasets },
+      options: { responsive: true, plugins: { legend: { display: true } }, scales: { x: { grid: { display: false } }, y: { beginAtZero: true, max: 100, title: { display: true, text: 'OCC (%)' }, ticks: { callback: v => v + '%' } } } }
+    });
+  }
+
+  // 外国人比率（3都市）
+  const ctxFR = document.getElementById('macroForeignRatio');
+  if (ctxFR) {
+    const fr = estatBuildForeignRatio();
+    const frYms = fr.yms.slice(-12);
+    const frLabels = frYms.map(ym => ym.slice(2).replace('-', '/'));
+    const targets = ['大阪府', '京都府', '東京都'];
+    const colors = ['#007AFF', '#FF9500', '#34C759'];
+    const datasets = targets.map((p, i) => {
+      const data = frYms.map(ym => {
+        const r = fr.byPref[p] && fr.byPref[p][ym];
+        if (!r) return null;
+        const total = r.jp + r.fr;
+        return total > 0 ? (r.fr / total) * 100 : null;
+      });
+      return { label: `${p} 外国人比率`, data, borderColor: colors[i], backgroundColor: 'transparent', tension: 0.3, pointRadius: 2, spanGaps: true };
+    });
+    _mktCharts.macroFR = new Chart(ctxFR, {
+      type: 'line', data: { labels: frLabels, datasets },
+      options: { responsive: true, plugins: { legend: { display: true } }, scales: { x: { grid: { display: false } }, y: { beginAtZero: true, max: 100, title: { display: true, text: '外国人比率 (%)' }, ticks: { callback: v => v + '%' } } } }
+    });
+  }
+
+  // インバウンド消費
+  const ctxIS = document.getElementById('macroInboundSpend');
+  if (ctxIS) {
+    const s = estatSheet('インバウンド消費');
+    if (s && s.length) {
+      const countryCol = estatFindCol(s[0], ['国籍', '国']);
+      const valCol = estatFindCol(s[0], ['値']);
+      const agg = {};
+      s.forEach(r => {
+        const c = String(r[countryCol] || '');
+        const v = estatParseVal(r[valCol]);
+        if (!c || isNaN(v) || v <= 0) return;
+        agg[c] = Math.max(agg[c] || 0, v);
+      });
+      const top = Object.entries(agg).sort((a, b) => b[1] - a[1]).slice(0, 10);
+      _mktCharts.macroIS = new Chart(ctxIS, {
+        type: 'bar', data: { labels: top.map(t => t[0]), datasets: [{ label: '消費単価', data: top.map(t => t[1]), backgroundColor: PALETTE.slice(0, 10) }] },
+        options: { indexAxis: 'y', responsive: true, plugins: { legend: { display: false }, tooltip: { callbacks: { label: ctx => '¥' + Math.round(ctx.parsed.x).toLocaleString() } } }, scales: { x: { beginAtZero: true, ticks: { callback: v => '¥' + (v / 1000).toFixed(0) + 'k' } }, y: { grid: { display: false } } } }
+      });
+    }
+  }
+
+  // CPI宿泊料
+  const ctxCPI = document.getElementById('macroLodgingCpi');
+  if (ctxCPI) {
+    const cpi = estatBuildCpi();
+    const cpiYms = cpi.yms.slice(-24);
+    const cpiLabels = cpiYms.map(ym => ym.slice(2).replace('-', '/'));
+    _mktCharts.macroCPI = new Chart(ctxCPI, {
+      type: 'line', data: { labels: cpiLabels, datasets: [{ label: '宿泊料CPI (2020=100)', data: cpiYms.map(ym => cpi.values[ym] || null), borderColor: '#AF52DE', backgroundColor: '#AF52DE22', fill: true, tension: 0.3, pointRadius: 0, spanGaps: true }] },
+      options: { responsive: true, plugins: { legend: { display: false } }, scales: { x: { grid: { display: false }, ticks: { maxTicksLimit: 12 } }, y: { title: { display: true, text: '指数' } } } }
+    });
+  }
+}
+
+// ============================================================
+// AirDNAサブタブのチャート（従来のinitMarketChartsの中身）
+// ============================================================
+function initMarketAirdnaCharts() {
+  const anyCityData = MKT_CITIES.some(c => mktSheet(`AD_${c}全域_occupancy`));
+  if (!anyCityData) return;
+
+  const latestPerCity = MKT_CITIES.map(c => mktLatestMonth(c)).filter(Boolean);
+  const baseLatest = latestPerCity.sort()[0];
+  const yms12 = mktMonthsEndingAt(baseLatest, 12);
+  const labels = yms12.map(ym => { const [y, m] = ym.split('-'); return `${+m}月`; });
+
+  const buildSeries = (field, sheetSuffix, srcFields) => {
+    return MKT_CITIES.map(c => {
+      const sheet = mktSheet(`AD_${c}全域_${sheetSuffix}`);
+      const f = mktFirstValidField(sheet, srcFields);
+      return { city: c, data: yms12.map(ym => mktValue(sheet, f, ym)) };
+    });
+  };
+
+  const occSeries = buildSeries('occ', 'occupancy', ['Rate', 'Occupancy', 'rate']);
+  const adrSeries = buildSeries('adr', 'rates_summary', ['Daily rate', 'Rate', 'daily_rate']);
+  const revparSeries = occSeries.map(os => {
+    const adr = adrSeries.find(a => a.city === os.city).data;
+    return { city: os.city, data: os.data.map((v, i) => (v !== null && adr[i] !== null) ? Math.round((v / 100) * adr[i]) : null) };
+  });
+
+  const lineDataset = (s, y = '%') => ({
+    label: s.city, data: s.data, borderColor: MKT_CITY_COLORS[s.city],
+    backgroundColor: MKT_CITY_COLORS[s.city] + '22', tension: 0.3, pointRadius: 2, spanGaps: true,
+  });
+
+  const trendOpts = (yLabel, yFmt) => ({
+    responsive: true, interaction: { mode: 'index', intersect: false },
+    plugins: { legend: { display: true }, tooltip: { callbacks: { label: ctx => `${ctx.dataset.label}: ${yFmt(ctx.parsed.y)}` } } },
+    scales: {
+      x: { grid: { display: false } },
+      y: { beginAtZero: yLabel === 'OCC', title: { display: true, text: yLabel, font: { size: 11 } }, ticks: { callback: yFmt } }
+    }
+  });
+
+  const ctxOcc = document.getElementById('mktChartOccTrend');
+  if (ctxOcc) _mktCharts.OccTrend = new Chart(ctxOcc, {
+    type: 'line', data: { labels, datasets: occSeries.map(s => lineDataset(s)) },
+    options: trendOpts('OCC (%)', v => (v === null ? '—' : v.toFixed(1) + '%')),
+  });
+  const ctxAdr = document.getElementById('mktChartAdrTrend');
+  if (ctxAdr) _mktCharts.AdrTrend = new Chart(ctxAdr, {
+    type: 'line', data: { labels, datasets: adrSeries.map(s => lineDataset(s)) },
+    options: trendOpts('ADR (¥)', v => (v === null ? '—' : '¥' + Math.round(v).toLocaleString())),
+  });
+  const ctxRevpar = document.getElementById('mktChartRevparTrend');
+  if (ctxRevpar) _mktCharts.RevparTrend = new Chart(ctxRevpar, {
+    type: 'line', data: { labels, datasets: revparSeries.map(s => lineDataset(s)) },
+    options: trendOpts('RevPAR (¥)', v => (v === null ? '—' : '¥' + Math.round(v).toLocaleString())),
+  });
+
+  // YoY OCC差分（pt）
+  const yoySeries = MKT_CITIES.map(c => {
+    const sheet = mktSheet(`AD_${c}全域_occupancy`);
+    const f = mktFirstValidField(sheet, ['Rate', 'Occupancy', 'rate']);
+    return {
+      city: c,
+      data: yms12.map(ym => {
+        const cur = mktValue(sheet, f, ym);
+        const [y, m] = ym.split('-'); const prevYm = `${+y - 1}-${m}`;
+        const prev = mktValue(sheet, f, prevYm);
+        if (cur === null || prev === null) return null;
+        return +(cur - prev).toFixed(1);
+      })
+    };
+  });
+  const ctxYoy = document.getElementById('mktChartYoy');
+  if (ctxYoy) _mktCharts.Yoy = new Chart(ctxYoy, {
+    type: 'bar',
+    data: { labels, datasets: yoySeries.map(s => ({ label: s.city, data: s.data, backgroundColor: MKT_CITY_COLORS[s.city] + 'CC' })) },
+    options: {
+      responsive: true, plugins: { legend: { display: true }, tooltip: { callbacks: { label: ctx => `${ctx.dataset.label}: ${ctx.parsed.y >= 0 ? '+' : ''}${ctx.parsed.y}pt` } } },
+      scales: { x: { grid: { display: false } }, y: { title: { display: true, text: 'YoY OCC差分 (pt)' }, ticks: { callback: v => (v >= 0 ? '+' : '') + v + 'pt' } } }
+    }
+  });
+
+  // 間取り別比較（選択都市）
+  const city = currentFilters.marketCity || '大阪';
+  const bedSuffixes = ['Studio', '1BR', '2BR', '3BR', '4BR+'];
+  const period = currentFilters.marketPeriod || 'last3';
+  const count = period === 'latest' ? 1 : period === 'last3' ? 3 : period === 'last6' ? 6 : 12;
+  const selYms = mktMonthsEndingAt(baseLatest, count);
+  const bedOcc = bedSuffixes.map(bs => {
+    const sheet = mktSheet(`AD_${city}全域_${bs}_occupancy`);
+    const f = mktFirstValidField(sheet, ['Rate', 'Occupancy', 'rate']);
+    return sheet ? mktAvg(sheet, f, selYms) : null;
+  });
+  const bedAdr = bedSuffixes.map(bs => {
+    const sheet = mktSheet(`AD_${city}全域_${bs}_rates_summary`);
+    const f = mktFirstValidField(sheet, ['Daily rate', 'Rate', 'daily_rate']);
+    return sheet ? mktAvg(sheet, f, selYms) : null;
+  });
+  const ctxBeds = document.getElementById('mktChartBeds');
+  if (ctxBeds) _mktCharts.Beds = new Chart(ctxBeds, {
+    type: 'bar',
+    data: { labels: bedSuffixes, datasets: [
+      { type: 'bar', label: 'OCC (%)', data: bedOcc.map(v => v !== null ? +v.toFixed(1) : null), backgroundColor: CHART_COLORS.blue + 'CC', yAxisID: 'y' },
+      { type: 'line', label: 'ADR (¥)', data: bedAdr.map(v => v !== null ? Math.round(v) : null), borderColor: CHART_COLORS.orange, backgroundColor: 'transparent', tension: 0.3, yAxisID: 'y1', pointRadius: 4 },
+    ]},
+    options: {
+      responsive: true, plugins: { legend: { display: true }, tooltip: { callbacks: {
+        label: ctx => ctx.dataset.yAxisID === 'y' ? `OCC: ${ctx.parsed.y !== null ? ctx.parsed.y + '%' : '—'}` : `ADR: ${ctx.parsed.y !== null ? '¥' + ctx.parsed.y.toLocaleString() : '—'}`
+      } } },
+      scales: {
+        x: { grid: { display: false } },
+        y: { position: 'left', beginAtZero: true, max: 100, title: { display: true, text: 'OCC (%)' }, ticks: { callback: v => v + '%' } },
+        y1: { position: 'right', beginAtZero: true, grid: { drawOnChartArea: false }, title: { display: true, text: 'ADR (¥)' }, ticks: { callback: v => '¥' + (v / 1000).toFixed(0) + 'k' } }
+      }
+    }
+  });
+}
+
 function initPmbmCharts() {
   const area = currentFilters.pmbmArea;
   Object.keys(_pmbmCharts).forEach(k => {

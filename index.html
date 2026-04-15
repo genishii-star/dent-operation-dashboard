@@ -77,6 +77,7 @@
   <button class="tab-btn" onclick="switchTab('watchlist')">要チェック</button>
   <button class="tab-btn" onclick="switchTab('shinpou')">新法チェック</button>
   <button class="tab-btn" onclick="switchTab('pmbm')">PM/BM分析</button>
+  <button class="tab-btn" onclick="switchTab('market')">マーケット</button>
 </nav>
 
 <div class="error-banner" id="error-banner"></div>
@@ -212,6 +213,194 @@
           <div class="kpi-card"><div class="label">清掃回数 (チェックアウト件数)</div><div class="value" id="kpi-pmbm-clean-count">-</div></div>
           <div class="kpi-card"><div class="label">平均清掃単価</div><div class="value" id="kpi-pmbm-clean-avg">-</div></div>
           <div class="kpi-card"><div class="label">BM合計</div><div class="value" id="kpi-pmbm-clean-total">-</div></div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ==================== Tab: マーケット ==================== -->
+<div id="tab-market" class="tab-content">
+  <div class="container">
+    <!-- サブタブナビ -->
+    <div class="filter-pills" id="market-subtab-nav" style="margin-bottom:16px;">
+      <span class="pill active" data-subtab="top" onclick="setMarketSubTab(this)">TOP</span>
+      <span class="pill" data-subtab="airdna" onclick="setMarketSubTab(this)">AirDNA（民間）</span>
+      <span class="pill" data-subtab="macro" onclick="setMarketSubTab(this)">観光統計（公的）</span>
+    </div>
+
+    <!-- 共通フィルタ -->
+    <div class="filter-bar">
+      <label>期間</label>
+      <div class="filter-pills" id="market-period-filter">
+        <span class="pill" data-period="latest" onclick="setMarketPeriod(this)">最新月</span>
+        <span class="pill active" data-period="last3" onclick="setMarketPeriod(this)">直近3ヶ月</span>
+        <span class="pill" data-period="last6" onclick="setMarketPeriod(this)">直近6ヶ月</span>
+        <span class="pill" data-period="last12" onclick="setMarketPeriod(this)">直近12ヶ月</span>
+      </div>
+      <label>ドリル都市</label>
+      <div class="filter-pills" id="market-city-filter">
+        <span class="pill active" data-city="大阪" onclick="setMarketCity(this)">大阪</span>
+        <span class="pill" data-city="京都" onclick="setMarketCity(this)">京都</span>
+        <span class="pill" data-city="東京" onclick="setMarketCity(this)">東京</span>
+      </div>
+      <span id="mkt-data-basis" style="font-size:11px;color:#86868b;margin-left:auto;"></span>
+    </div>
+
+    <!-- ========== サブタブ: TOP ========== -->
+    <div id="market-sub-top" class="market-subtab">
+      <div id="mkt-macro-kpi" style="margin-bottom:20px;"></div>
+
+      <!-- ① 需要×供給マトリクス -->
+      <div class="card" style="margin-bottom:20px;">
+        <h2>① 3都市 需要×供給マトリクス</h2>
+        <p style="font-size:12px;color:#86868b;margin:-4px 0 12px;">📊 X軸: 都市別 需要YoY（AirDNA booking_demand 前年同月比） × Y軸: 市場OCC（AirDNA全域 occupancy）</p>
+        <canvas id="mktTopMatrix" height="120"></canvas>
+        <p style="font-size:12px;color:#515154;margin:10px 0 0;">💡 右上=需要↑×供給タイト→値上げ余地／左下=需要↓×供給余剰→早割で取りこぼし防止／右下=需要↑なのにOCC低→価格設定or露出に改善余地</p>
+      </div>
+
+      <!-- ② 国別訪日構成 vs 自社ゲスト構成 -->
+      <div class="card" style="margin-bottom:20px;">
+        <h2>② 国別訪日構成 vs 自社ゲスト構成</h2>
+        <p style="font-size:12px;color:#86868b;margin:-4px 0 12px;">📊 訪日構成（e-Stat 出入国管理統計 国籍別・直近3ヶ月）× 自社構成（予約データ国籍カラム・外国人ゲストのみ直近3ヶ月）</p>
+        <canvas id="mktTopCountryCompare" height="140"></canvas>
+        <p style="font-size:12px;color:#515154;margin:10px 0 0;">💡 訪日構成比↑なのに自社↓の国 = 獲得機会損失。該当国のOTAチャネル強化・多言語対応・連携DMC等の施策対象に。逆パターンはその国向けの強みがある→伸ばす方向。</p>
+      </div>
+
+      <!-- ③ 宿泊料CPI vs 自社ADR -->
+      <div class="card" style="margin-bottom:20px;">
+        <h2>③ 宿泊料CPI vs 自社ADR</h2>
+        <p style="font-size:12px;color:#86868b;margin:-4px 0 12px;">📊 CPI（e-Stat 宿泊料2020基準）× 自社ADR（予約データ・チェックイン月基準）— 価格追従状況（開始月=100として指数化）</p>
+        <canvas id="mktTopPriceCompare" height="120"></canvas>
+        <p style="font-size:12px;color:#515154;margin:10px 0 0;">💡 自社ADRがCPIより急上昇→値上げ成功／CPIが上なのに自社横ばい→値上げ余地の取りこぼし／乖離拡大は値付け戦略の要見直しサイン。</p>
+      </div>
+
+      <!-- ④ 訪日客数 vs 日本人旅行者数（データソース停止のため非表示） -->
+      <div class="card" style="margin-bottom:20px;display:none;">
+        <h2>④ 訪日客数 vs 日本人旅行者数</h2>
+        <p style="font-size:12px;color:#86868b;margin:-4px 0 12px;">📊 訪日客（e-Stat 出入国管理統計 港別総数）× 日本人（e-Stat 旅行・観光消費動向 延べ旅行者数）— インバウンド/国内依存度バランス</p>
+        <canvas id="mktTopInboundVsDomestic" height="120"></canvas>
+      </div>
+
+      <!-- ⑤ 先行指標（AirDNA booking_demand） -->
+      <div class="card" style="margin-bottom:20px;">
+        <h2>⑤ 先行予約ペース（AirDNA booking_demand + 自社）</h2>
+        <p style="font-size:12px;color:#86868b;margin:-4px 0 12px;">📊 市場先行（AirDNA 3都市 予約済物件数・右軸）× 自社先行OCC（予約データ未来分・左軸%）— 次90日需要先行指標</p>
+        <canvas id="mktTopBookingDemand" height="140"></canvas>
+        <p style="font-size:12px;color:#515154;margin:10px 0 0;">💡 市場↑×自社↑=順調／市場↑×自社↓=価格・露出で取り負け→即対処／自社↑×市場↓=先行獲得成功／谷の時期は早割・エージェント営業でてこ入れ。</p>
+      </div>
+
+      <!-- ⑥ 季節性ヒートマップ -->
+      <div class="card" style="margin-bottom:20px;">
+        <h2>⑥ 季節性ヒート（月×都市の訪日客数・直近24ヶ月）</h2>
+        <p style="font-size:12px;color:#86868b;margin:-4px 0 12px;">📊 訪日客数（e-Stat 出入国管理統計 港別総数 月次）— 繁閑期の把握</p>
+        <div id="mktTopSeasonHeat"></div>
+        <p style="font-size:12px;color:#515154;margin:10px 0 0;">💡 濃色=繁忙月→最低滞在泊数設定・最低料金引き上げ／淡色=閑散月→早割・法人プラン・連泊割で埋める。前年同月比で異常傾向を検知。</p>
+      </div>
+
+      <!-- ⑦ クロスインサイト -->
+      <div class="card">
+        <h2>🔍 クロスインサイト（民間×公的）</h2>
+        <p style="font-size:12px;color:#86868b;margin:-4px 0 12px;">📊 AirDNA × e-Stat × 自社データ の組み合わせでルールベース自動判定</p>
+        <div id="mkt-top-insights"></div>
+      </div>
+    </div>
+
+    <!-- ========== サブタブ: AirDNA ========== -->
+    <div id="market-sub-airdna" class="market-subtab" style="display:none;">
+      <div id="mkt-kpi-grid" style="margin-bottom:20px;"></div>
+      <div class="card">
+        <h2>3都市 OCC推移（直近12ヶ月）</h2>
+        <canvas id="mktChartOccTrend" height="100"></canvas>
+        <p style="font-size:12px;color:#515154;margin:10px 0 0;">💡 都市間の稼働率差と季節性を把握。自社物件の所在都市のトレンドが横ばい/下降なら価格弾力性を意識、上昇トレンドなら値上げ余地あり。</p>
+      </div>
+      <div class="chart-grid">
+        <div class="card"><h2>3都市 ADR推移（直近12ヶ月）</h2><canvas id="mktChartAdrTrend"></canvas>
+          <p style="font-size:12px;color:#515154;margin:10px 0 0;">💡 競合帯の価格水準。自社ADRと比較して高過ぎれば競争力不足、安過ぎれば値上げ余地。</p>
+        </div>
+        <div class="card"><h2>3都市 RevPAR推移（直近12ヶ月）</h2><canvas id="mktChartRevparTrend"></canvas>
+          <p style="font-size:12px;color:#515154;margin:10px 0 0;">💡 OCC×ADRの総合収益性指標。RevPARが伸びる都市が"勝ち市場"、下がる都市は戦略見直し。</p>
+        </div>
+      </div>
+      <div class="card">
+        <h2>対前年(YoY) OCC差分推移（直近12ヶ月）</h2>
+        <p style="font-size:12px;color:#86868b;margin:-4px 0 12px;">ポイント差 = 当年OCC − 前年同月OCC</p>
+        <canvas id="mktChartYoy" height="100"></canvas>
+        <p style="font-size:12px;color:#515154;margin:10px 0 0;">💡 +5pt以上=市場が伸びている→供給増でもシェア取れる／−5pt以下=市場縮小→新規取得は慎重に・既存物件で利益最大化。</p>
+      </div>
+      <div class="chart-grid">
+        <div class="card">
+          <h2 id="mktWardRankTitle">区別ランキング（RevPAR）</h2>
+          <div id="mkt-ward-rank"></div>
+          <p style="font-size:12px;color:#515154;margin:10px 0 0;">💡 新規物件の取得候補エリア選定に。上位区=高収益だが競合激化・取得コスト高、中位区=狙い目、下位区=供給飽和か需要低で回避。</p>
+        </div>
+        <div class="card">
+          <h2 id="mktBedCompareTitle">間取り別比較</h2>
+          <canvas id="mktChartBeds"></canvas>
+          <p style="font-size:12px;color:#515154;margin:10px 0 0;">💡 自社物件の間取り別の市場ベンチマーク。自社OCC/ADRと比較で各物件の立ち位置を把握。</p>
+        </div>
+      </div>
+      <div class="card">
+        <h2>🔍 AirDNAインサイト</h2>
+        <div id="mkt-insights"></div>
+      </div>
+    </div>
+
+    <!-- ========== サブタブ: 観光統計（e-Stat） ========== -->
+    <div id="market-sub-macro" class="market-subtab" style="display:none;">
+      <div id="mkt-macro-data-status" style="margin-bottom:16px;"></div>
+
+      <div class="card" style="margin-bottom:20px;">
+        <h2>訪日外国人 月次推移（YoY付き）</h2>
+        <canvas id="macroVisitorsTrend" height="100"></canvas>
+        <p style="font-size:12px;color:#515154;margin:10px 0 0;">💡 インバウンド全体のベースライン。YoY線と月次バーの乖離で季節性と成長トレンドを分離して把握。急落時は外的要因（為替・政策・航空便数）を疑う。</p>
+      </div>
+      <div class="chart-grid" style="margin-bottom:20px;">
+        <div class="card"><h2>国別 Top10（最新月）</h2><canvas id="macroCountryTop10"></canvas>
+          <p style="font-size:12px;color:#515154;margin:10px 0 0;">💡 主力ターゲット国の序列。多言語対応・現地旅行会社・OTA選定の優先順位付けに。</p>
+        </div>
+        <div class="card"><h2>国別 YoY伸び率</h2><canvas id="macroCountryYoy"></canvas>
+          <p style="font-size:12px;color:#515154;margin:10px 0 0;">💡 伸び率↑の国=新規獲得チャンス／伸び率↓の国=依存を下げる方向。Top10だけでなく"急成長してる小さい国"に注目。</p>
+        </div>
+      </div>
+      <div class="card" style="margin-bottom:20px;">
+        <h2>地域別構成比推移</h2>
+        <p style="font-size:12px;color:#86868b;margin:-4px 0 12px;">東アジア / 東南アジア / 欧米豪 / その他</p>
+        <canvas id="macroRegionMix" height="120"></canvas>
+        <p style="font-size:12px;color:#515154;margin:10px 0 0;">💡 地域ポートフォリオのバランス。特定地域依存度が高い=外部リスク大／分散傾向=安定。欧米豪↑は高単価帯狙える兆候。</p>
+      </div>
+
+      <!-- 国内旅行系（データソース停止のため非表示） -->
+      <div class="chart-grid" style="margin-bottom:20px;display:none;">
+        <div class="card"><h2>日本人 延べ旅行者数</h2><canvas id="macroDomesticTravelers"></canvas></div>
+        <div class="card"><h2>日本人 旅行消費単価</h2><canvas id="macroDomesticSpend"></canvas></div>
+      </div>
+
+      <div class="card" style="margin-bottom:20px;">
+        <h2>都道府県別 客室稼働率（3都市）</h2>
+        <p style="font-size:12px;color:#86868b;margin:-4px 0 12px;">📊 出典: 観光庁 宿泊旅行統計調査・全施設タイプ平均（e-Stat）</p>
+        <canvas id="macroPrefOcc" height="100"></canvas>
+        <p style="font-size:12px;color:#515154;margin:10px 0 0;">💡 ホテル業界含む公的指標ベースの稼働率。AirDNA（民泊）と公的（ホテル）の差が大きい月=民泊寄り需要。市場全体の底力把握に。</p>
+      </div>
+      <!-- 外国人内訳（外国人列が未取込のため非表示） -->
+      <div class="card" style="margin-bottom:20px;display:none;">
+        <h2>延べ宿泊者数 外国人/日本人内訳（3都市）</h2>
+        <p style="font-size:12px;color:#86868b;margin:-4px 0 12px;">📊 出典: 観光庁 宿泊旅行統計調査（e-Stat）</p>
+        <canvas id="macroForeignRatio" height="100"></canvas>
+      </div>
+      <div class="chart-grid" style="margin-bottom:20px;">
+        <!-- 国籍別消費単価（データソース停止のため非表示） -->
+        <div class="card" style="display:none;">
+          <h2>国籍別 訪日客 1人あたり消費単価</h2>
+          <p style="font-size:12px;color:#86868b;margin:-4px 0 12px;">📊 出典: 観光庁 訪日外国人消費動向調査（e-Stat）</p>
+          <canvas id="macroInboundSpend"></canvas>
+        </div>
+        <div class="card">
+          <h2>宿泊料 消費者物価指数（CPI）</h2>
+          <p style="font-size:12px;color:#86868b;margin:-4px 0 12px;">📊 出典: 総務省 消費者物価指数 2020年基準（e-Stat）</p>
+          <p style="font-size:12px;color:#515154;margin:10px 0 0 0;">💡 全国宿泊料の物価トレンド。2020基準=100、2025〜2026で150超=インフレ進行中。自社ADRがこの指数に追従できているか確認し、値上げ判断の根拠に使う。</p>
+          <canvas id="macroLodgingCpi"></canvas>
         </div>
       </div>
     </div>
@@ -458,6 +647,11 @@
         <option value="確認済み">確認済み</option>
         <option value="システムキャンセル">システムキャンセル</option>
       </select>
+      <label>物件表示</label>
+      <div class="filter-pills" id="resv-view-filter">
+        <span class="pill active" data-view="all" onclick="setReservationView(this)">全物件</span>
+        <span class="pill" data-view="grouped" onclick="setReservationView(this)">複数物件まとめ</span>
+      </div>
     </div>
 
     <div class="kpi-grid-6" id="resv-kpi-grid">
@@ -569,6 +763,7 @@
     <div class="card" id="market-compare-section" style="display:none;">
       <h2>市場比較（AirDNA）</h2>
       <p style="font-size:12px;color:#86868b;margin:-4px 0 12px;">自社実績 vs エリア市場平均の推移比較</p>
+      <div id="market-data-coverage" style="margin-bottom:12px;"></div>
       <div class="chart-grid">
         <div class="card"><h2>OCC比較</h2><canvas id="chartMarketOcc"></canvas></div>
         <div class="card"><h2>ADR比較</h2><canvas id="chartMarketAdr"></canvas></div>
