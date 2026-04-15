@@ -909,7 +909,7 @@ function buildMarketCompareHtml(prop, curStats) {
   };
   const mOcc = tryFields(occSheet, ['Rate', 'rate', 'Value', 'Occupancy']);
   const mAdr = tryFields(adrSheet, ['Average daily rate', 'Daily rate', 'Daily Rate', 'Rate', 'daily_rate', 'rate']);
-  const mRevenue = tryFields(revSheet, ['Revenue', 'revenue', 'Rate']);
+  const mRevenue = tryFields(revSheet, ['Average annual revenue', 'Revenue', 'revenue', 'Rate']);
 
   // 自社の直近（curStatsから）
   const myOcc = curStats.occ;
@@ -6399,7 +6399,7 @@ function mktCityKpi(city, yms) {
   const revS = mktSheet(`AD_${city}全域_revenue_summary`);
   const occF = mktFirstValidField(occS, ['Rate', 'Occupancy', 'rate']);
   const adrF = mktFirstValidField(adrS, ['Average daily rate', 'Daily rate', 'Rate', 'daily_rate']);
-  const revF = mktFirstValidField(revS, ['Revenue', 'revenue']);
+  const revF = mktFirstValidField(revS, ['Average annual revenue', 'Revenue', 'revenue']);
   const occ = mktAvg(occS, occF, yms);
   const adr = mktAvg(adrS, adrF, yms);
   const revpar = (occ !== null && adr !== null) ? (occ / 100) * adr : null;
