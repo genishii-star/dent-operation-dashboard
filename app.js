@@ -265,25 +265,34 @@ async function fetchEstatSheets() {
 
 async function fetchAirdnaSheets() {
   const result = {};
-  // 各都市のスプシから並列取得
-  await Promise.all(Object.entries(MARKET_SHEET_IDS).map(async ([city, sheetId]) => {
+  // 各都市: メタ取得後、values:batchGet で全シート1リクエストに集約（100レンジまで/req）
+  for (const [city, sheetId] of Object.entries(MARKET_SHEET_IDS)) {
     try {
       const metaUrl = `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}?fields=sheets(properties(title))&key=${API_KEY}`;
       const metaResp = await fetch(metaUrl);
-      if (!metaResp.ok) return;
+      if (!metaResp.ok) continue;
       const meta = await metaResp.json();
       const adSheetNames = (meta.sheets || [])
         .map(s => s.properties.title)
         .filter(name => name.startsWith('AD_'));
-      if (adSheetNames.length === 0) return;
+      if (adSheetNames.length === 0) continue;
 
-      await Promise.all(adSheetNames.map(async name => {
-        try {
-          const url = `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/${encodeURIComponent(name)}?key=${API_KEY}`;
-          const resp = await fetch(url);
-          if (!resp.ok) return;
-          const json = await resp.json();
-          const rows = json.values;
+      // batchGet は1リクエスト上限100レンジ
+      for (let i = 0; i < adSheetNames.length; i += 100) {
+        const chunk = adSheetNames.slice(i, i + 100);
+        const ranges = chunk.map(n => `ranges=${encodeURIComponent(n)}`).join('&');
+        const url = `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values:batchGet?${ranges}&key=${API_KEY}`;
+        let resp;
+        for (let attempt = 0; attempt < 3; attempt++) {
+          resp = await fetch(url);
+          if (resp.status !== 429) break;
+          await new Promise(r => setTimeout(r, 2000 * (attempt + 1)));
+        }
+        if (!resp || !resp.ok) continue;
+        const json = await resp.json();
+        (json.valueRanges || []).forEach((vr, idx) => {
+          const name = chunk[idx];
+          const rows = vr.values;
           if (!rows || rows.length < 2) return;
           const headers = rows[0];
           result[name] = rows.slice(1).map(row => {
@@ -291,10 +300,10 @@ async function fetchAirdnaSheets() {
             headers.forEach((h, i) => { obj[h] = (row[i] !== undefined ? row[i] : ''); });
             return obj;
           });
-        } catch (e) { /* skip */ }
-      }));
-    } catch (e) { /* skip */ }
-  }));
+        });
+      }
+    } catch (e) { /* skip city */ }
+  }
   return result;
 }
 
