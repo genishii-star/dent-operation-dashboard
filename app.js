@@ -908,7 +908,7 @@ function buildMarketCompareHtml(prop, curStats) {
     return null;
   };
   const mOcc = tryFields(occSheet, ['Rate', 'rate', 'Value', 'Occupancy']);
-  const mAdr = tryFields(adrSheet, ['Daily rate', 'Daily Rate', 'Rate', 'daily_rate', 'rate']);
+  const mAdr = tryFields(adrSheet, ['Average daily rate', 'Daily rate', 'Daily Rate', 'Rate', 'daily_rate', 'rate']);
   const mRevenue = tryFields(revSheet, ['Revenue', 'revenue', 'Rate']);
 
   // 自社の直近（curStatsから）
@@ -1011,7 +1011,7 @@ function resolveMarketLookup(prop) {
     matched,
     hasData: !!occSheet,
     occ: (ym) => pick(occSheet, ['Rate', 'rate', 'Value', 'Occupancy'], ym),
-    adr: (ym) => pick(adrSheet, ['Daily rate', 'Daily Rate', 'Rate', 'daily_rate', 'rate'], ym),
+    adr: (ym) => pick(adrSheet, ['Average daily rate', 'Daily rate', 'Daily Rate', 'Rate', 'daily_rate', 'rate'], ym),
   };
 }
 
@@ -1040,7 +1040,7 @@ function resolveAreaMarketLookup(area) {
       matched: `${area}全域`,
       hasData: !!o,
       occ: (ym) => pick(o, ['Rate', 'rate', 'Value', 'Occupancy'], ym),
-      adr: (ym) => pick(a, ['Daily rate', 'Daily Rate', 'Rate', 'daily_rate', 'rate'], ym),
+      adr: (ym) => pick(a, ['Average daily rate', 'Daily rate', 'Daily Rate', 'Rate', 'daily_rate', 'rate'], ym),
     };
   }
   // 全体: 3都市を単純平均
@@ -1055,7 +1055,7 @@ function resolveAreaMarketLookup(area) {
     matched: '主要3都市平均',
     hasData: occSheets.length > 0,
     occ: (ym) => avg(occSheets, ['Rate', 'rate', 'Value', 'Occupancy'], ym),
-    adr: (ym) => avg(adrSheets, ['Daily rate', 'Daily Rate', 'Rate', 'daily_rate', 'rate'], ym),
+    adr: (ym) => avg(adrSheets, ['Average daily rate', 'Daily rate', 'Daily Rate', 'Rate', 'daily_rate', 'rate'], ym),
   };
 }
 
@@ -6398,7 +6398,7 @@ function mktCityKpi(city, yms) {
   const adrS = mktSheet(`AD_${city}全域_rates_summary`);
   const revS = mktSheet(`AD_${city}全域_revenue_summary`);
   const occF = mktFirstValidField(occS, ['Rate', 'Occupancy', 'rate']);
-  const adrF = mktFirstValidField(adrS, ['Daily rate', 'Rate', 'daily_rate']);
+  const adrF = mktFirstValidField(adrS, ['Average daily rate', 'Daily rate', 'Rate', 'daily_rate']);
   const revF = mktFirstValidField(revS, ['Revenue', 'revenue']);
   const occ = mktAvg(occS, occF, yms);
   const adr = mktAvg(adrS, adrF, yms);
@@ -6581,7 +6581,7 @@ function renderMarketAirdnaTab() {
     const occS = mktSheet(`AD_${city}_${w}_occupancy`);
     const adrS = mktSheet(`AD_${city}_${w}_rates_summary`);
     const occF = mktFirstValidField(occS, ['Rate', 'Occupancy', 'rate']);
-    const adrF = mktFirstValidField(adrS, ['Daily rate', 'Rate', 'daily_rate']);
+    const adrF = mktFirstValidField(adrS, ['Average daily rate', 'Daily rate', 'Rate', 'daily_rate']);
     const occ = mktAvg(occS, occF, selYms);
     const adr = mktAvg(adrS, adrF, selYms);
     const revpar = (occ !== null && adr !== null) ? (occ / 100) * adr : null;
