@@ -6502,7 +6502,7 @@ function renderMarketAirdnaTab() {
   if (!kpiEl) return;
 
   // AirDNAデータが無い場合
-  const anyCityData = MKT_CITIES.some(c => mktSheet(`AD_${c}全域_occupancy`));
+  const anyCityData = Object.keys(window._airdnaSheets || {}).some(k => /^AD_(大阪|京都|東京)全域_/.test(k));
   if (!anyCityData) {
     kpiEl.innerHTML = `<div style="background:#FF950012;border-left:3px solid #FF9500;border-radius:6px;padding:12px 16px;font-size:13px;">
       AirDNA市場データが未取得です。Chrome拡張の「🏙 3都市一括取得」で取得してください。
@@ -7547,7 +7547,7 @@ function initMarketMacroCharts() {
 // AirDNAサブタブのチャート（従来のinitMarketChartsの中身）
 // ============================================================
 function initMarketAirdnaCharts() {
-  const anyCityData = MKT_CITIES.some(c => mktSheet(`AD_${c}全域_occupancy`));
+  const anyCityData = Object.keys(window._airdnaSheets || {}).some(k => /^AD_(大阪|京都|東京)全域_/.test(k));
   if (!anyCityData) return;
 
   const latestPerCity = MKT_CITIES.map(c => mktLatestMonth(c)).filter(Boolean);
