@@ -4366,7 +4366,7 @@ function renderReservationTab() {
   }
 
   // 通常モード: 個別予約リスト
-  if (thead) thead.innerHTML = `<tr><th>予約日</th><th>予約サイト</th><th>物件名</th><th>販売額</th><th>チェックイン</th><th>泊数</th><th>ゲスト数</th><th>チェックアウト</th><th>ゲスト名</th><th>国籍</th><th>状態</th><th>受取金</th><th>支払済み</th><th>AirHost予約ID</th></tr>`;
+  if (thead) thead.innerHTML = `<tr><th>予約日</th><th>物件名</th><th>販売額</th><th>チェックイン</th><th>泊数</th><th>ゲスト数</th><th>チェックアウト</th><th>予約サイト</th><th>ゲスト名</th><th>国籍</th><th>状態</th><th>受取金</th><th>支払済み</th><th>AirHost予約ID</th></tr>`;
   const displayResv = validResv.slice(0, 100);
   tbody.innerHTML = displayResv.map(r => {
     const statusBadge = r.status === '確認済み' ? 'badge-green' : r.status === 'システムキャンセル' ? 'badge-red' : 'badge-orange';
@@ -4376,9 +4376,10 @@ function renderReservationTab() {
     if (prop && newPropNames.has(prop.name)) propMarks += ' <span class="badge-blue" style="font-size:10px;">🆕</span>';
     if (prop && watchPropNames.has(prop.name)) propMarks += ' <span class="badge-orange" style="font-size:10px;">⚠️</span>';
     return `<tr>
-      <td>${(r.date || '').slice(0, 10)}</td><td>${r.channel}</td><td>${r.property}${propMarks}</td><td>${fmtYenFull(r.sales)}</td><td>${r.checkin}</td><td>${r.nights}泊</td><td>${r.guestCount}名</td><td>${r.checkout}</td><td>${r.guest}</td><td>${r.nationality}</td><td><span class="${statusBadge}">${r.status}</span></td><td>${fmtYenFull(r.received)}</td><td>${r.paid}</td><td>${r.id}</td>
+      <td>${(r.date || '').slice(0, 10)}</td><td>${r.property}${propMarks}</td><td>${fmtYenFull(r.sales)}</td><td>${r.checkin}</td><td>${r.nights}泊</td><td>${r.guestCount}名</td><td>${r.checkout}</td><td>${r.channel}</td><td>${r.guest}</td><td>${r.nationality}</td><td><span class="${statusBadge}">${r.status}</span></td><td>${fmtYenFull(r.received)}</td><td>${r.paid}</td><td>${r.id}</td>
     </tr>`;
   }).join('');
+  setTimeout(initSortableHeaders, 50);
 }
 
 // ============================================================
@@ -7573,7 +7574,7 @@ function initMarketAirdnaCharts() {
   };
 
   const occSeries = buildSeries('occ', 'occupancy', ['Rate', 'Occupancy', 'rate']);
-  const adrSeries = buildSeries('adr', 'rates_summary', ['Daily rate', 'Rate', 'daily_rate']);
+  const adrSeries = buildSeries('adr', 'rates_summary', ['Average daily rate', 'Daily rate', 'Rate', 'daily_rate']);
   const revparSeries = occSeries.map(os => {
     const adr = adrSeries.find(a => a.city === os.city).data;
     return { city: os.city, data: os.data.map((v, i) => (v !== null && adr[i] !== null) ? Math.round((v / 100) * adr[i]) : null) };
@@ -7647,7 +7648,7 @@ function initMarketAirdnaCharts() {
   });
   const bedAdr = bedSuffixes.map(bs => {
     const sheet = mktSheet(`AD_${city}全域_${bs}_rates_summary`);
-    const f = mktFirstValidField(sheet, ['Daily rate', 'Rate', 'daily_rate']);
+    const f = mktFirstValidField(sheet, ['Average daily rate', 'Daily rate', 'Rate', 'daily_rate']);
     return sheet ? mktAvg(sheet, f, selYms) : null;
   });
   const ctxBeds = document.getElementById('mktChartBeds');
