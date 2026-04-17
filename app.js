@@ -4366,7 +4366,22 @@ function renderReservationTab() {
   }
 
   // 通常モード: 個別予約リスト
-  if (thead) thead.innerHTML = `<tr><th>予約日</th><th>物件名</th><th>販売額</th><th>チェックイン</th><th>泊数</th><th>ゲスト数</th><th>チェックアウト</th><th>予約サイト</th><th>ゲスト名</th><th>国籍</th><th>状態</th><th>受取金</th><th>支払済み</th><th>AirHost予約ID</th></tr>`;
+  if (thead) thead.innerHTML = `<tr><th>予約日</th><th>物件名</th><th>販売額</th><th>ADR</th><th>市場比</th><th>チェックイン</th><th>泊数</th><th>ゲスト数</th><th>チェックアウト</th><th>予約サイト</th><th>ゲスト名</th><th>国籍</th><th>状態</th><th>受取金</th><th>支払済み</th><th>AirHost予約ID</th></tr>`;
+
+  const getMarketAdr = (area, ym) => {
+    const adSheets = window._airdnaSheets || {};
+    const sheet = adSheets[`AD_${area}全域_rates_summary`];
+    if (!sheet || !sheet.length) return null;
+    const fields = ['Average daily rate', 'Daily rate', 'Rate', 'daily_rate'];
+    const keys = Object.keys(sheet[0]);
+    const f = fields.find(fld => keys.includes(fld));
+    if (!f) return null;
+    const row = sheet.find(r => (r['Date'] || '').slice(0, 7) === ym);
+    if (!row) return null;
+    const v = parseFloat(row[f]);
+    return isNaN(v) ? null : v;
+  };
+
   const displayResv = validResv.slice(0, 100);
   tbody.innerHTML = displayResv.map(r => {
     const statusBadge = r.status === '確認済み' ? 'badge-green' : r.status === 'システムキャンセル' ? 'badge-red' : 'badge-orange';
@@ -4375,8 +4390,25 @@ function renderReservationTab() {
     let propMarks = '';
     if (prop && newPropNames.has(prop.name)) propMarks += ' <span class="badge-blue" style="font-size:10px;">🆕</span>';
     if (prop && watchPropNames.has(prop.name)) propMarks += ' <span class="badge-orange" style="font-size:10px;">⚠️</span>';
+
+    const netSales = (r.sales || 0) - (r.cleaningFee || 0);
+    const adr = r.nights > 0 ? Math.round(netSales / r.nights) : 0;
+    const adrStr = adr > 0 ? fmtYenFull(adr) : '-';
+
+    let mktRatioStr = '-';
+    if (adr > 0 && prop && prop.area && r.checkin) {
+      const ym = r.checkin.slice(0, 7);
+      const mktAdr = getMarketAdr(prop.area, ym);
+      if (mktAdr && mktAdr > 0) {
+        const ratio = ((adr / mktAdr) - 1) * 100;
+        const sign = ratio >= 0 ? '+' : '';
+        const cls = ratio >= 0 ? 'positive' : 'negative';
+        mktRatioStr = `<span class="${cls}">${sign}${ratio.toFixed(0)}%</span>`;
+      }
+    }
+
     return `<tr>
-      <td>${(r.date || '').slice(0, 10)}</td><td>${r.property}${propMarks}</td><td>${fmtYenFull(r.sales)}</td><td>${r.checkin}</td><td>${r.nights}泊</td><td>${r.guestCount}名</td><td>${r.checkout}</td><td>${r.channel}</td><td>${r.guest}</td><td>${r.nationality}</td><td><span class="${statusBadge}">${r.status}</span></td><td>${fmtYenFull(r.received)}</td><td>${r.paid}</td><td>${r.id}</td>
+      <td>${(r.date || '').slice(0, 10)}</td><td>${r.property}${propMarks}</td><td>${fmtYenFull(r.sales)}</td><td>${adrStr}</td><td>${mktRatioStr}</td><td>${r.checkin}</td><td>${r.nights}泊</td><td>${r.guestCount}名</td><td>${r.checkout}</td><td>${r.channel}</td><td>${r.guest}</td><td>${r.nationality}</td><td><span class="${statusBadge}">${r.status}</span></td><td>${fmtYenFull(r.received)}</td><td>${r.paid}</td><td>${r.id}</td>
     </tr>`;
   }).join('');
   setTimeout(initSortableHeaders, 50);
