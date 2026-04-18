@@ -90,6 +90,11 @@ const SHEET_GID_PROPERTY_MASTER = '416395562';
 const SHEET_GID_OWNER_MASTER = '907386098';
 const API_KEY = 'AIzaSyD_16gkzGw68S4socdFAr5HtIieisPA3uk';
 
+// 物件マスタ書き込み用 GAS Web App（update_masters.gs の doPost を使用）
+// デプロイ後にURLを貼り付け。未設定時は保存機能が無効化される
+const GAS_WRITE_URL = 'https://script.google.com/macros/s/AKfycbyiSBemvDdrNFmUdXTdNoK8TBV1oz8AANeIbDY6Qd7DNt8ZPC51Ej9rLr9CjSS4zldI2g/exec';
+const GAS_WRITE_TOKEN = 'dent_dashboard_2026';
+
 function sheetApiUrl(sheetName) {
   return `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${encodeURIComponent(sheetName)}?key=${API_KEY}`;
 }
@@ -1204,6 +1209,8 @@ function processData() {
       name: code,
       propName: pm['物件名'] || code,
       code: code,
+      propCode: code,
+      address: address,
       ownerId: pm['オーナーID'] || '',
       ownerName: ownerInfo.name || '',
       royalty: ownerInfo.royalty || '',
@@ -3098,9 +3105,12 @@ function renderPropertyDetail(container, propertyName, prefix) {
 
   destroyDrillCharts(prefix);
 
+  const specHtml = buildPropertySpecHtml(prop);
+
   container.id = prefix + 'DetailContainer';
   container.innerHTML = `<div class="drill-down show" style="margin-top:12px;">
     <h3>${prop.name} <span style="font-size:13px;color:#666;font-weight:400;">(${prop.ownerName} / ${prop.area})</span></h3>
+    ${specHtml}
     ${periodPillsHtml}
     ${kpiHtml}
     ${insightsHtml}
@@ -3330,6 +3340,158 @@ function renderPropertyDetail(container, propertyName, prefix) {
     renderPropertyCalendar(prefix, propertyName, 0);
     renderPropertyFutureAnalysis(prefix, propertyName);
   }, 100);
+}
+
+// ============================================================
+// 物件スペック表示 + 編集モーダル
+// ============================================================
+const SPEC_FIELD_DEFS = [
+  { key: 'address', label: '住所', jp: '住所', type: 'text' },
+  { key: 'area', label: 'エリア', jp: 'エリア', type: 'select', options: ['大阪', '京都', '東京', '兵庫', '沖縄', ''] },
+  { key: 'propType', label: 'タイプ', jp: 'タイプ', type: 'select', options: ['マンション', '一軒家', 'ホテル', 'アパート', ''] },
+  { key: 'layout', label: '間取り', jp: '間取り', type: 'select', options: ['1R', '1K', '1LDK', '2DK', '2LDK', '3LDK', '4LDK', ''] },
+  { key: 'sqm', label: '平米数', jp: '平米数', type: 'number' },
+  { key: 'licenseType', label: '許可種類', jp: '許可種類', type: 'select', options: ['民泊新法', '特区民泊', '旅館業', ''] },
+  { key: 'targetLow', label: '閑散期目標', jp: '閑散期目標', type: 'number' },
+  { key: 'targetNormal', label: '通常期目標', jp: '通常期目標', type: 'number' },
+  { key: 'targetHigh', label: '繁忙期目標', jp: '繁忙期目標', type: 'number' },
+];
+
+function buildPropertySpecHtml(prop) {
+  const rows = SPEC_FIELD_DEFS.map(def => {
+    let val = prop[def.key];
+    if (def.type === 'number' && typeof val === 'number' && val > 0) {
+      val = def.key.startsWith('target') ? fmtYenFull(val) : String(val);
+    }
+    if (def.key === 'address' && typeof val === 'string' && val) {
+      val = val.replace(/^\s*〒?\s*\d{3}-?\d{4}\s*/, '');
+    }
+    const disp = (val === null || val === undefined || val === '' || val === 0) ? '<span style="color:#c7c7cc;">-</span>' : val;
+    const wide = def.key === 'address' ? ' spec-item-wide' : '';
+    return `<div class="spec-item${wide}"><span class="spec-label">${def.label}</span><span class="spec-value">${disp}</span></div>`;
+  }).join('');
+  return `<div class="card spec-card">
+    <div class="spec-header">
+      <h2 style="margin:0;">物件スペック</h2>
+      <button class="spec-edit-btn" onclick="openPropertySpecEditor('${prop.propCode || prop.name}')">編集</button>
+    </div>
+    <div class="spec-grid">${rows}</div>
+  </div>`;
+}
+
+function openPropertySpecEditor(propCode) {
+  const prop = findPropByName(propCode);
+  if (!prop) { alert('物件が見つかりません: ' + propCode); return; }
+
+  const fields = SPEC_FIELD_DEFS.map(def => {
+    const v = prop[def.key];
+    const cur = (v === null || v === undefined) ? '' : String(v);
+    let input;
+    if (def.type === 'select') {
+      const opts = def.options.map(o => `<option value="${o}"${String(cur) === o ? ' selected' : ''}>${o || '(未設定)'}</option>`).join('');
+      input = `<select data-field="${def.jp}" data-key="${def.key}">${opts}</select>`;
+    } else if (def.type === 'number') {
+      input = `<input type="number" data-field="${def.jp}" data-key="${def.key}" value="${cur || ''}" step="any" />`;
+    } else {
+      input = `<input type="text" data-field="${def.jp}" data-key="${def.key}" value="${cur.replace(/"/g, '&quot;')}" />`;
+    }
+    return `<div class="spec-edit-row"><label>${def.label}</label>${input}</div>`;
+  }).join('');
+
+  const modal = document.getElementById('propertySpecModal');
+  modal.querySelector('.modal-title').textContent = `物件スペック編集: ${prop.name}`;
+  modal.querySelector('.modal-body').innerHTML = fields;
+  modal.dataset.propCode = prop.propCode || prop.name;
+  modal.style.display = 'flex';
+  const err = modal.querySelector('.modal-error');
+  if (err) err.textContent = '';
+}
+
+function closePropertySpecEditor() {
+  const modal = document.getElementById('propertySpecModal');
+  if (modal) modal.style.display = 'none';
+}
+
+async function savePropertySpecEdits() {
+  const modal = document.getElementById('propertySpecModal');
+  if (!modal) return;
+  const propCode = modal.dataset.propCode;
+  const prop = findPropByName(propCode);
+  if (!prop) { alert('物件が見つかりません'); return; }
+
+  const errEl = modal.querySelector('.modal-error');
+  errEl.textContent = '';
+
+  const inputs = modal.querySelectorAll('.modal-body [data-field]');
+  const updates = {};
+  const stateUpdates = {};
+  inputs.forEach(el => {
+    const jpField = el.dataset.field;
+    const key = el.dataset.key;
+    let v = el.value;
+    if (el.type === 'number') v = v === '' ? '' : Number(v);
+    const def = SPEC_FIELD_DEFS.find(d => d.key === key);
+    const currentVal = prop[key];
+    const normalizedCurrent = def && def.type === 'number' ? (currentVal || 0) : (currentVal || '');
+    const normalizedNew = def && def.type === 'number' ? (v === '' ? 0 : v) : (v === '' ? '' : v);
+    if (String(normalizedCurrent) === String(normalizedNew)) return;
+    updates[jpField] = v === '' && def && def.type === 'number' ? '' : v;
+    stateUpdates[key] = v === '' && def && def.type === 'number' ? 0 : v;
+  });
+
+  if (Object.keys(updates).length === 0) { closePropertySpecEditor(); return; }
+
+  if (!GAS_WRITE_URL) {
+    errEl.textContent = 'GAS_WRITE_URL が未設定です。デプロイしたURLを app.js に設定してください。';
+    return;
+  }
+
+  const saveBtn = modal.querySelector('.modal-save-btn');
+  saveBtn.disabled = true;
+  saveBtn.textContent = '保存中…';
+
+  try {
+    const resp = await fetch(GAS_WRITE_URL, {
+      method: 'POST',
+      body: JSON.stringify({ action: 'updatePropertyMaster', token: GAS_WRITE_TOKEN, propCode, updates }),
+    });
+    const json = await resp.json();
+    if (!json.ok) throw new Error(json.error || 'unknown');
+
+    applyPropertySpecToState(propCode, stateUpdates, updates);
+    closePropertySpecEditor();
+    renderAll();
+  } catch (e) {
+    errEl.textContent = '保存エラー: ' + e.message;
+  } finally {
+    saveBtn.disabled = false;
+    saveBtn.textContent = '保存';
+  }
+}
+
+// 編集結果をローカル state に反映（propertyMaster / properties / findPropByName キャッシュ）
+function applyPropertySpecToState(propCode, stateUpdates, rawUpdates) {
+  const pm = (propertyMaster || []).find(p => (p['物件コード'] || '').trim() === propCode);
+  if (pm) {
+    Object.keys(rawUpdates).forEach(k => { pm[k] = rawUpdates[k]; });
+  }
+  const p = (properties || []).find(x => (x.propCode || x.name) === propCode);
+  if (p) {
+    Object.keys(stateUpdates).forEach(k => { p[k] = stateUpdates[k]; });
+  }
+  // localStorage キャッシュ更新
+  try {
+    const raw = localStorage.getItem(CACHE_KEY);
+    if (raw) {
+      const cache = JSON.parse(raw);
+      if (cache.data && cache.data.propMaster) {
+        const cachedPm = cache.data.propMaster.find(p => (p['物件コード'] || '').trim() === propCode);
+        if (cachedPm) Object.keys(rawUpdates).forEach(k => { cachedPm[k] = rawUpdates[k]; });
+        localStorage.setItem(CACHE_KEY, JSON.stringify(cache));
+      }
+    }
+  } catch (e) { /* ignore */ }
+  invalidatePropStatsCache();
 }
 
 // 物件詳細の未来予約分析（自社実データ vs AirDNA市場データ）

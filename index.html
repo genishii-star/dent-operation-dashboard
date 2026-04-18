@@ -1100,6 +1100,22 @@
 
 </div><!-- /app-content -->
 
+<!-- 物件スペック編集モーダル -->
+<div id="propertySpecModal" class="modal-overlay" style="display:none;">
+  <div class="modal-box">
+    <div class="modal-head">
+      <h3 class="modal-title">物件スペック編集</h3>
+      <button class="modal-close-btn" onclick="closePropertySpecEditor()">×</button>
+    </div>
+    <div class="modal-body"></div>
+    <div class="modal-error" style="color:#ff3b30;font-size:12px;min-height:16px;"></div>
+    <div class="modal-foot">
+      <button class="modal-cancel-btn" onclick="closePropertySpecEditor()">キャンセル</button>
+      <button class="modal-save-btn" onclick="savePropertySpecEdits()">保存</button>
+    </div>
+  </div>
+</div>
+
 <script src="app.js"></script>
 
 </body>
