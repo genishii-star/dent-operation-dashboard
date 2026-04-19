@@ -3556,8 +3556,8 @@ function renderPropertyFutureAnalysis(prefix, propertyName) {
     return r.propCode === propertyName || r.property === propertyName;
   });
 
-  // 市場データ参照（AirDNA）— 物件マスタから該当物件を特定
-  const propObj = (propertyMaster || []).find(p => p.propCode === propertyName || p.propName === propertyName) || null;
+  // 市場データ参照（AirDNA）— properties配列（正規化済み）からルックアップ
+  const propObj = findPropByName(propertyName);
   const marketLookup = propObj ? resolveMarketLookup(propObj) : { hasData: false, matched: '' };
   const basisEl = document.getElementById(prefix + 'FutureMarketBasis');
   if (basisEl) {
