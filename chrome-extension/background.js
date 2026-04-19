@@ -70,7 +70,30 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       .catch(err => sendResponse({ success: false, error: err.message }));
     return true;
   }
+  if (msg.action === 'batchGetRanges') {
+    handleBatchGetRanges(msg.spreadsheetId, msg.ranges)
+      .then(result => sendResponse(result))
+      .catch(err => sendResponse({ success: false, error: err.message }));
+    return true;
+  }
 });
+
+async function handleBatchGetRanges(spreadsheetId, ranges) {
+  const token = await getAuthToken();
+  const sid = spreadsheetId || SPREADSHEET_ID_DEFAULT;
+  if (!Array.isArray(ranges) || ranges.length === 0) {
+    return { success: true, valueRanges: [] };
+  }
+  const params = ranges.map(r => 'ranges=' + encodeURIComponent(r)).join('&');
+  const url = `https://sheets.googleapis.com/v4/spreadsheets/${sid}/values:batchGet?${params}`;
+  const res = await fetch(url, { headers: { 'Authorization': `Bearer ${token}` } });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(`batchGet失敗: ${err.error?.message || res.status}`);
+  }
+  const data = await res.json();
+  return { success: true, valueRanges: data.valueRanges || [] };
+}
 
 async function handleReadSheet(sheetName) {
   try {
