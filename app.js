@@ -3057,12 +3057,16 @@ function renderPropertyDetail(container, propertyName, prefix) {
     avgLeadTime = Math.round(totalLead / activeResv.length);
   }
 
-  const kpiHtml = `<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:20px;">
+  const kpiHtml = `<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px;">
     <div class="kpi-card"><div class="label">総販売額</div><div class="value">${fmtYen(cSales)}</div><div class="sub">${salesVs}</div></div>
     <div class="kpi-card"><div class="label">OCC</div><div class="value">${fmtPct(cOcc)}</div><div class="sub">${occVs}</div></div>
     <div class="kpi-card"><div class="label">ADR</div><div class="value">${fmtYenFull(Math.round(cAdr))}</div><div class="sub">${adrVs}</div></div>
     <div class="kpi-card"><div class="label">RevPAR</div><div class="value">${fmtYenFull(Math.round(cRevpar))}</div><div class="sub">${revparVs}</div></div>
-    <div class="kpi-card"><div class="label">予約Window</div><div class="value">${avgLeadTime !== null ? avgLeadTime + '日' : '-'}</div><div class="sub">予約〜チェックイン平均</div></div>
+  </div>`;
+
+  // 未来セクション用KPI（予約Window）
+  const futureKpiHtml = `<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px;">
+    <div class="kpi-card"><div class="label">予約Window（選択期間）</div><div class="value">${avgLeadTime !== null ? avgLeadTime + '日' : '-'}</div><div class="sub">予約〜チェックイン平均</div></div>
   </div>`;
 
   // 平日/休日比較テーブル
@@ -3125,15 +3129,12 @@ function renderPropertyDetail(container, propertyName, prefix) {
   // 分析インサイト（ルールベース）
   const insightsHtml = buildInsightsHtml(prop, curStats, wdhdStats, paceData);
 
-  // 未来予約分析（自社実データ vs AirDNA市場データ）
-  const futureAnalysisHtml = `<div class="card" style="margin-bottom:20px;">
-    <h2>未来予約分析 <span id="${prefix}FutureMarketBasis" style="font-size:11px;color:#86868b;font-weight:400;"></span></h2>
-    <div class="chart-grid">
-      <div class="card"><h2>未来OCC推移（次90日）</h2><canvas id="${prefix}ChartFutureOcc"></canvas></div>
+  // 未来予約チャート（カードネスト解消）
+  const futureChartsHtml = `<div class="chart-grid">
+      <div class="card"><h2>未来OCC推移（次90日） <span id="${prefix}FutureMarketBasis" style="font-size:11px;color:#86868b;font-weight:400;"></span></h2><canvas id="${prefix}ChartFutureOcc"></canvas></div>
       <div class="card"><h2>未来ADR推移（次180日）</h2><canvas id="${prefix}ChartFutureAdr"></canvas></div>
     </div>
-    <div class="card"><h2>リードタイム分布</h2><canvas id="${prefix}ChartLeadTime" height="180"></canvas></div>
-  </div>`;
+    <div class="card"><h2>リードタイム分布</h2><canvas id="${prefix}ChartLeadTime" height="180"></canvas></div>`;
 
   // Period pills for detail view
   const dp = currentFilters.propDetailPeriod || 'thisMonth';
@@ -3148,16 +3149,21 @@ function renderPropertyDetail(container, propertyName, prefix) {
 
   const specHtml = buildPropertySpecHtml(prop);
 
+  const sectionHeaderStyle = 'font-size:15px;font-weight:700;color:#1d1d1f;margin:32px 0 14px;padding-bottom:6px;border-bottom:2px solid #e5e5ea;';
+
   container.id = prefix + 'DetailContainer';
   container.innerHTML = `<div class="drill-down show" style="margin-top:12px;">
+    <!-- 【基本情報】 -->
     <h3>${prop.name} <span style="font-size:13px;color:#666;font-weight:400;">(${prop.ownerName} / ${prop.area})</span></h3>
     ${specHtml}
+
+    <!-- 【📊 過去パフォーマンス】 -->
+    <h2 style="${sectionHeaderStyle}">📊 過去パフォーマンス</h2>
     ${periodPillsHtml}
     ${kpiHtml}
     ${insightsHtml}
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(420px,1fr));gap:20px;margin-bottom:20px;">
       ${wdhdHtml}
-      ${paceHtml}
       ${marketCompareHtml}
     </div>
     <div class="chart-grid">
@@ -3165,7 +3171,6 @@ function renderPropertyDetail(container, propertyName, prefix) {
       <div class="card"><h2>月別 販売金額/ADR推移</h2><canvas id="${prefix}ChartSalesAdr"></canvas></div>
       <div class="card"><h2>チャネル別売上構成比</h2><canvas id="${prefix}ChartChannel"></canvas></div>
       <div class="card"><h2>ゲスト国籍別</h2><canvas id="${prefix}ChartNationality"></canvas></div>
-      <div class="card" id="${prefix}RecentBookings"></div>
     </div>
     <div class="card" id="${prefix}CalendarCard">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
@@ -3181,8 +3186,17 @@ function renderPropertyDetail(container, propertyName, prefix) {
         <span>🟦 今年</span><span>🟧 前年</span><span style="color:#34c759;">▲ 前年比UP</span><span style="color:#ff3b30;">▼ 前年比DOWN</span>
       </div>
     </div>
-    ${futureAnalysisHtml}
-    <div class="card"><h2>予約一覧</h2><div class="table-wrap"><table>
+
+    <!-- 【🔮 未来・先行予約】 -->
+    <h2 style="${sectionHeaderStyle}">🔮 未来・先行予約 <span style="font-size:11px;color:#86868b;font-weight:400;">（本日起点固定）</span></h2>
+    ${futureKpiHtml}
+    ${paceHtml ? `<div style="margin-bottom:20px;">${paceHtml}</div>` : ''}
+    ${futureChartsHtml}
+
+    <!-- 【📋 予約一覧】 -->
+    <h2 style="${sectionHeaderStyle}">📋 予約一覧</h2>
+    <div class="card" id="${prefix}RecentBookings" style="margin-bottom:20px;"></div>
+    <div class="card"><h2>全予約（直近10件）</h2><div class="table-wrap"><table>
       <thead><tr><th>予約日</th><th>予約サイト</th><th>ゲスト名</th><th>チェックイン</th><th>チェックアウト</th><th>泊数</th><th>販売金額</th><th>状態</th></tr></thead>
       <tbody>${resvRows}</tbody>
     </table></div></div>
