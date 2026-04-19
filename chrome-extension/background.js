@@ -25,6 +25,20 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       .catch(err => sendResponse({ success: false, error: err.message }));
     return true;
   }
+  if (msg.action === 'postJson') {
+    // GAS Web App など任意のエンドポイントにJSONをPOSTしてJSONで返す
+    fetch(msg.url, { method: 'POST', body: JSON.stringify(msg.body) })
+      .then(async res => {
+        const text = await res.text();
+        try {
+          sendResponse({ success: true, status: res.status, data: JSON.parse(text) });
+        } catch (e) {
+          sendResponse({ success: false, error: 'Response not JSON (' + res.status + '): ' + text.slice(0, 2000) });
+        }
+      })
+      .catch(err => sendResponse({ success: false, error: err.message }));
+    return true;
+  }
   if (msg.action === 'writeCell') {
     handleWriteCell(msg.sheetName, msg.range, msg.values)
       .then(result => sendResponse(result))

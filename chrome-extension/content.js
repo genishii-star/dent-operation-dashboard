@@ -292,7 +292,16 @@
         shinpouNotifyStatus = await sendShinpouSlackNotification(shinpouLines);
       }
 
-      // Slack通知（同期完了）— 新法通知の結果も含める
+      // LIB清掃依頼シート同期（GAS経由）
+      let libCleaningResult = null;
+      try {
+        libCleaningResult = await syncLibCleaning();
+      } catch (e) {
+        libCleaningResult = { error: e.message };
+        log('  LIB清掃同期失敗: ' + e.message);
+      }
+
+      // Slack通知（同期完了）— 新法通知・LIB清掃結果も含める
       const startTime = new Date(today);
       const elapsed = Math.round((Date.now() - startTime.getTime()) / 60000);
       await sendSlackNotification(true, {
@@ -300,6 +309,7 @@
         resRows: resRows.length,
         elapsed: elapsed,
         shinpouNotifyStatus: shinpouNotifyStatus,
+        libCleaningResult: libCleaningResult,
       });
 
     } catch (err) {
@@ -369,6 +379,27 @@
   }
 
   // ======== 新法ステータス計算 ========
+
+  // ======== LIB清掃依頼シート同期（GAS経由） ========
+  const GAS_WRITE_URL = 'https://script.google.com/macros/s/AKfycbyiSBemvDdrNFmUdXTdNoK8TBV1oz8AANeIbDY6Qd7DNt8ZPC51Ej9rLr9CjSS4zldI2g/exec';
+  const GAS_WRITE_TOKEN = 'dent_dashboard_2026';
+
+  async function syncLibCleaning() {
+    log('  LIB清掃同期中...');
+    const result = await sendToBackground('postJson', {
+      url: GAS_WRITE_URL,
+      body: { action: 'syncLibCleaning', token: GAS_WRITE_TOKEN },
+    });
+    if (!result || !result.success) {
+      throw new Error(result?.error || 'GAS call failed');
+    }
+    const json = result.data;
+    if (!json || !json.ok) {
+      throw new Error((json && json.error) || 'GAS returned non-ok');
+    }
+    log(`  LIB清掃: +${json.added}件追加 / ${json.cancelled}件キャンセル`);
+    return json;
+  }
 
   async function computeShinpouStatus(resRows) {
     // 物件マスタを取得
@@ -489,6 +520,13 @@
           if (sn.status === 'success') text += `\n📋 新法通知: ✅ 送信完了`;
           else if (sn.status === 'skipped') text += `\n📋 新法通知: ⏭ スキップ（${sn.message}）`;
           else if (sn.status === 'error') text += `\n📋 新法通知: ❌ ${sn.message}`;
+        }
+        // LIB清掃依頼の結果を追記
+        const lc = data.libCleaningResult;
+        if (lc) {
+          if (lc.error) text += `\n🧹 LIB清掃: ❌ ${lc.error}`;
+          else if (!lc.added && !lc.cancelled) text += `\n🧹 LIB清掃: 更新なし`;
+          else text += `\n🧹 LIB清掃: +${lc.added || 0}件追加 / ${lc.cancelled || 0}件キャンセル`;
         }
       } else {
         text = `❌ Airhost同期失敗\nエラー: ${data.error}`;
