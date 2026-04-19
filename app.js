@@ -468,8 +468,13 @@ function deriveArea(address) {
 // 住所から区を抽出（例: "大阪市西成区萩之茶屋1-4-1" → "西成区"）
 function extractWard(address) {
   if (!address) return null;
-  const m = address.match(/([\u4e00-\u9fa5]+区)/);
-  return m ? m[1] : null;
+  // 市/都/府/県 で分割し、区で終わる要素から区名を抽出（greedy matchが「大阪府大阪市西成区」を丸飲みする問題を回避）
+  const parts = String(address).split(/[市都府県]/);
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const m = parts[i].match(/^([\u4e00-\u9fa5]+区)/);
+    if (m) return m[1];
+  }
+  return null;
 }
 
 // 日本語の区名 → AirDNA英語名（大阪・京都・東京の主要区）
