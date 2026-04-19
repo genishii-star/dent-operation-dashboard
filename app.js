@@ -851,12 +851,47 @@ function buildGroupInsightsHtml(seriesBase, seriesProps, curAgg, months) {
 }
 
 // 物件の市場比較HTMLを生成
-function buildMarketCompareHtml(prop, curStats) {
+// detailMonths: ['YYYY-MM', ...] 選択期間。今月が含まれる場合、AirDNAは月末集計で未公表のため前月に自動シフト
+// （自社データも前月で再集計して期間整合性を保つ）
+function buildMarketCompareHtml(prop, curStats, detailMonths, propertyName) {
   if (!prop || !curStats) return '';
   const adSheets = window._airdnaSheets || {};
   const ward = extractWard(prop.address || '');
   const wardEn = wardJpToAirdna(ward, prop.area, prop.address);
   const beds = layoutToBedrooms(prop.layout);
+
+  // 比較対象期間の決定
+  const now = new Date();
+  const thisYm = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  const inputMonths = Array.isArray(detailMonths) && detailMonths.length ? detailMonths : [thisYm];
+  const isThisMonthOnly = inputMonths.length === 1 && inputMonths[0] === thisYm;
+  let compareMonths = inputMonths;
+  let shiftedFromThisMonth = false;
+  if (isThisMonthOnly) {
+    const prev = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    compareMonths = [`${prev.getFullYear()}-${String(prev.getMonth() + 1).padStart(2, '0')}`];
+    shiftedFromThisMonth = true;
+  }
+
+  // 自社データ: 今月シフト時は前月で再集計、それ以外は渡された curStats を使用
+  let myOcc = curStats.occ;
+  let myAdr = curStats.adr;
+  let myRevpar = curStats.revpar;
+  if (shiftedFromThisMonth && propertyName) {
+    let totalSales = 0, totalNights = 0, totalAvailable = 0;
+    compareMonths.forEach(m => {
+      const s = computePropertyStats(propertyName, m);
+      totalAvailable += getDaysInMonth(m) * (prop.rooms || 1);
+      if (s) { totalSales += s.sales; totalNights += s.nights; }
+    });
+    if (totalAvailable > 0) {
+      myOcc = (totalNights / totalAvailable) * 100;
+      myAdr = totalNights > 0 ? totalSales / totalNights : 0;
+      myRevpar = myAdr * (myOcc / 100);
+    } else {
+      myOcc = 0; myAdr = 0; myRevpar = 0;
+    }
+  }
 
   // 探索順: 区×間取り → 区全体 → エリア全体
   let occSheet = null, adrSheet = null, revSheet = null;
@@ -894,23 +929,15 @@ function buildMarketCompareHtml(prop, curStats) {
     </div>`;
   }
 
-  // 直近12ヶ月の平均を算出
-  const now = new Date();
-  const recentMonths = [];
-  for (let i = -11; i <= 0; i++) {
-    const d = new Date(now.getFullYear(), now.getMonth() + i, 1);
-    recentMonths.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
-  }
+  // 選択期間で市場平均を算出
   const avgField = (sheet, field) => {
     if (!sheet) return null;
     const vals = sheet
-      .filter(r => recentMonths.includes((r['Date'] || '').slice(0, 7)))
+      .filter(r => compareMonths.includes((r['Date'] || '').slice(0, 7)))
       .map(r => parseFloat(r[field]))
       .filter(v => !isNaN(v) && v > 0);
     return vals.length > 0 ? vals.reduce((s, v) => s + v, 0) / vals.length : null;
   };
-  const mktOcc = avgField(occSheet, 'Rate'); // occupancy sheet has Rate column (we renamed 'rate' to 'Rate' or 'Value')
-  // Actually the flatten maps 'rate' → 'Rate' (capitalized). Let me try multiple field names.
   const tryFields = (sheet, fields) => {
     for (const f of fields) {
       const v = avgField(sheet, f);
@@ -920,12 +947,6 @@ function buildMarketCompareHtml(prop, curStats) {
   };
   const mOcc = tryFields(occSheet, ['Rate', 'rate', 'Value', 'Occupancy']);
   const mAdr = tryFields(adrSheet, ['Average daily rate', 'Daily rate', 'Daily Rate', 'Rate', 'daily_rate', 'rate']);
-  const mRevenue = tryFields(revSheet, ['Average annual revenue', 'Revenue', 'revenue', 'Rate']);
-
-  // 自社の直近（curStatsから）
-  const myOcc = curStats.occ;
-  const myAdr = curStats.adr;
-  const myRevpar = curStats.revpar;
   const mRevpar = (mOcc && mAdr) ? (mOcc / 100) * mAdr : null;
 
   const diffPct = (my, mkt) => (mkt && mkt > 0) ? Math.round(((my - mkt) / mkt) * 100) : null;
@@ -936,9 +957,14 @@ function buildMarketCompareHtml(prop, curStats) {
   const adrDiff = diffPct(myAdr, mAdr);
   const revparDiff = diffPct(myRevpar, mRevpar);
 
+  const periodLabel = compareMonths.length === 1
+    ? compareMonths[0]
+    : `${compareMonths[0]}〜${compareMonths[compareMonths.length - 1]}`;
+  const noteSuffix = shiftedFromThisMonth ? '（今月は市場未公表のため前月比較）' : '';
+
   const html = `<div>
     <div style="font-size:13px;font-weight:600;color:#1d1d1f;margin-bottom:8px;">
-      市場比較（AirDNA） <span style="font-size:11px;font-weight:400;color:#86868b;">基準: ${matchedLevel}（直近12ヶ月平均）</span>
+      市場比較（AirDNA） <span style="font-size:11px;font-weight:400;color:#86868b;">基準: ${matchedLevel} / ${periodLabel}${noteSuffix}</span>
     </div>
     <table style="width:100%;border-collapse:collapse;font-size:12px;table-layout:fixed;">
       <thead><tr style="border-bottom:2px solid #e5e5ea;">
@@ -3086,7 +3112,7 @@ function renderPropertyDetail(container, propertyName, prefix) {
   const paceHtml = renderPaceReportHtml(paceData, '先行予約ペース');
 
   // 市場比較（AirDNA）
-  const marketCompareHtml = buildMarketCompareHtml(prop, curStats);
+  const marketCompareHtml = buildMarketCompareHtml(prop, curStats, detailMonths, propertyName);
 
   // 分析インサイト（ルールベース）
   const insightsHtml = buildInsightsHtml(prop, curStats, wdhdStats, paceData);
@@ -3164,6 +3190,9 @@ function renderPropertyDetail(container, propertyName, prefix) {
     const adrData = [];
     const salesData = [];
     const targetData = [];
+    const mktOccData = [];
+    const mktAdrData = [];
+    const mkt = resolveMarketLookup(prop);
     for (let i = -5; i <= 6; i++) {
       const d = new Date(curYear, curMonth - 1 + i, 1);
       const m = d.getMonth() + 1;
@@ -3175,6 +3204,10 @@ function renderPropertyDetail(container, propertyName, prefix) {
       adrData.push(stats ? Math.round(stats.adr) : 0);
       salesData.push(stats ? Math.round(stats.sales) : 0);
       targetData.push(getTargetForProperty(prop, m));
+      const mo = mkt.hasData ? mkt.occ(mym) : null;
+      const ma = mkt.hasData ? mkt.adr(mym) : null;
+      mktOccData.push(mo !== null ? Math.round(mo * 10) / 10 : null);
+      mktAdrData.push(ma !== null ? Math.round(ma) : null);
     }
     const targetLineDataset = {
       type: 'line',
@@ -3208,6 +3241,7 @@ function renderPropertyDetail(container, propertyName, prefix) {
           labels: monthLabels,
           datasets: [
             { type: 'line', label: 'OCC (%)', data: occData, borderColor: CHART_COLORS.blue, backgroundColor: 'rgba(74,144,217,0.08)', fill: true, yAxisID: 'y1', tension: 0.4, pointBorderColor: CHART_COLORS.blue },
+            { type: 'line', label: '市場OCC (%)', data: mktOccData, borderColor: '#86868b', backgroundColor: 'transparent', borderDash: [4, 3], borderWidth: 1.5, fill: false, yAxisID: 'y1', tension: 0.4, pointRadius: 2, pointHoverRadius: 4, spanGaps: true },
             { type: 'bar', label: '販売金額', data: salesData, backgroundColor: blueBarColors, borderColor: barBorders, borderWidth: barBorderWidths, yAxisID: 'y' },
             { ...targetLineDataset }
           ]
@@ -3225,6 +3259,7 @@ function renderPropertyDetail(container, propertyName, prefix) {
           labels: monthLabels,
           datasets: [
             { type: 'line', label: 'ADR (¥)', data: adrData, borderColor: CHART_COLORS.orange, backgroundColor: 'rgba(245,166,35,0.08)', fill: true, yAxisID: 'y1', tension: 0.4, pointBorderColor: CHART_COLORS.orange },
+            { type: 'line', label: '市場ADR (¥)', data: mktAdrData, borderColor: '#86868b', backgroundColor: 'transparent', borderDash: [4, 3], borderWidth: 1.5, fill: false, yAxisID: 'y1', tension: 0.4, pointRadius: 2, pointHoverRadius: 4, spanGaps: true },
             { type: 'bar', label: '販売金額', data: salesData, backgroundColor: orangeBarColors, borderColor: barBorders, borderWidth: barBorderWidths, yAxisID: 'y' },
             { ...targetLineDataset }
           ]
