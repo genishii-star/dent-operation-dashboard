@@ -868,8 +868,9 @@ function buildMarketCompareHtml(prop, curStats) {
     const occName = `AD_${prop.area}_${wardEn}_${bedSuffix}_occupancy`;
     if (adSheets[occName]) {
       occSheet = adSheets[occName];
-      adrSheet = adSheets[`AD_${prop.area}_${wardEn}_${bedSuffix}_rates_summary`] || null;
-      revSheet = adSheets[`AD_${prop.area}_${wardEn}_${bedSuffix}_revenue_summary`] || null;
+      // rates/revenue はBR粒度が存在しないため区レベルにフォールバック
+      adrSheet = adSheets[`AD_${prop.area}_${wardEn}_rates_summary`] || null;
+      revSheet = adSheets[`AD_${prop.area}_${wardEn}_revenue_summary`] || null;
       matchedLevel = `${ward} × ${prop.layout || bedSuffix}`;
     }
   }
@@ -985,7 +986,8 @@ function resolveMarketLookup(prop) {
     const o = adSheets[`AD_${prop.area}_${wardEn}_${bedSuffix}_occupancy`];
     if (o) {
       occSheet = o;
-      adrSheet = adSheets[`AD_${prop.area}_${wardEn}_${bedSuffix}_rates_summary`] || null;
+      // rates はBR粒度が存在しないため区レベルにフォールバック
+      adrSheet = adSheets[`AD_${prop.area}_${wardEn}_rates_summary`] || null;
       matched = `${ward} × ${prop.layout || bedSuffix}`;
     }
   }
