@@ -743,14 +743,6 @@
 
     <div class="chart-grid">
       <div class="card">
-        <h2>チャネル別売上</h2>
-        <canvas id="chartChannelRevenue"></canvas>
-      </div>
-      <div class="card">
-        <h2>エリア別RevPAR比較</h2>
-        <canvas id="chartAreaRevpar"></canvas>
-      </div>
-      <div class="card">
         <h2>予約Window別 ADR分析</h2>
         <canvas id="chartWindowAdr"></canvas>
       </div>
@@ -821,35 +813,15 @@
     </div>
 
     <div class="card">
-      <h2>OCC × ADR 4象限マトリクス</h2>
-      <p style="font-size:12px;color:#86868b;margin:-4px 0 12px;">各物件の稼働率とADRをプロット。バブルサイズ＝売上額。十字線＝全体平均</p>
-      <canvas id="chartOccAdrMatrix" height="320"></canvas>
-      <div id="occ-adr-quadrant-summary" style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px;"></div>
+      <h2>市場ランク分布 <span style="font-size:11px;color:#86868b;font-weight:400;">（AirDNA売上分布の中でどこにいるか）</span></h2>
+      <p style="font-size:12px;color:#86868b;margin:-4px 0 10px;">各物件の月次売上(per listing)をAirDNA市場のP25/P50/P75/P90と照合</p>
+      <div style="margin-bottom:10px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+        <label style="font-size:12px;font-weight:600;">比較月</label>
+        <div class="filter-pills" id="market-rev-month-pills" style="display:inline-flex;"></div>
+      </div>
+      <div id="market-revenue-position"></div>
     </div>
 
-    <div class="card">
-      <h2>物件別 OCC × ADR 一覧</h2>
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <tr><th>物件</th><th>エリア</th><th>OCC</th><th class="text-right">ADR</th><th class="text-right">RevPAR</th><th class="text-right">売上</th><th>判定</th></tr>
-          </thead>
-          <tbody id="occ-adr-table"></tbody>
-        </table>
-      </div>
-    </div>
-
-    <div class="card">
-      <h2>チャネル別パフォーマンス</h2>
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <tr><th>チャネル</th><th>予約件数</th><th>販売泊数</th><th class="text-right">販売金額</th><th class="text-right">ADR</th><th>構成比</th></tr>
-          </thead>
-          <tbody id="channel-perf-table"></tbody>
-        </table>
-      </div>
-    </div>
   </div>
 </div>
 

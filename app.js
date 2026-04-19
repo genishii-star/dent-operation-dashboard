@@ -853,6 +853,19 @@ function buildGroupInsightsHtml(seriesBase, seriesProps, curAgg, months) {
 // 物件の市場比較HTMLを生成
 // detailMonths: ['YYYY-MM', ...] 選択期間。今月が含まれる場合、AirDNAは月末集計で未公表のため前月に自動シフト
 // （自社データも前月で再集計して期間整合性を保つ）
+// 市場比較用の期間解決: 今月のみ選択時は市場データ未公表なので前月へ倒す
+function resolveMarketCompareMonths(months) {
+  const now = new Date();
+  const thisYm = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  const input = Array.isArray(months) && months.length ? months : [thisYm];
+  if (input.length === 1 && input[0] === thisYm) {
+    const prev = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    const prevYm = `${prev.getFullYear()}-${String(prev.getMonth() + 1).padStart(2, '0')}`;
+    return { months: [prevYm], shifted: true, fromYm: thisYm, toYm: prevYm };
+  }
+  return { months: input, shifted: false };
+}
+
 function buildMarketCompareHtml(prop, curStats, detailMonths, propertyName) {
   if (!prop || !curStats) return '';
   const adSheets = window._airdnaSheets || {};
@@ -1091,6 +1104,128 @@ function resolveAreaMarketLookup(area) {
     hasData: occSheets.length > 0,
     occ: (ym) => avg(occSheets, ['Rate', 'rate', 'Value', 'Occupancy'], ym),
     adr: (ym) => avg(adrSheets, ['Average daily rate', 'Daily rate', 'Daily Rate', 'Rate', 'daily_rate', 'rate'], ym),
+  };
+}
+
+// ── AirDNA パーセンタイル/価格ティア lookup ──
+// revenue_by_percentile シート: Date | Percentiles 25 | 50 | 75 | 90
+function resolveRevenuePercentiles(prop) {
+  const adSheets = window._airdnaSheets || {};
+  const ward = extractWard(prop && prop.address || '');
+  const wardEn = wardJpToAirdna(ward, prop && prop.area, prop && prop.address);
+  let sheet = null, matched = '';
+  if (wardEn) {
+    sheet = adSheets[`AD_${prop.area}_${wardEn}_revenue_by_percentile`];
+    if (sheet) matched = ward;
+  }
+  if (!sheet && prop && prop.area) {
+    sheet = adSheets[`AD_${prop.area}全域_revenue_by_percentile`];
+    if (sheet) matched = `${prop.area}全域`;
+  }
+  const pick = (ym) => {
+    if (!sheet) return null;
+    const [yStr, mStr] = ym.split('-');
+    const candidates = [ym, `${parseInt(yStr, 10) - 1}-${mStr}`];
+    for (const t of candidates) {
+      const row = sheet.find(r => (r['Date'] || '').slice(0, 7) === t);
+      if (!row) continue;
+      const b = {
+        p25: parseFloat(row['Percentiles 25']) || null,
+        p50: parseFloat(row['Percentiles 50']) || null,
+        p75: parseFloat(row['Percentiles 75']) || null,
+        p90: parseFloat(row['Percentiles 90']) || null,
+      };
+      if (b.p50) return b;
+    }
+    return null;
+  };
+  return { matched, hasData: !!sheet, bands: pick };
+}
+
+// adr_by_price_tier シート: Date | budget | economy | midscale | upscale | luxury
+function resolveAdrTierBands(prop) {
+  const adSheets = window._airdnaSheets || {};
+  const ward = extractWard(prop && prop.address || '');
+  const wardEn = wardJpToAirdna(ward, prop && prop.area, prop && prop.address);
+  let sheet = null, matched = '';
+  if (wardEn) {
+    sheet = adSheets[`AD_${prop.area}_${wardEn}_adr_by_price_tier`];
+    if (sheet) matched = ward;
+  }
+  if (!sheet && prop && prop.area) {
+    sheet = adSheets[`AD_${prop.area}全域_adr_by_price_tier`];
+    if (sheet) matched = `${prop.area}全域`;
+  }
+  const pick = (ym) => {
+    if (!sheet) return null;
+    const [yStr, mStr] = ym.split('-');
+    const candidates = [ym, `${parseInt(yStr, 10) - 1}-${mStr}`];
+    for (const t of candidates) {
+      const row = sheet.find(r => (r['Date'] || '').slice(0, 7) === t);
+      if (!row) continue;
+      const b = {
+        budget: parseFloat(row['Price tiers budget']) || null,
+        economy: parseFloat(row['Price tiers economy']) || null,
+        midscale: parseFloat(row['Price tiers midscale']) || null,
+        upscale: parseFloat(row['Price tiers upscale']) || null,
+        luxury: parseFloat(row['Price tiers luxury']) || null,
+      };
+      if (b.midscale) return b;
+    }
+    return null;
+  };
+  return { matched, hasData: !!sheet, bands: pick };
+}
+
+// value を 0-100 percentile rank に補間（売上用: p25/p50/p75/p90）
+function computeRevenuePercentileRank(value, b) {
+  if (!b || !value) return null;
+  const { p25, p50, p75, p90 } = b;
+  if (!p25 || !p50 || !p75 || !p90) return null;
+  if (value <= p25) return Math.max(0, (value / p25) * 25);
+  if (value <= p50) return 25 + ((value - p25) / (p50 - p25)) * 25;
+  if (value <= p75) return 50 + ((value - p50) / (p75 - p50)) * 25;
+  if (value <= p90) return 75 + ((value - p75) / (p90 - p75)) * 15;
+  return Math.min(100, 90 + Math.min(10, ((value - p90) / p90) * 10));
+}
+
+// ADR を5ティアの percentile rank に（budget≈10, economy≈30, midscale≈50, upscale≈70, luxury≈90）
+function computeAdrTierRank(value, b) {
+  if (!b || !value) return null;
+  const tiers = [
+    { label: 'バジェット', value: b.budget, pct: 10 },
+    { label: 'エコノミー', value: b.economy, pct: 30 },
+    { label: 'ミッドスケール', value: b.midscale, pct: 50 },
+    { label: 'アップスケール', value: b.upscale, pct: 70 },
+    { label: 'ラグジュアリー', value: b.luxury, pct: 90 },
+  ].filter(t => t.value);
+  if (tiers.length === 0) return null;
+  if (value <= tiers[0].value) {
+    return { tier: tiers[0].label, pct: Math.max(0, (value / tiers[0].value) * tiers[0].pct) };
+  }
+  for (let i = 0; i < tiers.length - 1; i++) {
+    const a = tiers[i], z = tiers[i + 1];
+    if (value <= z.value) {
+      const t = (value - a.value) / (z.value - a.value);
+      const pct = a.pct + t * (z.pct - a.pct);
+      return { tier: (t < 0.5 ? a.label : z.label), pct };
+    }
+  }
+  const last = tiers[tiers.length - 1];
+  return { tier: last.label, pct: Math.min(100, last.pct + Math.min(10, ((value - last.value) / last.value) * 10)) };
+}
+
+// percentile rank → 4段階ランク
+function percentileBadge(pct) {
+  if (pct === null || pct === undefined || isNaN(pct)) return { html: '-', pct: null };
+  let color, bg, icon, label;
+  if (pct >= 75)      { color = '#34C759'; bg = '#34C75918'; icon = '🔥'; label = '上位25%'; }
+  else if (pct >= 50) { color = '#007AFF'; bg = '#007AFF18'; icon = '🟢'; label = '平均以上'; }
+  else if (pct >= 25) { color = '#FF9500'; bg = '#FF950018'; icon = '🟠'; label = '平均以下'; }
+  else                { color = '#FF3B30'; bg = '#FF3B3018'; icon = '🔴'; label = '下位25%'; }
+  return {
+    pct, color, bg, icon, label,
+    html: `<span style="display:inline-block;padding:2px 6px;border-radius:4px;color:${color};background:${bg};font-weight:600;font-size:11px;">${icon} ${label}</span>`,
   };
 }
 
@@ -2936,6 +3071,13 @@ function setScorecardDayType(el) {
   _scorecardCurrentProp = null;
   initRevenueCharts();
 }
+function setMarketRevMonth(el, ym) {
+  const pills = el.parentElement.querySelectorAll('.pill');
+  pills.forEach(p => p.classList.remove('active'));
+  el.classList.add('active');
+  currentFilters.marketRevMonth = ym;
+  initRevenueCharts();
+}
 
 // スコアカードの物件クリック → 行直下で展開/閉じる
 let _scorecardCurrentProp = null;
@@ -4694,41 +4836,6 @@ function renderRevenueTab() {
   document.getElementById('kpi-rev-window').textContent = curWindow !== null ? curWindow + '日' : '-';
   document.getElementById('kpi-rev-window-vs').innerHTML = fmtVsLine(curWindow || 0, yoyWindow, momWindow);
 
-  // Channel performance table
-  const confirmedResv = reservations.filter(r => {
-    if (r.status === 'システムキャンセル') return false;
-    if (!monthSet.has(getYearMonth(r.checkin))) return false;
-    const prop = findPropByReservation(r);
-    if (!prop) return area === '全体';
-    if (!extraFilteredNames.has(prop.name)) return false;
-    if (excludeKpi && prop.excludeKpi) return false;
-    return true;
-  });
-
-  const channelMap = {};
-  confirmedResv.forEach(r => {
-    const ch = r.channel || 'その他';
-    if (!channelMap[ch]) channelMap[ch] = { count: 0, nights: 0, sales: 0 };
-    channelMap[ch].count++;
-    channelMap[ch].nights += r.nights;
-    channelMap[ch].sales += r.sales;
-  });
-
-  const totalChSales = Object.values(channelMap).reduce((s, c) => s + c.sales, 0);
-  const chEntries = Object.entries(channelMap).sort((a, b) => b[1].sales - a[1].sales);
-
-  const chTbody = document.getElementById('channel-perf-table');
-  let totalCount = 0, totalNights = 0;
-  chTbody.innerHTML = chEntries.map(([ch, data]) => {
-    totalCount += data.count;
-    totalNights += data.nights;
-    const adr = data.nights > 0 ? data.sales / data.nights : 0;
-    const share = totalChSales > 0 ? (data.sales / totalChSales) * 100 : 0;
-    return `<tr><td>${ch}</td><td>${data.count}</td><td>${data.nights}</td><td class="text-right">${fmtYenFull(data.sales)}</td><td class="text-right">${fmtYenFull(Math.round(adr))}</td><td>${fmtPct(share)}</td></tr>`;
-  }).join('');
-
-  const overallAdr = totalNights > 0 ? totalChSales / totalNights : 0;
-  chTbody.innerHTML += `<tr class="totals-row"><td>合計</td><td>${totalCount}</td><td>${totalNights}</td><td class="text-right">${fmtYenFull(totalChSales)}</td><td class="text-right">${fmtYenFull(Math.round(overallAdr))}</td><td>100%</td></tr>`;
 }
 
 // ============================================================
@@ -5154,14 +5261,14 @@ function renderFutureBookingAnalysis() {
   today.setHours(0, 0, 0, 0);
   const area = currentFilters.revenueArea;
 
-  // 対象物件
-  const targetProps = (propertyMaster || []).filter(p => {
+  // 対象物件（正規化済み camelCase プロパティ配列を使用）
+  const targetProps = (properties || []).filter(p => {
     if (area && area !== '全体' && p.area !== area) return false;
     if (p.excludeKpi) return false;
     return true;
   });
-  const targetCodes = new Set(targetProps.map(p => p.propCode));
-  const targetNames = new Set(targetProps.map(p => p.propName));
+  const targetCodes = new Set(targetProps.map(p => p.propCode).filter(Boolean));
+  const targetNames = new Set(targetProps.map(p => p.propName).filter(Boolean));
   const futureResv = reservations.filter(r => {
     if (r.status === 'キャンセル' || r.status === 'システムキャンセル' || r.status === 'ブロックされた') return false;
     return targetCodes.has(r.propCode) || targetNames.has(r.property);
@@ -5306,52 +5413,6 @@ function initRevenueCharts() {
   const monthSet = new Set(months);
   const area = currentFilters.revenueArea;
   const excludeKpi = document.getElementById('excludeKpiToggleRev') && document.getElementById('excludeKpiToggleRev').checked;
-
-  // Channel revenue bar
-  destroyChart('channelRev');
-  const confirmedResv = reservations.filter(r => {
-    if (r.status === 'システムキャンセル') return false;
-    if (!monthSet.has(getYearMonth(r.checkin))) return false;
-    if (area !== '全体') {
-      const prop = findPropByReservation(r);
-      if (!prop || prop.area !== area) return false;
-    }
-    return true;
-  });
-  const channelMap = {};
-  confirmedResv.forEach(r => {
-    const ch = r.channel || 'その他';
-    channelMap[ch] = (channelMap[ch] || 0) + r.sales;
-  });
-
-  const ctx2 = document.getElementById('chartChannelRevenue');
-  if (ctx2) {
-    const labels = Object.keys(channelMap).sort((a, b) => channelMap[b] - channelMap[a]);
-    const data = labels.map(l => channelMap[l]);
-    const colors = PALETTE;
-    allCharts['channelRev'] = new Chart(ctx2, {
-      type: 'bar',
-      data: { labels, datasets: [{ label: '販売金額', data, backgroundColor: colors.slice(0, labels.length) }] },
-      options: { responsive: true, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, ticks: { callback: v => '¥' + (v/10000).toFixed(0) + '万' } } } }
-    });
-  }
-
-  // Area RevPAR
-  destroyChart('areaRevpar');
-  const areas = ['大阪', '京都', '東京'];
-  const areaRevpars = areas.map(a => {
-    const stats = computeOverallStatsMulti(months, a, excludeKpi);
-    return Math.round(stats.revpar);
-  });
-
-  const ctx4 = document.getElementById('chartAreaRevpar');
-  if (ctx4) {
-    allCharts['areaRevpar'] = new Chart(ctx4, {
-      type: 'bar',
-      data: { labels: areas, datasets: [{ label: 'RevPAR', data: areaRevpars, backgroundColor: PALETTE.slice(0, 3) }] },
-      options: { responsive: true, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, ticks: { callback: v => '¥' + v.toLocaleString() } } } }
-    });
-  }
 
   // 予約Window別 ADR & 件数
   destroyChart('windowAdr');
@@ -5558,12 +5619,17 @@ function initRevenueCharts() {
 
     // スコア算出ヘルパー
     function calcScore(propNames, label, areaName) {
-      let totalSales = 0, totalTarget = 0;
+      let totalSales = 0, totalTarget = 0, totalNights = 0, totalAdrNum = 0;
+      let totalCleaning = 0;
       propNames.forEach(pn => {
         const p = findPropByName(pn);
         curMonths.forEach(m => {
           const s = computePropertyStats(pn, m);
-          if (s) totalSales += s.sales;
+          if (s) {
+            totalSales += s.sales;
+            totalCleaning += (s.cleaning || 0);
+            totalNights += s.nights;
+          }
           if (p) totalTarget += getTargetForProperty(p, parseInt(m.split('-')[1], 10));
         });
       });
@@ -5584,7 +5650,47 @@ function initRevenueCharts() {
       const noRed = redCount === 0;
       const overall = allGreen ? '◎' : noRed ? '○' : redCount <= 2 ? '△' : '✕';
       const overallColor = allGreen ? '#34C759' : noRed ? '#007AFF' : redCount <= 2 ? '#FF9500' : '#FF3B30';
-      return { name: label, propNames, area: areaName, sales: totalSales, targetPct, occ30, occ60, occ90, tGrade, g30, g60, g90, overall, overallColor };
+
+      // 市場パーセンタイル（売上・ADR）: 今月のみ選択時は前月で比較（市場データ未公表のため）
+      const cmp = resolveMarketCompareMonths(curMonths);
+      const firstProp = findPropByName(propNames[0]);
+      const roomsCount = propNames.reduce((s, pn) => {
+        const p = findPropByName(pn); return s + (p && p.rooms ? p.rooms : 1);
+      }, 0) || 1;
+
+      // 比較用に自社も同じ月で再集計
+      let cmpSales = 0, cmpCleaning = 0, cmpNights = 0;
+      propNames.forEach(pn => {
+        cmp.months.forEach(m => {
+          const s = computePropertyStats(pn, m);
+          if (s) { cmpSales += s.sales; cmpCleaning += (s.cleaning || 0); cmpNights += s.nights; }
+        });
+      });
+      const monthsN = cmp.months.length || 1;
+      const selfRevPerListing = cmpSales / roomsCount / monthsN;
+      const selfAdrGross = cmpNights > 0 ? (cmpSales + cmpCleaning) / cmpNights : 0;
+
+      let revRanks = [], adrRanks = [];
+      if (firstProp) {
+        const revLk = resolveRevenuePercentiles(firstProp);
+        const adrLk = resolveAdrTierBands(firstProp);
+        cmp.months.forEach(m => {
+          if (revLk.hasData) {
+            const b = revLk.bands(m);
+            const r = computeRevenuePercentileRank(selfRevPerListing, b);
+            if (r !== null) revRanks.push(r);
+          }
+          if (adrLk.hasData) {
+            const b = adrLk.bands(m);
+            const r = computeAdrTierRank(selfAdrGross, b);
+            if (r !== null) adrRanks.push(r.pct);
+          }
+        });
+      }
+      const revPct = revRanks.length ? revRanks.reduce((s, v) => s + v, 0) / revRanks.length : null;
+      const adrPct = adrRanks.length ? adrRanks.reduce((s, v) => s + v, 0) / adrRanks.length : null;
+
+      return { name: label, propNames, area: areaName, sales: totalSales, targetPct, occ30, occ60, occ90, tGrade, g30, g60, g90, overall, overallColor, revPct, adrPct, selfRevPerListing, selfAdrGross, cmpShifted: cmp.shifted, cmpToYm: cmp.toYm };
     }
 
     let scoreRows;
@@ -5716,139 +5822,115 @@ function initRevenueCharts() {
     }
   }
 
-  // ── OCC × ADR 4象限マトリクス ──
-  destroyChart('occAdrMatrix');
-  const overall = computeOverallStatsMulti(months, area, excludeKpi, extra);
-  const propStats = (overall.stats || []).filter(s => s.nights > 0);
-  const avgOcc = overall.occ;
-  const avgAdr = overall.adr;
-
-  // Quadrant classification
-  const QUADRANT_DEFS = [
-    { id: 'star',    label: '★ スター（高OCC × 高ADR）',     color: '#34C759', bg: '#34C75918', check: (o, a) => o >= avgOcc && a >= avgAdr },
-    { id: 'raise',   label: '↑ 値上げ余地（高OCC × 低ADR）', color: '#FF9500', bg: '#FF950018', check: (o, a) => o >= avgOcc && a < avgAdr },
-    { id: 'promo',   label: '↓ 値下げ検討（低OCC × 高ADR）',   color: '#5856D6', bg: '#5856D618', check: (o, a) => o < avgOcc && a >= avgAdr },
-    { id: 'problem', label: '⚠ 要改善（低OCC × 低ADR）',     color: '#FF3B30', bg: '#FF3B3018', check: (o, a) => o < avgOcc && a < avgAdr },
-  ];
-
-  const quadrants = { star: [], raise: [], promo: [], problem: [] };
-  propStats.forEach(s => {
-    const q = QUADRANT_DEFS.find(d => d.check(s.occ, s.adr));
-    if (q) quadrants[q.id].push(s);
-  });
-
-  // Area color mapping for scatter
-  const areaColorMap = { '大阪': CHART_COLORS.blue, '京都': CHART_COLORS.green, '東京': CHART_COLORS.orange, 'その他': CHART_COLORS.purple };
-  const maxSales = Math.max(...propStats.map(s => s.sales), 1);
-
-  const ctxMatrix = document.getElementById('chartOccAdrMatrix');
-  if (ctxMatrix && propStats.length > 0) {
-    // Group by area for legend
-    const areaGroups = {};
-    propStats.forEach(s => {
-      const prop = findPropByName(s.name);
-      const a = prop ? prop.area : 'その他';
-      if (!areaGroups[a]) areaGroups[a] = [];
-      areaGroups[a].push({ x: s.occ, y: Math.round(s.adr), r: Math.max(5, Math.sqrt(s.sales / maxSales) * 30), name: s.name, sales: s.sales, occ: s.occ, adr: s.adr });
-    });
-
-    const datasets = Object.entries(areaGroups).map(([a, pts]) => ({
-      label: a,
-      data: pts,
-      backgroundColor: (areaColorMap[a] || CHART_COLORS.purple) + '88',
-      borderColor: areaColorMap[a] || CHART_COLORS.purple,
-      borderWidth: 1.5,
-    }));
-
-    // Quadrant line plugin
-    const quadrantPlugin = {
-      id: 'quadrantLines',
-      beforeDraw(chart) {
-        const { ctx: c, chartArea: { left, right, top, bottom }, scales: { x, y } } = chart;
-        const xPx = x.getPixelForValue(avgOcc);
-        const yPx = y.getPixelForValue(avgAdr);
-        c.save();
-        c.setLineDash([6, 4]);
-        c.strokeStyle = '#86868b';
-        c.lineWidth = 1;
-        // Vertical line (avg OCC)
-        c.beginPath(); c.moveTo(xPx, top); c.lineTo(xPx, bottom); c.stroke();
-        // Horizontal line (avg ADR)
-        c.beginPath(); c.moveTo(left, yPx); c.lineTo(right, yPx); c.stroke();
-        c.setLineDash([]);
-        // Labels
-        c.font = '10px -apple-system, sans-serif';
-        c.fillStyle = '#86868b';
-        c.textAlign = 'center';
-        c.fillText('平均OCC ' + avgOcc.toFixed(1) + '%', xPx, bottom + 14);
-        c.save();
-        c.translate(left - 8, yPx);
-        c.rotate(-Math.PI / 2);
-        c.fillText('平均ADR ¥' + Math.round(avgAdr).toLocaleString(), 0, 0);
-        c.restore();
-        c.restore();
-      }
-    };
-
-    allCharts['occAdrMatrix'] = new Chart(ctxMatrix, {
-      type: 'bubble',
-      data: { datasets },
-      plugins: [quadrantPlugin],
-      options: {
-        responsive: true,
-        animation: { duration: 600, easing: 'easeOutQuart' },
-        plugins: {
-          legend: { position: 'top', labels: { font: { size: 11 }, padding: 16 } },
-          tooltip: {
-            callbacks: {
-              label: ctx => {
-                const d = ctx.raw;
-                return `${d.name}  OCC: ${d.occ.toFixed(1)}%  ADR: ¥${Math.round(d.adr).toLocaleString()}  売上: ${fmtYen(d.sales)}`;
-              }
-            }
-          }
-        },
-        scales: {
-          x: { title: { display: true, text: 'OCC（稼働率 %）', font: { size: 12 } }, min: 0, max: 100, ticks: { callback: v => v + '%' } },
-          y: { title: { display: true, text: 'ADR（平均客室単価 ¥）', font: { size: 12 } }, beginAtZero: true, ticks: { callback: v => '¥' + v.toLocaleString() } },
-        }
-      }
-    });
+  // ── 市場Revenue位置 ──
+  // 月pills（前月を起点に6ヶ月）
+  const mpPillsEl = document.getElementById('market-rev-month-pills');
+  const now = new Date();
+  const pillMonths = [];
+  for (let i = 1; i <= 6; i++) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    pillMonths.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
   }
-
-  // Quadrant summary cards
-  const summaryEl = document.getElementById('occ-adr-quadrant-summary');
-  if (summaryEl) {
-    summaryEl.innerHTML = QUADRANT_DEFS.map(q => {
-      const items = quadrants[q.id];
-      const names = items.map(s => s.name).join(', ') || '-';
-      return `<div style="background:${q.bg};border:1px solid ${q.color}30;border-radius:8px;padding:10px 14px;">
-        <div style="font-weight:600;font-size:13px;color:${q.color};margin-bottom:4px;">${q.label}</div>
-        <div style="font-size:20px;font-weight:700;color:#1d1d1f;">${items.length}件</div>
-        <div style="font-size:11px;color:#86868b;margin-top:4px;line-height:1.4;word-break:break-all;">${names}</div>
-      </div>`;
+  if (!currentFilters.marketRevMonth || !pillMonths.includes(currentFilters.marketRevMonth)) {
+    currentFilters.marketRevMonth = pillMonths[0];
+  }
+  const selectedMpMonth = currentFilters.marketRevMonth;
+  if (mpPillsEl) {
+    mpPillsEl.innerHTML = pillMonths.map(ym => {
+      const m = parseInt(ym.split('-')[1], 10);
+      const active = ym === selectedMpMonth ? 'active' : '';
+      return `<span class="pill ${active}" data-ym="${ym}" onclick="setMarketRevMonth(this,'${ym}')">${m}月</span>`;
     }).join('');
   }
+  // 比較月（pill選択値）で集計
+  const cmpRev = { months: [selectedMpMonth] };
+  const mpEl = document.getElementById('market-revenue-position');
+  if (mpEl) {
+    const rows = [];
+    // フィルタ条件はそのまま、しかし物件セットは比較月で再選定（選択期間と比較月が異なるケースに対応）
+    const mpProps = filterPropertiesByArea(area, extra).filter(p => !excludeKpi || !p.excludeKpi);
+    mpProps.forEach(p => {
+      const revLk = resolveRevenuePercentiles(p);
+      if (!revLk.hasData) return;
+      // 比較月で自社を再集計
+      let cmpSales = 0;
+      cmpRev.months.forEach(m => {
+        const ms = computePropertyStats(p.name, m);
+        if (ms) cmpSales += ms.sales;
+      });
+      const roomsN = p.rooms || 1;
+      const monthsN = cmpRev.months.length || 1;
+      const selfRevPerListing = cmpSales / roomsN / monthsN;
+      if (selfRevPerListing <= 0) return;
+      const s = { name: p.name, sales: cmpSales };
+      const rankVals = [], p25s = [], p50s = [], p75s = [], p90s = [];
+      cmpRev.months.forEach(m => {
+        const b = revLk.bands(m);
+        if (!b) return;
+        const r = computeRevenuePercentileRank(selfRevPerListing, b);
+        if (r !== null) rankVals.push(r);
+        if (b.p25) p25s.push(b.p25);
+        if (b.p50) p50s.push(b.p50);
+        if (b.p75) p75s.push(b.p75);
+        if (b.p90) p90s.push(b.p90);
+      });
+      if (rankVals.length === 0) return;
+      const rank = rankVals.reduce((x, v) => x + v, 0) / rankVals.length;
+      const avgOf = arr => arr.length ? arr.reduce((x, v) => x + v, 0) / arr.length : null;
+      rows.push({
+        name: s.name, area: p.area, matched: revLk.matched,
+        selfRev: selfRevPerListing, sales: s.sales, rank,
+        p25: avgOf(p25s), p50: avgOf(p50s), p75: avgOf(p75s), p90: avgOf(p90s),
+      });
+    });
+    rows.sort((a, b) => b.rank - a.rank);
 
-  // Quadrant detail table
-  const occAdrTable = document.getElementById('occ-adr-table');
-  if (occAdrTable) {
-    const labelMap = { star: '★ スター', raise: '↑ 値上げ余地', promo: '↓ 値下げ検討', problem: '⚠ 要改善' };
-    const colorMap = { star: '#34C759', raise: '#FF9500', promo: '#5856D6', problem: '#FF3B30' };
-    const sorted = propStats.slice().sort((a, b) => b.revpar - a.revpar);
-    occAdrTable.innerHTML = sorted.map(s => {
-      const prop = findPropByName(s.name);
-      const areaName = prop ? prop.area : '-';
-      const qId = QUADRANT_DEFS.find(d => d.check(s.occ, s.adr))?.id || 'problem';
-      return `<tr>
-        <td>${s.name}</td><td>${areaName}</td>
-        <td>${fmtPct(s.occ)}</td>
-        <td class="text-right">${fmtYenFull(Math.round(s.adr))}</td>
-        <td class="text-right">${fmtYenFull(Math.round(s.revpar))}</td>
-        <td class="text-right">${fmtYen(s.sales)}</td>
-        <td><span style="color:${colorMap[qId]};font-weight:600;font-size:12px;">${labelMap[qId]}</span></td>
-      </tr>`;
-    }).join('');
+    if (rows.length === 0) {
+      mpEl.innerHTML = '<div style="padding:20px;text-align:center;color:#86868b;font-size:12px;">AirDNAの売上パーセンタイルデータが取れませんでした（マッチするエリア/区なし）</div>';
+    } else {
+      const QUADS = [
+        { id: 'top',    label: '🔥 上位25%',   sub: 'P75以上',     color: '#34C759', bg: '#34C75912', border: '#34C75930', check: r => r.rank >= 75 },
+        { id: 'high',   label: '🟢 平均以上',  sub: 'P50〜75',     color: '#007AFF', bg: '#007AFF12', border: '#007AFF30', check: r => r.rank >= 50 && r.rank < 75 },
+        { id: 'low',    label: '🟠 平均以下',  sub: 'P25〜50',     color: '#FF9500', bg: '#FF950012', border: '#FF950030', check: r => r.rank >= 25 && r.rank < 50 },
+        { id: 'bottom', label: '🔴 下位25%',   sub: 'P25未満',     color: '#FF3B30', bg: '#FF3B3012', border: '#FF3B3030', check: r => r.rank < 25 },
+      ];
+      const buckets = {};
+      QUADS.forEach(q => { buckets[q.id] = rows.filter(q.check).sort((a, b) => b.rank - a.rank); });
+
+      const cardsHtml = QUADS.map(q => {
+        const items = buckets[q.id];
+        const listHtml = items.length === 0
+          ? `<div style="font-size:11px;color:#86868b;text-align:center;padding:18px 0;">該当なし</div>`
+          : `<table style="width:100%;border-collapse:collapse;font-size:11px;">
+              <thead><tr style="border-bottom:1px solid ${q.color}20;">
+                <th style="text-align:left;padding:4px 4px;color:#86868b;font-weight:500;">物件</th>
+                <th style="text-align:right;padding:4px 4px;color:#86868b;font-weight:500;">月次売上</th>
+                <th style="text-align:right;padding:4px 4px;color:#86868b;font-weight:500;">P値</th>
+              </tr></thead><tbody>
+              ${items.map(r => `<tr style="border-bottom:1px solid ${q.color}10;">
+                <td style="padding:4px 4px;font-weight:600;" title="${r.matched}">${r.name}<span style="color:#aaa;font-size:9px;font-weight:400;"> ${r.area}</span></td>
+                <td style="text-align:right;padding:4px 4px;">¥${Math.round(r.selfRev).toLocaleString()}</td>
+                <td style="text-align:right;padding:4px 4px;font-weight:600;color:${q.color};">P${Math.round(r.rank)}</td>
+              </tr>`).join('')}
+              </tbody></table>`;
+        return `<div style="background:${q.bg};border:1px solid ${q.border};border-radius:10px;padding:12px 14px;">
+          <div style="display:flex;align-items:baseline;gap:8px;margin-bottom:8px;">
+            <div style="font-weight:700;font-size:14px;color:${q.color};">${q.label}</div>
+            <div style="font-size:10px;color:#86868b;">${q.sub}</div>
+            <div style="margin-left:auto;font-size:20px;font-weight:700;color:#1d1d1f;">${items.length}<span style="font-size:11px;color:#86868b;font-weight:400;">件</span></div>
+          </div>
+          ${listHtml}
+        </div>`;
+      }).join('');
+
+      const monthLabel = (() => {
+        const [y, m] = selectedMpMonth.split('-');
+        return `${y}年${parseInt(m, 10)}月`;
+      })();
+      const shiftNote = `<div style="margin-bottom:10px;padding:6px 10px;background:#007AFF10;border-left:3px solid #007AFF;border-radius:4px;font-size:11px;color:#1d1d1f;">比較月: <b>${monthLabel}</b>（自社売上もこの月で集計してAirDNA P25/50/75/90と照合）</div>`;
+
+      mpEl.innerHTML = shiftNote + `<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">${cardsHtml}</div>`;
+    }
   }
 }
 
