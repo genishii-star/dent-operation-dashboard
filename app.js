@@ -873,23 +873,20 @@ function buildMarketCompareHtml(prop, curStats, detailMonths, propertyName) {
     shiftedFromThisMonth = true;
   }
 
-  // 自社データ: 今月シフト時は前月で再集計、それ以外は渡された curStats を使用
-  let myOcc = curStats.occ;
-  let myAdr = curStats.adr;
-  let myRevpar = curStats.revpar;
-  if (shiftedFromThisMonth && propertyName) {
-    let totalSales = 0, totalNights = 0, totalAvailable = 0;
+  // 自社データ: AirDNA ADRが清掃費込み定義のため、比較側も清掃込み（adrGross/revparGross）を使用
+  // 今月シフト時は前月で再集計、それ以外は対象期間で再集計（curStatsは清掃抜きのため常に再計算）
+  let myOcc = 0, myAdr = 0, myRevpar = 0;
+  if (propertyName) {
+    let totalSales = 0, totalCleaning = 0, totalNights = 0, totalAvailable = 0;
     compareMonths.forEach(m => {
       const s = computePropertyStats(propertyName, m);
       totalAvailable += getDaysInMonth(m) * (prop.rooms || 1);
-      if (s) { totalSales += s.sales; totalNights += s.nights; }
+      if (s) { totalSales += s.sales; totalCleaning += (s.cleaning || 0); totalNights += s.nights; }
     });
     if (totalAvailable > 0) {
       myOcc = (totalNights / totalAvailable) * 100;
-      myAdr = totalNights > 0 ? totalSales / totalNights : 0;
+      myAdr = totalNights > 0 ? (totalSales + totalCleaning) / totalNights : 0;
       myRevpar = myAdr * (myOcc / 100);
-    } else {
-      myOcc = 0; myAdr = 0; myRevpar = 0;
     }
   }
 
@@ -964,7 +961,7 @@ function buildMarketCompareHtml(prop, curStats, detailMonths, propertyName) {
 
   const html = `<div>
     <div style="font-size:13px;font-weight:600;color:#1d1d1f;margin-bottom:8px;">
-      市場比較（AirDNA） <span style="font-size:11px;font-weight:400;color:#86868b;">基準: ${matchedLevel} / ${periodLabel}${noteSuffix}</span>
+      市場比較（AirDNA） <span style="font-size:11px;font-weight:400;color:#86868b;">基準: ${matchedLevel} / ${periodLabel}${noteSuffix}｜ADRは清掃費込み</span>
     </div>
     <table style="width:100%;border-collapse:collapse;font-size:12px;table-layout:fixed;">
       <thead><tr style="border-bottom:2px solid #e5e5ea;">
@@ -1542,11 +1539,14 @@ function computePropertyStats(propName, ym) {
 
   // 日次データ: 過去〜今日分の実績のみ信頼（未来分は予約データで補完するため除外）
   const today = new Date().toISOString().split('T')[0];
-  const propDaily = (window._dailyByPropYm[propName + '|' + ym] || []).filter(d => {
+  const rawDailyForMonth = (window._dailyByPropYm[propName + '|' + ym] || []).filter(d => {
     const status = d['状態'] || '';
     if (status === 'システムキャンセル' || status === 'ブロックされた') return false;
     const date = normalizeDate(d['日付']);
-    if (date > today) return false; // 未来分は予約データで補完
+    if (date > today) return false;
+    return true;
+  });
+  const propDaily = rawDailyForMonth.filter(d => {
     // クリーニング代のみの行を除外（チェックアウト日に清掃料だけ計上される）
     const cleaningFee = parseNum(d['清掃料']);
     const sales = parseNum(d['売上合計']);
@@ -1564,6 +1564,8 @@ function computePropertyStats(propName, ym) {
   let bookedDays = dailyDates.size;
   let totalSales = propDaily.reduce((s, d) => s + parseNum(d['売上合計']), 0);
   let totalReceived = propDaily.reduce((s, d) => s + parseNum(d['受取金合計']), 0);
+  // AirDNA比較用: 清掃料を加算したグロス売上（AirDNA ADRは清掃込み定義のため）
+  let totalCleaning = rawDailyForMonth.reduce((s, d) => s + parseNum(d['清掃料']), 0);
 
   // 予約データ: 日次データにない未来分の確定予約を補完
   const [ymY, ymM] = ym.split('-').map(Number);
@@ -1601,6 +1603,7 @@ function computePropertyStats(propName, ym) {
       const netSales = (r.sales || 0) - (r.cleaningFee || 0);
       futureSales += netSales * (monthNights / r.nights);
       futureReceived += (r.received || 0) * (monthNights / r.nights);
+      totalCleaning += (r.cleaningFee || 0) * (monthNights / r.nights);
     }
   });
 
@@ -1610,7 +1613,9 @@ function computePropertyStats(propName, ym) {
 
   const occ = totalAvailableDays > 0 ? (bookedDays / totalAvailableDays) * 100 : 0;
   const adr = bookedDays > 0 ? totalSales / bookedDays : 0;
+  const adrGross = bookedDays > 0 ? (totalSales + totalCleaning) / bookedDays : 0;
   const revpar = adr * (occ / 100);
+  const revparGross = adrGross * (occ / 100);
 
   // Channel breakdown from daily data
   const channels = {};
@@ -1631,9 +1636,12 @@ function computePropertyStats(propName, ym) {
     status: prop.status,
     occ: occ,
     adr: adr,
+    adrGross: adrGross,
     revpar: revpar,
+    revparGross: revparGross,
     nights: bookedDays,
     sales: totalSales,
+    cleaning: totalCleaning,
     received: totalReceived,
     channels: channels,
   };
@@ -3201,7 +3209,8 @@ function renderPropertyDetail(container, propertyName, prefix) {
       monthLabels.push(`${m}月`);
       const stats = computePropertyStats(propertyName, mym);
       occData.push(stats ? Math.round(stats.occ * 10) / 10 : 0);
-      adrData.push(stats ? Math.round(stats.adr) : 0);
+      // ADRは市場線（AirDNA=清掃込）と公平比較するため清掃込みの adrGross を使用
+      adrData.push(stats ? Math.round(stats.adrGross || stats.adr) : 0);
       salesData.push(stats ? Math.round(stats.sales) : 0);
       targetData.push(getTargetForProperty(prop, m));
       const mo = mkt.hasData ? mkt.occ(mym) : null;
@@ -3258,8 +3267,8 @@ function renderPropertyDetail(container, propertyName, prefix) {
         data: {
           labels: monthLabels,
           datasets: [
-            { type: 'line', label: 'ADR (¥)', data: adrData, borderColor: CHART_COLORS.orange, backgroundColor: 'rgba(245,166,35,0.08)', fill: true, yAxisID: 'y1', tension: 0.4, pointBorderColor: CHART_COLORS.orange },
-            { type: 'line', label: '市場ADR (¥)', data: mktAdrData, borderColor: '#86868b', backgroundColor: 'transparent', borderDash: [4, 3], borderWidth: 1.5, fill: false, yAxisID: 'y1', tension: 0.4, pointRadius: 2, pointHoverRadius: 4, spanGaps: true },
+            { type: 'line', label: 'ADR (¥, 清掃込)', data: adrData, borderColor: CHART_COLORS.orange, backgroundColor: 'rgba(245,166,35,0.08)', fill: true, yAxisID: 'y1', tension: 0.4, pointBorderColor: CHART_COLORS.orange },
+            { type: 'line', label: '市場ADR (¥, 清掃込)', data: mktAdrData, borderColor: '#86868b', backgroundColor: 'transparent', borderDash: [4, 3], borderWidth: 1.5, fill: false, yAxisID: 'y1', tension: 0.4, pointRadius: 2, pointHoverRadius: 4, spanGaps: true },
             { type: 'bar', label: '販売金額', data: salesData, backgroundColor: orangeBarColors, borderColor: barBorders, borderWidth: barBorderWidths, yAxisID: 'y' },
             { ...targetLineDataset }
           ]
