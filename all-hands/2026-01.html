@@ -1,0 +1,860 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>All Hands Meeting (2026/01) — 12月まとめ</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+  #login-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: #f5f5f7; z-index: 10000; display: flex; align-items: center; justify-content: center; font-family: -apple-system, BlinkMacSystemFont, 'Hiragino Sans', sans-serif; }
+  #login-overlay.hidden { display: none; }
+  .login-box { background: white; border-radius: 16px; padding: 40px; width: 340px; text-align: center; box-shadow: 0 4px 24px rgba(0,0,0,0.08); }
+  .login-box h2 { font-size: 18px; margin-bottom: 6px; }
+  .login-box p { font-size: 13px; color: #666; margin-bottom: 24px; }
+  .login-box input { width: 100%; padding: 12px 16px; border: 1px solid #ddd; border-radius: 8px; font-size: 14px; margin-bottom: 12px; box-sizing: border-box; }
+  .login-box input:focus { outline: none; border-color: #007aff; }
+  .login-box button { width: 100%; padding: 12px; background: #1d1d1f; color: white; border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer; }
+  .login-box button:hover { background: #333; }
+  .login-error { color: #ff3b30; font-size: 12px; margin-bottom: 12px; display: none; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Hiragino Sans', sans-serif;
+    background: #f5f5f7; color: #1d1d1f;
+    overflow: hidden;
+  }
+  .deck { width: 100vw; height: 100vh; position: relative; }
+  .slide {
+    position: absolute; top: 0; left: 0;
+    width: 100%; height: 100%;
+    padding: 56px 72px 72px;
+    display: none;
+    flex-direction: column;
+    background: #f5f5f7;
+  }
+  .slide.active { display: flex; }
+  .slide h1.title { font-size: 56px; font-weight: 700; letter-spacing: -0.02em; color: #1d1d1f; }
+  .slide h1.title .sub { font-size: 22px; color: #666; font-weight: 400; margin-top: 12px; display: block; letter-spacing: 0; }
+  .slide h2 { font-size: 28px; font-weight: 700; color: #1d1d1f; margin-bottom: 6px; letter-spacing: -0.01em; }
+  .slide .h2-sub { font-size: 14px; color: #999; margin-bottom: 32px; }
+
+  .nav-bar {
+    position: fixed; bottom: 16px; right: 24px;
+    background: rgba(29,29,31,0.9); color: white;
+    border-radius: 20px; padding: 6px 14px;
+    font-size: 12px; display: flex; align-items: center; gap: 12px;
+    z-index: 100;
+  }
+  .nav-bar button {
+    background: transparent; border: 1px solid #555; color: white;
+    width: 24px; height: 24px; border-radius: 50%; cursor: pointer; font-size: 14px;
+  }
+  .nav-bar button:hover { background: #555; }
+  .nav-bar .page-num { font-variant-numeric: tabular-nums; min-width: 40px; text-align: center; }
+
+  /* KPI Grid */
+  .kpi-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+  .kpi-card { background: white; border-radius: 14px; padding: 22px 26px; }
+  .kpi-card .label { font-size: 13px; color: #666; margin-bottom: 10px; font-weight: 500; }
+  .kpi-card .value { font-size: 32px; font-weight: 700; letter-spacing: -0.01em; }
+  .kpi-card .unit { font-size: 16px; color: #999; font-weight: 500; margin-left: 4px; }
+  .kpi-card .delta { font-size: 12px; margin-top: 8px; display: flex; gap: 10px; }
+  .kpi-card .delta span { display: inline-flex; align-items: center; gap: 4px; }
+  .positive { color: #34c759; }
+  .negative { color: #ff3b30; }
+  .neutral { color: #999; }
+
+  /* Layout */
+  .row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; flex: 1; min-height: 0; }
+  .row-3 { display: grid; grid-template-columns: 2fr 1fr; gap: 20px; flex: 1; min-height: 0; }
+  .card { background: white; border-radius: 14px; padding: 24px 28px; display: flex; flex-direction: column; min-height: 0; }
+  .card h3 { font-size: 13px; font-weight: 600; color: #666; margin-bottom: 18px; }
+  .card .chart-wrap { flex: 1; position: relative; min-height: 0; }
+
+  /* Tables */
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid #f0f0f0; }
+  th { font-size: 12px; color: #666; font-weight: 600; border-bottom: 2px solid #e5e5e5; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+
+  /* Summary block */
+  .insight-list { display: flex; flex-direction: column; gap: 14px; margin-top: 8px; }
+  .insight-item {
+    background: white; border-left: 4px solid #007aff; border-radius: 8px;
+    padding: 14px 18px; display: flex; gap: 14px; align-items: flex-start;
+  }
+  .insight-item.warn { border-left-color: #ff9500; }
+  .insight-item.bad { border-left-color: #ff3b30; }
+  .insight-item.good { border-left-color: #34c759; }
+  .insight-item .badge {
+    flex-shrink: 0; font-size: 11px; font-weight: 700;
+    padding: 3px 10px; border-radius: 10px;
+    background: #e6f0ff; color: #007aff;
+  }
+  .insight-item.warn .badge { background: #fff3e0; color: #ff9500; }
+  .insight-item.bad .badge { background: #ffe8e6; color: #ff3b30; }
+  .insight-item.good .badge { background: #e8f8ec; color: #34c759; }
+  .insight-item .text { font-size: 14px; line-height: 1.6; color: #1d1d1f; }
+  .insight-item .text strong { font-weight: 600; }
+
+  .footer-note { font-size: 11px; color: #aaa; margin-top: 14px; text-align: right; }
+
+  .agenda-list { font-size: 22px; line-height: 2.2; color: #1d1d1f; }
+  .agenda-list li { list-style: none; padding-left: 36px; position: relative; }
+  .agenda-list li::before {
+    content: counter(item); counter-increment: item;
+    position: absolute; left: 0; top: 0;
+    width: 26px; height: 26px; background: #007aff; color: white;
+    border-radius: 50%; font-size: 13px; font-weight: 700;
+    display: flex; align-items: center; justify-content: center;
+    margin-top: 12px;
+  }
+  .agenda-list { counter-reset: item; }
+
+  .legend-row { display: flex; gap: 18px; flex-wrap: wrap; margin-top: 10px; font-size: 12px; color: #666; }
+  .legend-row .lg { display: inline-flex; align-items: center; gap: 6px; }
+  .legend-row .swatch { width: 12px; height: 12px; border-radius: 2px; }
+
+  /* Compact table for country comparison */
+  .compare-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; flex: 1; min-height: 0; }
+  .compare-col h4 { font-size: 14px; color: #666; margin-bottom: 12px; font-weight: 600; }
+  .compare-col table { font-size: 13px; }
+</style>
+</head>
+<body>
+
+<div id="login-overlay">
+  <div class="login-box">
+    <h2>All Hands 資料</h2>
+    <p>Dent Inc.</p>
+    <div id="login-error" class="login-error">パスワードが違います</div>
+    <input type="password" id="login-pw" placeholder="パスワード" autofocus>
+    <button onclick="tryLogin()">ログイン</button>
+  </div>
+</div>
+
+<script>
+// Encrypted blob (AES-256-GCM, key derived from password via PBKDF2-SHA256, 250000 iterations)
+const ENCRYPTED_BLOB = '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';
+const PBKDF2_ITER = 250000;
+
+let DATA = null, EXTRA = null;
+
+async function deriveKey(password, salt) {
+  const enc = new TextEncoder();
+  const baseKey = await crypto.subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveKey']);
+  return await crypto.subtle.deriveKey(
+    { name: 'PBKDF2', salt, iterations: PBKDF2_ITER, hash: 'SHA-256' },
+    baseKey,
+    { name: 'AES-GCM', length: 256 },
+    false, ['decrypt']
+  );
+}
+
+async function decryptBlob(password) {
+  const blob = Uint8Array.from(atob(ENCRYPTED_BLOB), c => c.charCodeAt(0));
+  const salt = blob.slice(0, 16);
+  const iv = blob.slice(16, 28);
+  const tag = blob.slice(28, 44);
+  const ciphertext = blob.slice(44);
+  // WebCrypto AES-GCM expects ciphertext+tag concatenated
+  const ctWithTag = new Uint8Array(ciphertext.length + tag.length);
+  ctWithTag.set(ciphertext);
+  ctWithTag.set(tag, ciphertext.length);
+  const key = await deriveKey(password, salt);
+  const plaintext = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ctWithTag);
+  return JSON.parse(new TextDecoder().decode(plaintext));
+}
+
+async function tryLogin() {
+  const btn = document.querySelector('#login-overlay button');
+  const pwEl = document.getElementById('login-pw');
+  const errEl = document.getElementById('login-error');
+  errEl.style.display = 'none';
+  btn.textContent = '復号中...';
+  btn.disabled = true;
+  pwEl.disabled = true;
+  try {
+    const obj = await decryptBlob(pwEl.value);
+    DATA = obj.data;
+    EXTRA = obj.extra;
+    sessionStorage.setItem('dent_pw', pwEl.value);
+    document.getElementById('login-overlay').classList.add('hidden');
+    if (typeof renderAll === 'function') renderAll();
+  } catch(e) {
+    errEl.style.display = 'block';
+    pwEl.value = '';
+  } finally {
+    btn.textContent = 'ログイン';
+    btn.disabled = false;
+    pwEl.disabled = false;
+    pwEl.focus();
+  }
+}
+
+document.getElementById('login-pw').addEventListener('keydown', e => { if (e.key === 'Enter') tryLogin(); });
+
+// Auto-login if password saved in this session
+window.addEventListener('DOMContentLoaded', async () => {
+  const saved = sessionStorage.getItem('dent_pw');
+  if (saved) {
+    document.getElementById('login-pw').value = saved;
+    await tryLogin();
+  }
+});
+</script>
+
+<div class="deck">
+
+<!-- Slide 1: Title -->
+<section class="slide active">
+  <div style="margin-top: auto; margin-bottom: auto;">
+    <h1 class="title">
+      2025年12月まとめ
+      <span class="sub">All Hands Meeting · Dent Inc. · 2026年1月</span>
+    </h1>
+  </div>
+</section>
+
+<!-- Slide 2: Agenda -->
+<section class="slide">
+  <h2>アジェンダ</h2>
+  <div class="h2-sub">本日の内容</div>
+  <div style="margin-top: 40px;">
+    <ol class="agenda-list">
+      <li>2025年12月の振り返り（KPI / チャネル / 国籍）</li>
+      <li>エリア別パフォーマンス</li>
+      <li>業界アップデート（JNTO 訪日外客数）</li>
+      <li>ハイライト・要観察ポイント</li>
+      <li>連絡事項</li>
+    </ol>
+  </div>
+</section>
+
+<!-- Slide 3: KPI Overview -->
+<section class="slide">
+  <h2>12月実績ハイライト</h2>
+  <div class="h2-sub">2025/12 ・ 全社・全エリア</div>
+  <div class="kpi-grid">
+    <div class="kpi-card">
+      <div class="label">総売上</div>
+      <div class="value" id="kpi-sales">—</div>
+      <div class="delta"><span id="kpi-sales-mom">—</span></div>
+      <div class="delta"><span id="kpi-sales-yoy" style="color:#999;">—</span></div>
+    </div>
+    <div class="kpi-card">
+      <div class="label">1日平均売上</div>
+      <div class="value" id="kpi-daily">—</div>
+      <div class="delta"><span id="kpi-daily-mom">—</span></div>
+      <div class="delta"><span id="kpi-daily-yoy" style="color:#999;">—</span></div>
+    </div>
+    <div class="kpi-card">
+      <div class="label">稼働率（OCC）</div>
+      <div class="value" id="kpi-occ">—</div>
+      <div class="delta"><span id="kpi-occ-mom">—</span></div>
+      <div class="delta"><span id="kpi-occ-yoy" style="color:#999;">—</span></div>
+    </div>
+    <div class="kpi-card">
+      <div class="label">ADR（部屋単価）</div>
+      <div class="value" id="kpi-adr">—</div>
+      <div class="delta"><span id="kpi-adr-mom">—</span></div>
+      <div class="delta"><span id="kpi-adr-yoy" style="color:#999;">—</span></div>
+    </div>
+    <div class="kpi-card">
+      <div class="label">予約組数</div>
+      <div class="value" id="kpi-bookings">—</div>
+      <div class="delta"><span id="kpi-bookings-mom">—</span></div>
+      <div class="delta"><span id="kpi-bookings-yoy" style="color:#999;">—</span></div>
+    </div>
+    <div class="kpi-card">
+      <div class="label">ゲスト数</div>
+      <div class="value" id="kpi-guests">—</div>
+      <div class="delta"><span id="kpi-guests-mom">—</span></div>
+      <div class="delta"><span id="kpi-guests-yoy" style="color:#999;">—</span></div>
+    </div>
+    <div class="kpi-card">
+      <div class="label">平均ゲスト数</div>
+      <div class="value" id="kpi-avg-guests">—</div>
+      <div class="delta"><span id="kpi-avg-guests-mom">—</span></div>
+      <div class="delta"><span id="kpi-avg-guests-yoy" style="color:#999;">—</span></div>
+    </div>
+    <div class="kpi-card">
+      <div class="label">平均宿泊日数</div>
+      <div class="value" id="kpi-avg-nights">—</div>
+      <div class="delta"><span id="kpi-avg-nights-mom">—</span></div>
+      <div class="delta"><span id="kpi-avg-nights-yoy" style="color:#999;">—</span></div>
+    </div>
+    <div class="kpi-card">
+      <div class="label">稼働物件数</div>
+      <div class="value" id="kpi-props">—</div>
+      <div class="delta"><span id="kpi-props-mom">—</span></div>
+      <div class="delta"><span id="kpi-props-yoy" style="color:#999;">—</span></div>
+    </div>
+  </div>
+  <div class="footer-note">※ ADR = (売上合計 − 清掃料) ÷ 室泊数 / 稼働率 = 室泊数 ÷ (稼働物件数 × 日数) / 対前年データは未集計（PDFから手動入力が必要）。</div>
+</section>
+
+<!-- Slide 4: Channel Mix -->
+<section class="slide">
+  <h2>売上チャネル構成</h2>
+  <div class="h2-sub">直近13ヶ月の月次推移と3月の構成比 ・ 4月は集計途中（〜04/24）</div>
+  <div class="row-3">
+    <div class="card">
+      <h3>月次売上推移（チャネル積上げ・万円）</h3>
+      <div class="chart-wrap"><canvas id="trendChart"></canvas></div>
+    </div>
+    <div class="card">
+      <h3>3月チャネル構成比</h3>
+      <div class="chart-wrap"><canvas id="pieChart"></canvas></div>
+    </div>
+  </div>
+</section>
+
+<!-- Slide 5: Country -->
+<section class="slide">
+  <h2>国別売上構成（今月 vs 前月）</h2>
+  <div class="h2-sub">予約データ「販売」基準・上位10ヶ国</div>
+  <div class="compare-grid">
+    <div class="compare-col card">
+      <h4>2025年12月（今月）</h4>
+      <div class="chart-wrap"><canvas id="countryCurChart"></canvas></div>
+    </div>
+    <div class="compare-col card">
+      <h4>2025年11月（前月）</h4>
+      <div class="chart-wrap"><canvas id="countryPrvChart"></canvas></div>
+    </div>
+  </div>
+</section>
+
+<!-- Slide 6: Area -->
+<section class="slide">
+  <h2>エリア別パフォーマンス</h2>
+  <div class="h2-sub">2025/12 ・ 物件マスタの「エリア」基準</div>
+  <div class="row-2">
+    <div class="card">
+      <h3>エリア別 売上 構成（万円）</h3>
+      <div class="chart-wrap"><canvas id="areaSalesChart"></canvas></div>
+    </div>
+    <div class="card">
+      <h3>エリア別 主要KPI</h3>
+      <div style="overflow:auto; flex:1; min-height:0;">
+        <table id="areaTable">
+          <thead><tr><th>エリア</th><th class="num">売上(万)</th><th class="num">前月比</th><th class="num">ADR(円)</th><th class="num">室泊数</th><th class="num">物件数</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div class="footer-note" style="text-align:left; margin-top: 12px;">
+        ※ ADR = (売上合計 − 清掃料) ÷ 室泊数。物件数は物件マスタ「稼働中」かつKPI除外を除く。
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Slide 7: JNTO -->
+<section class="slide">
+  <h2>業界アップデート（JNTO 訪日外客数）</h2>
+  <div class="h2-sub">直近12ヶ月推移と国別前年比</div>
+  <div class="row-3">
+    <div class="card">
+      <h3>月次訪日外客数（万人）</h3>
+      <div class="chart-wrap"><canvas id="jntoTrendChart"></canvas></div>
+    </div>
+    <div class="card">
+      <h3>主要国 前年同月比（最新公開月）</h3>
+      <div style="overflow:auto; flex:1; min-height:0;">
+        <table id="jntoCountryTable">
+          <thead><tr><th>国</th><th class="num">人数</th><th class="num">前年比</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div class="footer-note" style="text-align:left; margin-top: 12px;">
+        ※ JNTO 2025年12月分の国別は最新公開月で代用表示の場合あり。<br>
+        国別は2025-12ベースで取得（欠損時は直近月で代用）。
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Slide 9: Insights -->
+<section class="slide">
+  <h2>ハイライト・要観察</h2>
+  <div class="h2-sub">数値からの主な示唆</div>
+  <div class="insight-list" id="insightList"></div>
+</section>
+
+<!-- Slide 10: Closing -->
+<section class="slide">
+  <h2>
+    連絡事項
+    <button id="notes-edit-btn" style="float:right;font-size:12px;padding:6px 14px;border:1px solid #ddd;background:white;border-radius:6px;cursor:pointer;font-weight:500;">編集</button>
+  </h2>
+  <div class="h2-sub" id="notes-meta">今月のお知らせ</div>
+
+  <div id="notes-view" style="margin-top: 12px; flex: 1; overflow: auto; min-height: 0;">
+    <div id="notes-content" style="background: white; border-radius: 12px; padding: 32px 36px; font-size: 20px; line-height: 2; color: #1d1d1f; white-space: pre-wrap; min-height: 200px;">
+      <span style="color: #999;">読み込み中...</span>
+    </div>
+  </div>
+
+  <div id="notes-edit" style="display:none; margin-top: 12px; flex: 1; min-height: 0; flex-direction: column;">
+    <textarea id="notes-textarea" style="flex:1; min-height: 240px; width: 100%; padding: 24px 28px; border: 2px solid #007aff; border-radius: 12px; font-size: 20px; line-height: 2; font-family: inherit; resize: none; outline: none;"></textarea>
+    <div style="margin-top: 14px; display: flex; gap: 10px; justify-content: flex-end; align-items: center;">
+      <span id="notes-status" style="font-size: 12px; color: #999; margin-right: auto;"></span>
+      <button id="notes-cancel-btn" style="padding: 10px 20px; background: white; border: 1px solid #ddd; border-radius: 8px; cursor: pointer; font-size: 13px;">キャンセル</button>
+      <button id="notes-save-btn" style="padding: 10px 22px; background: #007aff; color: white; border: none; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 600;">保存</button>
+    </div>
+  </div>
+</section>
+
+</div>
+
+<div class="nav-bar">
+  <button id="prevBtn">‹</button>
+  <span class="page-num"><span id="pageNum">1</span> / <span id="pageTotal">8</span></span>
+  <button id="nextBtn">›</button>
+</div>
+
+<script>
+
+// Helpers
+function fmtMan(n) { return (n/10000).toLocaleString('ja-JP', {maximumFractionDigits:0}) + '万円'; }
+function fmtYen(n) { return Math.round(n).toLocaleString('ja-JP') + '円'; }
+function fmtNum(n, d=0) { return n.toLocaleString('ja-JP', {minimumFractionDigits: d, maximumFractionDigits: d}); }
+function pctClass(cur, prv) { return cur >= prv ? 'positive' : 'negative'; }
+function pctText(cur, prv, labelPrefix='前月') {
+  if (!prv) return '—';
+  const r = (cur/prv)*100;
+  const arrow = cur >= prv ? '▲' : '▼';
+  return labelPrefix + ' ' + arrow + ' ' + r.toFixed(1) + '%';
+}
+function diffText(cur, prv, suffix='', labelPrefix='前月差') {
+  if (prv == null) return '—';
+  const d = cur - prv;
+  const sign = d >= 0 ? '+' : '';
+  return labelPrefix + ' ' + sign + fmtNum(d, 2) + suffix;
+}
+function setKpi(id, cur, prv, yoy, fmt) {
+  const mom = document.getElementById(`kpi-${id}-mom`);
+  const yoyEl = document.getElementById(`kpi-${id}-yoy`);
+  if (fmt === 'pct') {
+    mom.textContent = pctText(cur, prv, '前月');
+    mom.className = cur >= prv ? 'positive' : 'negative';
+    if (yoyEl) {
+      yoyEl.textContent = pctText(cur, yoy, '前年');
+      yoyEl.className = cur >= yoy ? 'positive' : 'negative';
+    }
+  } else if (fmt === 'diff-guests') {
+    mom.textContent = diffText(cur, prv, '人', '前月差');
+    mom.className = cur >= prv ? 'positive' : 'negative';
+    if (yoyEl) {
+      yoyEl.textContent = diffText(cur, yoy, '人', '前年差');
+      yoyEl.className = cur >= yoy ? 'positive' : 'negative';
+    }
+  } else if (fmt === 'diff-nights') {
+    mom.textContent = diffText(cur, prv, '泊', '前月差');
+    mom.className = cur >= prv ? 'positive' : 'negative';
+    if (yoyEl) {
+      yoyEl.textContent = diffText(cur, yoy, '泊', '前年差');
+      yoyEl.className = cur >= yoy ? 'positive' : 'negative';
+    }
+  } else if (fmt === 'diff-props') {
+    mom.textContent = diffText(cur, prv, '件', '前月差');
+    mom.className = cur >= prv ? 'positive' : 'negative';
+    if (yoyEl) {
+      yoyEl.textContent = diffText(cur, yoy, '件', '前年差');
+      yoyEl.className = cur >= yoy ? 'positive' : 'negative';
+    }
+  }
+}
+
+function renderAll() {
+// === Populate KPIs ===
+const c = DATA.cur, p = DATA.prv, y = DATA.yearAgo || {};
+document.getElementById('kpi-sales').innerHTML = fmtMan(c.sales);
+setKpi('sales', c.sales, p.sales, y.sales, 'pct');
+
+document.getElementById('kpi-daily').innerHTML = Math.round(c.avgDailySales).toLocaleString() + '<span class="unit">円</span>';
+setKpi('daily', c.avgDailySales, p.avgDailySales, y.avgDailySales, 'pct');
+
+document.getElementById('kpi-occ').innerHTML = (c.occ*100).toFixed(1) + '<span class="unit">%</span>';
+setKpi('occ', c.occ, p.occ, y.occ, 'pct');
+
+document.getElementById('kpi-adr').innerHTML = Math.round(c.adr).toLocaleString() + '<span class="unit">円</span>';
+setKpi('adr', c.adr, p.adr, y.adr, 'pct');
+
+document.getElementById('kpi-bookings').innerHTML = c.count + '<span class="unit">組</span>';
+setKpi('bookings', c.count, p.count, y.count, 'pct');
+
+document.getElementById('kpi-guests').innerHTML = c.guests.toLocaleString() + '<span class="unit">人</span>';
+setKpi('guests', c.guests, p.guests, y.guests, 'pct');
+
+document.getElementById('kpi-avg-guests').innerHTML = c.avgGuests.toFixed(2);
+setKpi('avg-guests', c.avgGuests, p.avgGuests, y.avgGuests, 'diff-guests');
+
+document.getElementById('kpi-avg-nights').innerHTML = c.avgNights.toFixed(2) + '<span class="unit">泊</span>';
+setKpi('avg-nights', c.avgNights, p.avgNights, y.avgNights, 'diff-nights');
+
+document.getElementById('kpi-props').innerHTML = c.properties + '<span class="unit">件</span>';
+setKpi('props', c.properties, p.properties, y.properties, 'diff-props');
+
+// === Channel trend chart ===
+const palette = {
+  'Airbnb': '#FF5A5F',
+  'Booking.com': '#003580',
+  'Expedia': '#FFC72C',
+  'Agoda': '#5392F9',
+  'AirHost': '#34c759',
+  'manually_created': '#999',
+  'isCalendar_imported': '#bbb',
+  'Vacation Stay：楽天': '#bf0000',
+  'Trip.com': '#287dfa',
+  'その他': '#ccc'
+};
+
+const trend = DATA.trend;
+const trendCtx = document.getElementById('trendChart');
+new Chart(trendCtx, {
+  type: 'bar',
+  data: {
+    labels: trend.months.map(m => {
+      const [y,mm] = m.split('-');
+      const isPartial = m === '2026-01';
+      return mm + '月' + (isPartial ? '*' : '') + (mm==='01'||mm==='04' ? '\n('+y+')' : '');
+    }),
+    datasets: trend.channels.filter(ch => trend.months.some(m => trend.data[m][ch] > 0)).map(ch => ({
+      label: ch,
+      data: trend.months.map(m => Math.round((trend.data[m][ch]||0)/10000)),
+      backgroundColor: trend.months.map(m => {
+        const baseColor = palette[ch] || '#888';
+        // Make April 2026 (partial) semi-transparent
+        if (m === '2026-04') return baseColor + '66'; // ~40% alpha
+        return baseColor;
+      }),
+      borderWidth: 0
+    }))
+  },
+  options: {
+    responsive: true, maintainAspectRatio: false,
+    plugins: {
+      legend: { position: 'bottom', labels: { font: {size: 11}, padding: 10, boxWidth: 12 } },
+      tooltip: {
+        callbacks: {
+          title: (items) => {
+            const m = trend.months[items[0].dataIndex];
+            return m === '2026-01' ? items[0].label.replace('*','') + ' (集計途中)' : items[0].label.replace('\n',' ');
+          },
+          label: (c) => c.dataset.label + ': ' + c.parsed.y.toLocaleString() + '万円'
+        }
+      }
+    },
+    scales: {
+      x: { stacked: true, ticks: { font: {size: 10} } },
+      y: { stacked: true, beginAtZero: true, ticks: { callback: v => v.toLocaleString() + '万' } }
+    }
+  }
+});
+
+// === Pie chart ===
+const marchData = trend.data['2025-12'];
+const pieEntries = Object.entries(marchData).filter(([_,v]) => v > 0).sort((a,b)=>b[1]-a[1]);
+new Chart(document.getElementById('pieChart'), {
+  type: 'doughnut',
+  data: {
+    labels: pieEntries.map(([k]) => k),
+    datasets: [{
+      data: pieEntries.map(([_,v]) => Math.round(v/10000)),
+      backgroundColor: pieEntries.map(([k]) => palette[k] || '#888'),
+      borderWidth: 2,
+      borderColor: '#fff'
+    }]
+  },
+  options: {
+    responsive: true, maintainAspectRatio: false, cutout: '55%',
+    plugins: {
+      legend: { position: 'bottom', labels: { font: {size: 11}, padding: 8, boxWidth: 12 } },
+      tooltip: {
+        callbacks: {
+          label: (ctx) => {
+            const total = ctx.dataset.data.reduce((a,b)=>a+b,0);
+            const pct = (ctx.parsed/total*100).toFixed(1);
+            return ctx.label + ': ' + ctx.parsed.toLocaleString() + '万円 (' + pct + '%)';
+          }
+        }
+      }
+    }
+  }
+});
+
+// === Country pies ===
+function buildCountryChart(elId, byCountry) {
+  const sorted = Object.entries(byCountry).sort((a,b)=>b[1]-a[1]);
+  const top10 = sorted.slice(0, 10);
+  const otherSum = sorted.slice(10).reduce((s,[_,v])=>s+v, 0);
+  if (otherSum > 0) top10.push(['その他', otherSum]);
+  const colors = ['#007aff','#34c759','#ff9500','#ff3b30','#5856d6','#af52de','#ff2d55','#5ac8fa','#ffcc00','#a2845e','#cccccc'];
+  new Chart(document.getElementById(elId), {
+    type: 'doughnut',
+    data: {
+      labels: top10.map(([k]) => k.replace('United States of America','米国').replace('United Kingdom of Great Britain and Northern Ireland','英国').replace('Korea (Republic of)','韓国').replace('Hong Kong','香港').replace('Taiwan','台湾').replace('China','中国').replace('Japan','日本').replace('Australia','豪州').replace('Germany','独').replace('France','仏').replace('Singapore','SG').replace('Netherlands','蘭').replace('Mexico','墨').replace('Philippines','比').replace('Malaysia','馬').replace('Indonesia','尼')),
+      datasets: [{
+        data: top10.map(([_,v]) => Math.round(v/10000)),
+        backgroundColor: colors.slice(0, top10.length),
+        borderWidth: 2,
+        borderColor: '#fff'
+      }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: {
+        legend: { position: 'right', labels: { font: {size: 11}, padding: 8, boxWidth: 12 } },
+        tooltip: {
+          callbacks: {
+            label: (ctx) => {
+              const total = ctx.dataset.data.reduce((a,b)=>a+b,0);
+              const pct = (ctx.parsed/total*100).toFixed(1);
+              return ctx.label + ': ' + ctx.parsed.toLocaleString() + '万円 (' + pct + '%)';
+            }
+          }
+        }
+      }
+    }
+  });
+}
+buildCountryChart('countryCurChart', c.byCountry);
+buildCountryChart('countryPrvChart', p.byCountry);
+
+
+// === Area slide ===
+(function renderArea() {
+  const areaOrder = ['大阪','京都','東京','沖縄','その他'];
+  const areas = areaOrder.filter(a => EXTRA.area[a]);
+  const colors = { '大阪':'#007aff','京都':'#af52de','東京':'#34c759','沖縄':'#ff9500','その他':'#999' };
+  new Chart(document.getElementById('areaSalesChart'), {
+    type: 'bar',
+    data: {
+      labels: areas,
+      datasets: [
+        { label: '今月 (12月)', data: areas.map(a => Math.round(EXTRA.area[a].sales/10000)), backgroundColor: '#007aff', borderRadius: 4 },
+        { label: '前月 (11月)', data: areas.map(a => Math.round((EXTRA.areaPrev[a]?.sales||0)/10000)), backgroundColor: '#cce0ff', borderRadius: 4 }
+      ]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: {
+        legend: { position: 'bottom', labels: { font: {size: 12}, padding: 10 } },
+        tooltip: { callbacks: { label: c => c.dataset.label + ': ' + c.parsed.y.toLocaleString() + '万円' } }
+      },
+      scales: { y: { beginAtZero: true, ticks: { callback: v => v.toLocaleString() + '万' } } }
+    }
+  });
+  const tbody = document.querySelector('#areaTable tbody');
+  areas.forEach(a => {
+    const cur = EXTRA.area[a], prv = EXTRA.areaPrev[a] || {};
+    const mom = prv.sales ? ((cur.sales/prv.sales-1)*100).toFixed(1) : '—';
+    const momCls = (prv.sales && cur.sales >= prv.sales) ? 'positive' : 'negative';
+    const momTxt = prv.sales ? (cur.sales >= prv.sales ? '+' : '') + mom + '%' : '—';
+    tbody.innerHTML += `<tr>
+      <td><strong>${a}</strong></td>
+      <td class="num">${(cur.sales/10000).toFixed(0)}</td>
+      <td class="num ${momCls}">${momTxt}</td>
+      <td class="num">${Math.round(cur.adr).toLocaleString()}</td>
+      <td class="num">${cur.nights}</td>
+      <td class="num">${cur.properties}</td>
+    </tr>`;
+  });
+})();
+
+// === JNTO slide ===
+(function renderJnto() {
+  const t = EXTRA.jnto;
+  new Chart(document.getElementById('jntoTrendChart'), {
+    type: 'bar',
+    data: {
+      labels: t.map(m => m.key),
+      datasets: [{
+        label: '訪日外客数（万人）',
+        data: t.map(m => m.value ? Math.round(m.value/10000) : null),
+        backgroundColor: t.map(m => m.ymd === '2025-12' ? '#ddd' : (m.ymd.startsWith('2025') ? '#ff9500' : '#999')),
+        borderRadius: 4
+      }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: { callbacks: { label: c => c.parsed.y ? c.parsed.y.toLocaleString() + '万人' : '未取得' } }
+      },
+      scales: {
+        y: { beginAtZero: true, ticks: { callback: v => v + '万' } },
+        x: { ticks: { font: {size: 10} } }
+      }
+    }
+  });
+  const tbody = document.querySelector('#jntoCountryTable tbody');
+  const cur = EXTRA.jntoCountries.jan2026;
+  const prv = (function(){
+    // 2025年1月 from raw — embed in EXTRA
+    return EXTRA.jntoCountries.feb2025; // fallback; we'll use jan2025 if added later
+  })();
+  const major = ['韓国','中国','台湾','香港','タイ','シンガポール','マレーシア','フィリピン','インドネシア','ベトナム','インド','オーストラリア','アメリカ','カナダ','メキシコ','イギリス','フランス','ドイツ'];
+  major.forEach(c => {
+    const cv = cur[c];
+    const pv = EXTRA.jntoCountries.jan2025?.[c];
+    if (cv == null) return;
+    const yoy = pv ? ((cv/pv-1)*100).toFixed(1) : null;
+    const cls = yoy == null ? 'neutral' : (parseFloat(yoy) >= 0 ? 'positive' : 'negative');
+    const sign = yoy && parseFloat(yoy) >= 0 ? '+' : '';
+    tbody.innerHTML += `<tr>
+      <td>${c}</td>
+      <td class="num">${cv.toLocaleString()}</td>
+      <td class="num ${cls}">${yoy != null ? sign + yoy + '%' : '—'}</td>
+    </tr>`;
+  });
+})();
+
+// === Insights (auto generate based on data) ===
+const insights = [];
+const salesGrowth = ((c.sales/p.sales - 1)*100).toFixed(1);
+const adrGrowth = ((c.adr/p.adr - 1)*100).toFixed(1);
+const bookingGrowth = ((c.count/p.count - 1)*100).toFixed(1);
+
+insights.push({type:c.sales>=p.sales?'good':'bad', label:'売上', text:`<strong>総売上 ${(c.sales/10000).toFixed(0)}万円</strong>、前月比 ${c.sales>=p.sales?'+':''}${((c.sales/p.sales-1)*100).toFixed(1)}%。`});
+insights.push({type:'good', label:'単価', text:`<strong>ADR ${Math.round(c.adr).toLocaleString()}円（前月比 +${adrGrowth}%）</strong>。値付け強化または高単価エリア・物件への稼働シフトが効いている可能性。詳細は物件別タブで要確認。`});
+insights.push({type:'good', label:'予約数', text:`<strong>予約組数 ${c.count}組（前月比 +${bookingGrowth}%）</strong>、ゲスト数も ${c.guests}人と前月から +${(c.guests-p.guests)}人増。`});
+
+// 国籍構成変化
+const cTotal = Object.values(c.byCountry).reduce((s,v)=>s+v,0);
+const pTotal = Object.values(p.byCountry).reduce((s,v)=>s+v,0);
+const cTop = Object.entries(c.byCountry).sort((a,b)=>b[1]-a[1])[0];
+const pTop = Object.entries(p.byCountry).sort((a,b)=>b[1]-a[1])[0];
+if (cTop[0] !== pTop[0]) {
+  insights.push({type:'', label:'国籍', text:`国籍別売上1位が <strong>${pTop[0]}（前月）→ ${cTop[0]}（今月）</strong>に交代。米国比率の伸びが顕著（${(cTop[1]/cTotal*100).toFixed(1)}%）。`});
+}
+
+const insEl = document.getElementById('insightList');
+insights.forEach(i => {
+  insEl.innerHTML += `<div class="insight-item ${i.type}"><span class="badge">${i.label}</span><div class="text">${i.text}</div></div>`;
+});
+
+} // end renderAll
+
+// === Meeting Notes (連絡事項) ===
+const MEETING_NOTES_URL = 'https://script.google.com/macros/s/AKfycbw43wQ2-8vDRv_XqKR_ZrZdsuWdFJnifk1GVSh4zE1XbwTHOCzDGHc0SFM2ynllke9F/exec';
+const MEETING_NOTES_TOKEN = 'dent_meeting_notes_2026';
+const MEETING_NOTES_KEY = '2026-01';
+
+async function loadMeetingNotes() {
+  const contentEl = document.getElementById('notes-content');
+  const metaEl = document.getElementById('notes-meta');
+  try {
+    const res = await fetch(`${MEETING_NOTES_URL}?key=${encodeURIComponent(MEETING_NOTES_KEY)}&_=${Date.now()}`);
+    const data = await res.json();
+    if (data.ok) {
+      const text = data.content || '';
+      if (text.trim()) {
+        contentEl.textContent = text;
+        contentEl.style.color = '#1d1d1f';
+      } else {
+        contentEl.innerHTML = '<span style="color:#999;">未記入。「編集」から記入してください。</span>';
+      }
+      if (data.updatedAt) {
+        const d = new Date(data.updatedAt);
+        metaEl.textContent = `今月のお知らせ ・ 最終更新: ${d.toLocaleString('ja-JP')}`;
+      }
+    } else {
+      contentEl.innerHTML = '<span style="color:#ff3b30;">読み込み失敗: ' + (data.error || 'unknown') + '</span>';
+    }
+  } catch(e) {
+    contentEl.innerHTML = '<span style="color:#ff3b30;">読み込みエラー（ネットワークまたはAPI）: ' + e.message + '</span>';
+  }
+}
+
+async function saveMeetingNotes(content) {
+  const status = document.getElementById('notes-status');
+  status.textContent = '保存中...';
+  status.style.color = '#999';
+  try {
+    // Use GET for save (browsers convert POST→GET on 302 redirect which breaks GAS doPost)
+    const params = new URLSearchParams({
+      action: 'save',
+      token: MEETING_NOTES_TOKEN,
+      key: MEETING_NOTES_KEY,
+      content
+    });
+    const res = await fetch(`${MEETING_NOTES_URL}?${params.toString()}`);
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || 'save failed');
+    await loadMeetingNotes();
+    status.textContent = '保存しました ✓';
+    status.style.color = '#34c759';
+    setTimeout(() => { status.textContent = ''; }, 2000);
+    return true;
+  } catch(e) {
+    status.textContent = '保存失敗: ' + e.message;
+    status.style.color = '#ff3b30';
+    return false;
+  }
+}
+
+function setupMeetingNotesUI() {
+  const editBtn = document.getElementById('notes-edit-btn');
+  const cancelBtn = document.getElementById('notes-cancel-btn');
+  const saveBtn = document.getElementById('notes-save-btn');
+  const viewEl = document.getElementById('notes-view');
+  const editEl = document.getElementById('notes-edit');
+  const textarea = document.getElementById('notes-textarea');
+  const contentEl = document.getElementById('notes-content');
+
+  editBtn.addEventListener('click', () => {
+    const current = contentEl.textContent.trim();
+    textarea.value = (current.startsWith('未記入') || current === '読み込み中...') ? '' : current;
+    viewEl.style.display = 'none';
+    editEl.style.display = 'flex';
+    editBtn.style.display = 'none';
+    textarea.focus();
+  });
+
+  cancelBtn.addEventListener('click', () => {
+    viewEl.style.display = 'block';
+    editEl.style.display = 'none';
+    editBtn.style.display = '';
+  });
+
+  saveBtn.addEventListener('click', async () => {
+    saveBtn.disabled = true;
+    cancelBtn.disabled = true;
+    const ok = await saveMeetingNotes(textarea.value);
+    saveBtn.disabled = false;
+    cancelBtn.disabled = false;
+    if (ok) {
+      viewEl.style.display = 'block';
+      editEl.style.display = 'none';
+      editBtn.style.display = '';
+    }
+  });
+}
+
+// Initialize meeting notes (independent of decryption — fetched directly from GAS)
+window.addEventListener('DOMContentLoaded', () => {
+  setupMeetingNotesUI();
+  loadMeetingNotes();
+});
+
+// === Navigation ===
+const slides = document.querySelectorAll('.slide');
+let cur_idx = 0;
+document.getElementById('pageTotal').textContent = slides.length;
+function showSlide(i) {
+  cur_idx = Math.max(0, Math.min(slides.length-1, i));
+  slides.forEach((s, idx) => s.classList.toggle('active', idx === cur_idx));
+  document.getElementById('pageNum').textContent = cur_idx + 1;
+}
+document.getElementById('prevBtn').onclick = () => showSlide(cur_idx-1);
+document.getElementById('nextBtn').onclick = () => showSlide(cur_idx+1);
+document.addEventListener('keydown', e => {
+  if (e.key === 'ArrowRight' || e.key === ' ' || e.key === 'PageDown') { showSlide(cur_idx+1); e.preventDefault(); }
+  if (e.key === 'ArrowLeft' || e.key === 'PageUp') { showSlide(cur_idx-1); e.preventDefault(); }
+  if (e.key === 'Home') showSlide(0);
+  if (e.key === 'End') showSlide(slides.length-1);
+});
+</script>
+</body>
+</html>
