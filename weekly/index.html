@@ -1,0 +1,938 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>週次運営MTG</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Hiragino Sans', sans-serif; background: #f5f5f7; color: #1d1d1f; overflow: hidden; }
+  .deck { width: 100vw; height: 100vh; position: relative; }
+  .slide { position: absolute; top: 0; left: 0; width: 100%; height: 100%; padding: 40px 56px 56px; display: none; flex-direction: column; background: #f5f5f7; }
+  .slide.active { display: flex; }
+  .slide h1.title { font-size: 48px; font-weight: 700; letter-spacing: -0.02em; color: #1d1d1f; }
+  .slide h1.title .sub { font-size: 19px; color: #666; font-weight: 400; margin-top: 10px; display: block; letter-spacing: 0; }
+  .slide h2 { font-size: 24px; font-weight: 700; color: #1d1d1f; margin-bottom: 4px; letter-spacing: -0.01em; }
+  .slide .h2-sub { font-size: 12px; color: #999; margin-bottom: 20px; }
+
+  .top-bar { position: fixed; top: 14px; left: 24px; right: 24px; display: flex; justify-content: space-between; align-items: center; z-index: 100; pointer-events: none; }
+  .week-nav { background: rgba(29,29,31,0.9); color: white; border-radius: 20px; padding: 6px 16px; font-size: 13px; display: flex; align-items: center; gap: 10px; pointer-events: auto; }
+  .week-nav button { background: transparent; border: 1px solid #555; color: white; width: 22px; height: 22px; border-radius: 50%; cursor: pointer; font-size: 12px; }
+  .week-nav button:hover { background: #555; }
+  .week-nav .week-label { font-variant-numeric: tabular-nums; min-width: 140px; text-align: center; font-weight: 500; }
+  .data-status { background: rgba(29,29,31,0.7); color: #aaa; border-radius: 12px; padding: 4px 12px; font-size: 11px; pointer-events: auto; }
+
+  .nav-bar { position: fixed; bottom: 16px; right: 24px; background: rgba(29,29,31,0.9); color: white; border-radius: 20px; padding: 6px 14px; font-size: 12px; display: flex; align-items: center; gap: 12px; z-index: 100; }
+  .nav-bar button { background: transparent; border: 1px solid #555; color: white; width: 24px; height: 24px; border-radius: 50%; cursor: pointer; font-size: 14px; }
+  .nav-bar button:hover { background: #555; }
+  .nav-bar .page-num { font-variant-numeric: tabular-nums; min-width: 40px; text-align: center; }
+
+  .kpi-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+  .kpi-card { background: white; border-radius: 14px; padding: 18px 20px; }
+  .kpi-card .label { font-size: 12px; color: #666; margin-bottom: 6px; font-weight: 500; }
+  .kpi-card .value { font-size: 26px; font-weight: 700; letter-spacing: -0.01em; }
+  .kpi-card .unit { font-size: 13px; color: #999; font-weight: 500; margin-left: 3px; }
+  .kpi-card .delta { font-size: 11px; margin-top: 5px; display: flex; gap: 8px; flex-wrap: wrap; }
+  .positive { color: #34c759; }
+  .negative { color: #ff3b30; }
+  .neutral { color: #999; }
+  .warn { color: #ff9500; }
+
+  .row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; flex: 1; min-height: 0; }
+  .row-3 { display: grid; grid-template-columns: 2fr 1fr; gap: 16px; flex: 1; min-height: 0; }
+  .card { background: white; border-radius: 14px; padding: 18px 22px; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+  .card h3 { font-size: 13px; font-weight: 600; color: #666; margin-bottom: 12px; }
+  .card .chart-wrap { flex: 1; position: relative; min-height: 0; }
+  .card .scroll { overflow-y: auto; flex: 1; min-height: 0; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid #f0f0f0; }
+  th { font-size: 11px; color: #666; font-weight: 600; border-bottom: 2px solid #e5e5e5; position: sticky; top: 0; background: white; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+
+  .progress-bar { width: 100%; height: 7px; background: #f0f0f0; border-radius: 4px; overflow: hidden; }
+  .progress-fill { height: 100%; border-radius: 4px; }
+  .progress-label { font-size: 11px; font-variant-numeric: tabular-nums; font-weight: 600; margin-left: 6px; }
+  .progress-cell { display: flex; align-items: center; gap: 4px; }
+  .progress-cell .progress-bar { flex: 1; min-width: 60px; }
+
+  .pill { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 10px; font-weight: 600; white-space: nowrap; }
+  .pill-red { background: #ffe5e5; color: #ff3b30; }
+  .pill-orange { background: #fff3e0; color: #ff9500; }
+  .pill-green { background: #e5f7ec; color: #34c759; }
+  .pill-gray { background: #f0f0f0; color: #666; }
+
+  .action-list { display: flex; flex-direction: column; gap: 10px; }
+  .action-item { background: #fafafa; border-left: 3px solid #ff3b30; padding: 12px 16px; border-radius: 6px; display: grid; grid-template-columns: 110px 1fr 90px; gap: 14px; align-items: center; font-size: 12px; }
+  .action-item .who { font-weight: 600; margin-bottom: 4px; }
+  .action-item .what { line-height: 1.55; color: #333; }
+  .action-item .miss { color: #ff3b30; font-weight: 600; }
+  .action-item .due { font-size: 11px; color: #999; text-align: right; }
+
+  .slide.title-slide { justify-content: center; align-items: flex-start; padding: 56px 80px; }
+  .slide.title-slide .meta { margin-top: 24px; font-size: 14px; color: #666; }
+  ul.agenda { list-style: none; font-size: 16px; line-height: 2; color: #333; margin-top: 18px; }
+  ul.agenda li::before { content: "→ "; color: #007aff; font-weight: 600; }
+
+  .col-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; flex: 1; min-height: 0; }
+
+  .notes-area { width: 100%; height: 100%; border: 1px dashed #ddd; border-radius: 8px; padding: 12px 14px; font-size: 13px; font-family: inherit; resize: none; line-height: 1.7; background: #fafafa; }
+  .notes-area:focus { outline: none; border-color: #007aff; background: white; }
+  .notes-status { font-size: 10px; color: #999; margin-top: 4px; text-align: right; }
+
+  .loading-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(245,245,247,0.96); z-index: 9000; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 12px; font-size: 14px; color: #666; }
+  .spinner { width: 28px; height: 28px; border: 3px solid #e5e5e5; border-top-color: #007aff; border-radius: 50%; animation: spin 0.8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .error-banner { position: fixed; top: 50px; left: 50%; transform: translateX(-50%); background: #ff3b30; color: white; padding: 10px 20px; border-radius: 8px; font-size: 13px; z-index: 9999; display: none; }
+  .error-banner.show { display: block; }
+</style>
+</head>
+<body>
+
+<div class="top-bar">
+  <div class="week-nav">
+    <button onclick="changeWeek(-1)" title="前週">‹</button>
+    <span class="week-label" id="week-label">—</span>
+    <button onclick="changeWeek(1)" title="翌週">›</button>
+    <button onclick="jumpToCurrentWeek()" title="今週へ戻る" style="font-size:10px; width:auto; padding:0 8px; border-radius:12px;">今週</button>
+  </div>
+  <div class="data-status" id="data-status">読込中…</div>
+</div>
+
+<div class="error-banner" id="error-banner"></div>
+
+<div class="loading-overlay" id="loading-overlay">
+  <div class="spinner"></div>
+  <div id="loading-detail">データ読込中…</div>
+</div>
+
+<div class="deck">
+
+  <!-- Slide 1: Title -->
+  <section class="slide title-slide active">
+    <h1 class="title">週次運営MTG
+      <span class="sub" id="title-week-sub">—</span>
+    </h1>
+    <ul class="agenda">
+      <li>今週のオペレーション状況</li>
+      <li>売上目標進捗と要アクション物件</li>
+      <li>前週比KPIサマリ</li>
+      <li>懸案・決定事項</li>
+    </ul>
+    <div class="meta">出席：運営メンバー全員 &nbsp;｜&nbsp; 所要：30分</div>
+  </section>
+
+  <!-- Slide 2: Operations this week -->
+  <section class="slide">
+    <h2>今週のオペレーション状況</h2>
+    <div class="h2-sub" id="op-date-range">—</div>
+    <div class="kpi-grid" style="margin-bottom:14px;">
+      <div class="kpi-card">
+        <div class="label">チェックイン件数</div>
+        <div class="value" id="kpi-ci">—</div>
+        <div class="delta"><span id="kpi-ci-delta" class="neutral">—</span></div>
+      </div>
+      <div class="kpi-card">
+        <div class="label">チェックアウト件数</div>
+        <div class="value" id="kpi-co">—</div>
+        <div class="delta"><span id="kpi-co-delta" class="neutral">—</span></div>
+      </div>
+      <div class="kpi-card">
+        <div class="label">週平均稼働率</div>
+        <div class="value" id="kpi-occ">—</div>
+        <div class="delta"><span id="kpi-occ-delta" class="neutral">—</span></div>
+      </div>
+      <div class="kpi-card">
+        <div class="label">延べ宿泊日数</div>
+        <div class="value" id="kpi-nights">—</div>
+        <div class="delta"><span id="kpi-nights-delta" class="neutral">—</span></div>
+      </div>
+    </div>
+    <div class="row-2">
+      <div class="card">
+        <h3>日別チェックイン/アウト</h3>
+        <div class="chart-wrap"><canvas id="chart-weekly"></canvas></div>
+      </div>
+      <div class="card">
+        <h3>来週ピーク予定</h3>
+        <div class="scroll"><table id="table-nextweek">
+          <thead><tr><th>日付</th><th class="num">CI</th><th class="num">CO</th><th class="num">稼働率</th></tr></thead>
+          <tbody></tbody>
+        </table></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Slide 3: Revenue target progress (all properties) -->
+  <section class="slide">
+    <h2 id="slide3-title">月 売上目標進捗（物件別）</h2>
+    <div class="h2-sub" id="slide3-sub">—</div>
+    <div class="row-3">
+      <div class="card">
+        <h3>進捗率ランキング</h3>
+        <div class="scroll"><table id="table-progress">
+          <thead><tr><th>#</th><th>物件</th><th class="num">目標</th><th class="num">実績</th><th style="width:30%">進捗</th><th>状態</th></tr></thead>
+          <tbody></tbody>
+        </table></div>
+      </div>
+      <div class="card">
+        <h3>進捗区分サマリ</h3>
+        <div class="chart-wrap" style="max-height:200px;"><canvas id="chart-status"></canvas></div>
+        <div style="margin-top:12px; font-size:11px; color:#666; line-height:1.7;" id="status-legend"></div>
+        <div style="margin-top:12px; padding:10px 12px; background:#fff3e0; border-radius:8px; font-size:11px; color:#333;" id="total-summary">—</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Slide 4: Action properties -->
+  <section class="slide">
+    <h2>要アクション物件</h2>
+    <div class="h2-sub" id="slide4-sub">—</div>
+    <div class="action-list scroll" id="action-list" style="flex:1;"></div>
+    <div style="margin-top:12px; padding:10px 14px; background:white; border-radius:10px; font-size:11px; color:#666; display:flex; justify-content:space-between;">
+      <div>抽出条件：月次進捗率がペースライン（経過日数比）から <b>-10pt以上</b> 下振れ</div>
+      <div id="data-asof">—</div>
+    </div>
+  </section>
+
+  <!-- Slide 5: Weekly KPI comparison -->
+  <section class="slide">
+    <h2>前週比KPI</h2>
+    <div class="h2-sub" id="slide5-sub">全社合計 | 今週 vs 前週 vs 前年同週</div>
+    <div class="kpi-grid" style="margin-bottom:14px;">
+      <div class="kpi-card">
+        <div class="label">売上（週計）</div>
+        <div class="value" id="kpi-rev">—</div>
+        <div class="delta">
+          <span id="kpi-rev-wow" class="neutral">—</span>
+          <span id="kpi-rev-yoy" class="neutral">—</span>
+        </div>
+      </div>
+      <div class="kpi-card">
+        <div class="label">稼働率</div>
+        <div class="value" id="kpi-occ2">—</div>
+        <div class="delta">
+          <span id="kpi-occ-wow" class="neutral">—</span>
+          <span id="kpi-occ-yoy" class="neutral">—</span>
+        </div>
+      </div>
+      <div class="kpi-card">
+        <div class="label">ADR</div>
+        <div class="value" id="kpi-adr">—</div>
+        <div class="delta">
+          <span id="kpi-adr-wow" class="neutral">—</span>
+          <span id="kpi-adr-yoy" class="neutral">—</span>
+        </div>
+      </div>
+      <div class="kpi-card">
+        <div class="label">RevPAR</div>
+        <div class="value" id="kpi-revpar">—</div>
+        <div class="delta">
+          <span id="kpi-revpar-wow" class="neutral">—</span>
+          <span id="kpi-revpar-yoy" class="neutral">—</span>
+        </div>
+      </div>
+    </div>
+    <div class="row-2">
+      <div class="card">
+        <h3>週次売上推移（直近8週）</h3>
+        <div class="chart-wrap"><canvas id="chart-revenue"></canvas></div>
+      </div>
+      <div class="card">
+        <h3>異常値アラート</h3>
+        <div class="scroll"><table id="table-anomaly">
+          <thead><tr><th>物件</th><th>指標</th><th>値</th><th>判定</th></tr></thead>
+          <tbody></tbody>
+        </table></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Slide 6: Meeting notes & decisions -->
+  <section class="slide">
+    <h2>懸案・決定事項</h2>
+    <div class="h2-sub">自由記述 — ログは自動保存されます</div>
+    <div class="col-2">
+      <div class="card">
+        <h3>今週の論点・決定</h3>
+        <textarea class="notes-area" id="notes-decisions" placeholder="・価格戦略の見直し&#10;・清掃体制&#10;・ホスト対応"></textarea>
+        <div class="notes-status" id="notes-status-dec">—</div>
+      </div>
+      <div class="card">
+        <h3>持ち越し・来週フォーカス</h3>
+        <textarea class="notes-area" id="notes-carryover" placeholder="・前週からの持ち越し案件&#10;・来週の注力ポイント"></textarea>
+        <div class="notes-status" id="notes-status-car">—</div>
+      </div>
+    </div>
+  </section>
+
+</div>
+
+<div class="nav-bar">
+  <button onclick="prevSlide()">‹</button>
+  <span class="page-num" id="page-num">1 / 6</span>
+  <button onclick="nextSlide()">›</button>
+</div>
+
+<script>
+// ==========================================================
+// Config
+// ==========================================================
+const SHEET_ID = '1C7EiYSz-3ohjTy3Ul5zdgqL8cDk24jPj3ySTsAcOPhA';
+const API_KEY = 'AIzaSyD_16gkzGw68S4socdFAr5HtIieisPA3uk';
+const MEETING_NOTES_URL = 'https://script.google.com/macros/s/AKfycbyiSBemvDdrNFmUdXTdNoK8TBV1oz8AANeIbDY6Qd7DNt8ZPC51Ej9rLr9CjSS4zldI2g/exec';
+const MEETING_NOTES_TOKEN = 'dent_meeting_notes_2026';
+
+// Action threshold: 進捗率 が ペースライン(経過日数比) から N pt以上下振れ → 要アクション
+const ACTION_THRESHOLD_PT = 10;
+const WARN_THRESHOLD_PT = 3; // ペースから -3〜-10pt = 要注意
+
+// ==========================================================
+// Helpers
+// ==========================================================
+function sheetUrl(name) { return `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${encodeURIComponent(name)}?key=${API_KEY}`; }
+function parseNum(s) { if (!s) return 0; return parseFloat(String(s).replace(/[,¥￥\s]/g,'')) || 0; }
+function normalizeDate(s) { if (!s) return ''; return String(s).replace(/\//g,'-').trim(); }
+function getYm(d) { return d.length >= 7 ? d.substring(0,7) : ''; }
+function fmtYen(n) { if (!isFinite(n)) return '—'; if (Math.abs(n) >= 10000000) return '¥' + (n/1000000).toFixed(2) + 'M'; if (Math.abs(n) >= 1000000) return '¥' + (n/1000000).toFixed(2) + 'M'; if (Math.abs(n) >= 10000) return '¥' + Math.round(n/1000) + 'K'; return '¥' + Math.round(n).toLocaleString(); }
+function fmtYenFull(n) { if (!isFinite(n)) return '—'; return '¥' + Math.round(n).toLocaleString(); }
+function pctStr(n, digits=1) { return (n*100).toFixed(digits) + '%'; }
+function signed(n, fmt) { const p = n >= 0 ? '+' : ''; return p + fmt(n); }
+
+function deltaSpan(curr, prev, kind='abs', label='vs 前週') {
+  if (!isFinite(curr) || !isFinite(prev) || prev === 0) return `<span class="neutral">— ${label}</span>`;
+  const diff = curr - prev;
+  const rel = diff / prev;
+  const cls = diff > 0 ? 'positive' : (diff < 0 ? 'negative' : 'neutral');
+  const arrow = diff > 0 ? '▲' : (diff < 0 ? '▼' : '—');
+  if (kind === 'pct') return `<span class="${cls}">${arrow} ${Math.abs(rel*100).toFixed(1)}% ${label}</span>`;
+  if (kind === 'pt') return `<span class="${cls}">${arrow} ${Math.abs(diff*100).toFixed(1)}pt ${label}</span>`;
+  return `<span class="${cls}">${arrow} ${fmtYen(Math.abs(diff))} ${label}</span>`;
+}
+
+// Monday-Sunday week. anchor: date string YYYY-MM-DD
+function getWeekRange(anchorStr) {
+  const d = new Date(anchorStr + 'T00:00:00');
+  const dow = d.getDay(); // 0=Sun
+  const monOffset = (dow === 0 ? -6 : 1 - dow);
+  const mon = new Date(d); mon.setDate(d.getDate() + monOffset);
+  const sun = new Date(mon); sun.setDate(mon.getDate() + 6);
+  return { start: toIso(mon), end: toIso(sun), startDate: mon, endDate: sun };
+}
+function toIso(d) { return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0'); }
+function addDays(dateStr, n) { const d = new Date(dateStr + 'T00:00:00'); d.setDate(d.getDate() + n); return toIso(d); }
+function dateRange(startIso, endIso) { const out = []; let d = startIso; while (d <= endIso) { out.push(d); d = addDays(d, 1); } return out; }
+function diffDays(startIso, endIso) { return (new Date(endIso + 'T00:00:00') - new Date(startIso + 'T00:00:00')) / 86400000; }
+function daysInMonth(y, m) { return new Date(y, m, 0).getDate(); }
+
+// ISO week number
+function isoWeek(dateStr) {
+  const d = new Date(dateStr + 'T00:00:00');
+  const target = new Date(d); target.setHours(0,0,0,0);
+  target.setDate(target.getDate() + 3 - ((target.getDay() + 6) % 7));
+  const week1 = new Date(target.getFullYear(), 0, 4);
+  const n = 1 + Math.round(((target - week1) / 86400000 - 3 + ((week1.getDay() + 6) % 7)) / 7);
+  return { year: target.getFullYear(), week: n };
+}
+
+function fmtMd(d) { return (d.getMonth()+1) + '/' + d.getDate(); }
+function fmtWdJp(d) { return ['日','月','火','水','木','金','土'][d.getDay()]; }
+
+// ==========================================================
+// State
+// ==========================================================
+let ALL = {
+  properties: [],
+  seasonMap: {},
+  daily: [],
+  reservations: [],
+  propCodeSet: new Set(),
+};
+let currentWeekStart = null; // ISO date string (Monday)
+let currentSlide = 0;
+
+// ==========================================================
+// Data loading
+// ==========================================================
+async function fetchSheet(name) {
+  const r = await fetch(sheetUrl(name));
+  if (!r.ok) throw new Error(`Failed: ${name} (${r.status})`);
+  const j = await r.json();
+  const rows = j.values || [];
+  if (rows.length < 2) return [];
+  const headers = rows[0];
+  return rows.slice(1).map(row => {
+    const o = {}; headers.forEach((h, i) => o[h] = (row[i] !== undefined ? row[i] : '')); return o;
+  });
+}
+
+function generatePropCode(propName, roomNum) {
+  if (!propName) return '';
+  const s = ALL.propCodeSet;
+  if (roomNum && roomNum !== 'ALL' && propName !== roomNum && propName.toLowerCase() !== roomNum.toLowerCase()) {
+    const concat = propName + roomNum;
+    if (s.has(concat)) return concat;
+    if (s.has(propName)) return propName;
+    return concat;
+  }
+  if (s.has(propName)) return propName;
+  return propName;
+}
+
+async function loadAllData() {
+  const [propMaster, seasonMaster, daily, resv] = await Promise.all([
+    fetchSheet('物件マスタ'),
+    fetchSheet('シーズンマスタ'),
+    fetchSheet('日次データ'),
+    fetchSheet('予約データ'),
+  ]);
+
+  // Property codes set
+  ALL.propCodeSet = new Set(propMaster.map(p => p['物件コード'] || '').filter(Boolean));
+
+  // Properties (KPI除外は全社集計から除く、物件別進捗表には表示)
+  ALL.properties = propMaster.map(pm => ({
+    code: pm['物件コード'] || '',
+    name: pm['物件名'] || pm['物件コード'] || '',
+    area: pm['エリア'] || '',
+    rooms: parseNum(pm['部屋数']) || 1,
+    excludeKpi: (pm['KPI除外'] || '') === 'TRUE' || (pm['KPI除外'] || '') === '1',
+    status: pm['ステータス'] || '稼働中',
+    targetLow: parseNum(pm['閑散期目標']),
+    targetNormal: parseNum(pm['通常期目標']),
+    targetHigh: parseNum(pm['繁忙期目標']),
+  })).filter(p => p.code && p.status === '稼働中');
+
+  // Season map
+  ALL.seasonMap = {};
+  seasonMaster.forEach(sm => { ALL.seasonMap[parseNum(sm['月'])] = sm['シーズン'] || '通常期'; });
+
+  // Daily data (filter out cancelled rows early)
+  ALL.daily = daily.filter(d => {
+    const st = d['状態'] || '';
+    return st !== 'システムキャンセル' && st !== 'ブロックされた';
+  }).map(d => ({
+    date: normalizeDate(d['日付']),
+    propCode: generatePropCode(d['物件名'] || '', d['ルーム番号'] || ''),
+    sales: parseNum(d['売上合計']),
+    cleaning: parseNum(d['清掃料']),
+  })).filter(d => d.date && d.propCode);
+
+  // Reservations (exclude cancelled)
+  ALL.reservations = resv.filter(r => {
+    const st = r['状態'] || '';
+    return st !== 'キャンセル' && st !== 'システムキャンセル' && st !== 'ブロックされた';
+  }).map(r => ({
+    propCode: generatePropCode(r['物件名'] || '', r['部屋番号'] || ''),
+    checkin: normalizeDate(r['チェックイン']),
+    checkout: normalizeDate(r['チェックアウト']),
+    nights: parseNum(r['合計日数']),
+    sales: parseNum(r['販売']),
+    status: r['状態'] || '',
+  })).filter(r => r.propCode && r.checkin);
+}
+
+// ==========================================================
+// Season target
+// ==========================================================
+function getTargetForMonth(prop, monthNum) {
+  const season = ALL.seasonMap[monthNum] || '通常期';
+  if (season === '閑散期') return prop.targetLow;
+  if (season === '繁忙期') return prop.targetHigh;
+  return prop.targetNormal;
+}
+
+// ==========================================================
+// Aggregations
+// ==========================================================
+// Sum daily sales for a property in a date range (inclusive) — cleaning-only rows excluded
+function sumDailySales(propCode, startIso, endIso) {
+  let sum = 0;
+  ALL.daily.forEach(d => {
+    if (d.propCode !== propCode) return;
+    if (d.date < startIso || d.date > endIso) return;
+    // cleaning-only row 除外
+    if (d.cleaning > 0 && Math.abs(d.sales - d.cleaning) < 1) return;
+    sum += d.sales;
+  });
+  return sum;
+}
+
+// Count booked nights (unique dates with sales row) for a property in range
+function countBookedNights(propCode, startIso, endIso) {
+  const dates = new Set();
+  ALL.daily.forEach(d => {
+    if (d.propCode !== propCode) return;
+    if (d.date < startIso || d.date > endIso) return;
+    if (d.cleaning > 0 && Math.abs(d.sales - d.cleaning) < 1) return;
+    dates.add(d.date);
+  });
+  return dates.size;
+}
+
+// Future: sum from reservations (distribute sales evenly across nights)
+function sumReservationRevenueInRange(propCode, startIso, endIso) {
+  let sum = 0;
+  ALL.reservations.forEach(r => {
+    if (r.propCode !== propCode) return;
+    if (!r.checkin || !r.checkout) return;
+    const nights = Math.max(1, r.nights || diffDays(r.checkin, r.checkout));
+    const perNight = r.sales / nights;
+    for (let i = 0; i < nights; i++) {
+      const day = addDays(r.checkin, i);
+      if (day >= startIso && day <= endIso) sum += perNight;
+    }
+  });
+  return sum;
+}
+
+function countReservationNightsInRange(propCode, startIso, endIso) {
+  let count = 0;
+  ALL.reservations.forEach(r => {
+    if (r.propCode !== propCode) return;
+    if (!r.checkin || !r.checkout) return;
+    const nights = Math.max(1, r.nights || diffDays(r.checkin, r.checkout));
+    for (let i = 0; i < nights; i++) {
+      const day = addDays(r.checkin, i);
+      if (day >= startIso && day <= endIso) count++;
+    }
+  });
+  return count;
+}
+
+// Combined: past = daily, future = reservations
+function sumRevenueCombined(propCode, startIso, endIso) {
+  const today = toIso(new Date());
+  const pastEnd = startIso > today ? null : (endIso > today ? addDays(today, -1) : endIso);
+  const futureStart = endIso < today ? null : (startIso > today ? startIso : today);
+  let total = 0;
+  if (pastEnd && pastEnd >= startIso) total += sumDailySales(propCode, startIso, pastEnd);
+  if (futureStart && futureStart <= endIso) total += sumReservationRevenueInRange(propCode, futureStart, endIso);
+  return total;
+}
+function countNightsCombined(propCode, startIso, endIso) {
+  const today = toIso(new Date());
+  const pastEnd = startIso > today ? null : (endIso > today ? addDays(today, -1) : endIso);
+  const futureStart = endIso < today ? null : (startIso > today ? startIso : today);
+  let n = 0;
+  if (pastEnd && pastEnd >= startIso) n += countBookedNights(propCode, startIso, pastEnd);
+  if (futureStart && futureStart <= endIso) n += countReservationNightsInRange(propCode, futureStart, endIso);
+  return n;
+}
+
+// CI/CO counts within a week
+function countCheckins(startIso, endIso) { return ALL.reservations.filter(r => r.checkin >= startIso && r.checkin <= endIso).length; }
+function countCheckouts(startIso, endIso) { return ALL.reservations.filter(r => r.checkout >= startIso && r.checkout <= endIso).length; }
+
+// ==========================================================
+// Rendering
+// ==========================================================
+let charts = {};
+function destroyCharts() { Object.values(charts).forEach(c => c && c.destroy && c.destroy()); charts = {}; }
+
+function renderAll() {
+  destroyCharts();
+  const week = getWeekRange(currentWeekStart);
+  const prevWeek = getWeekRange(addDays(week.start, -7));
+  const prevYearWeek = getWeekRange(addDays(week.start, -364)); // same day-of-week one year ago
+
+  // Top bar / title
+  document.getElementById('week-label').textContent = `${fmtMd(week.startDate)}（${fmtWdJp(week.startDate)}）– ${fmtMd(week.endDate)}（${fmtWdJp(week.endDate)}）`;
+  const iw = isoWeek(week.start);
+  document.getElementById('title-week-sub').textContent = `${week.startDate.getFullYear()}年${week.startDate.getMonth()+1}月${week.startDate.getDate()}日 MTG — 第${iw.week}週（${week.start} – ${week.end}）`;
+  document.getElementById('op-date-range').textContent = `${week.start}（月） – ${week.end}（日）｜ チェックイン/アウト・稼働`;
+
+  renderOperations(week, prevWeek);
+  renderProgress(week);
+  renderActions(week);
+  renderWeeklyKpi(week, prevWeek, prevYearWeek);
+  loadNotes(week);
+
+  document.getElementById('data-status').textContent = `更新: ${new Date().toLocaleString('ja-JP',{hour:'2-digit',minute:'2-digit'})}`;
+  document.getElementById('data-asof').textContent = `データ出典: Airhost予約 × 日次 × 物件マスタ（${new Date().toLocaleString('ja-JP')} 時点）`;
+}
+
+// -- Slide 2 --
+function renderOperations(week, prevWeek) {
+  const kpiProps = ALL.properties.filter(p => !p.excludeKpi);
+  const codes = kpiProps.map(p => p.code);
+
+  let ci = 0, co = 0, nights = 0, prevCi = 0, prevCo = 0, prevNights = 0;
+  ALL.reservations.forEach(r => {
+    if (!codes.includes(r.propCode)) return;
+    if (r.checkin >= week.start && r.checkin <= week.end) ci++;
+    if (r.checkout >= week.start && r.checkout <= week.end) co++;
+    if (r.checkin >= prevWeek.start && r.checkin <= prevWeek.end) prevCi++;
+    if (r.checkout >= prevWeek.start && r.checkout <= prevWeek.end) prevCo++;
+  });
+  codes.forEach(c => { nights += countNightsCombined(c, week.start, week.end); prevNights += countNightsCombined(c, prevWeek.start, prevWeek.end); });
+
+  const totalRooms = kpiProps.reduce((s, p) => s + (p.rooms || 1), 0);
+  const available = totalRooms * 7;
+  const occ = available > 0 ? nights / available : 0;
+  const prevOcc = available > 0 ? prevNights / available : 0;
+
+  setText('kpi-ci', ci + '件');
+  setText('kpi-co', co + '件');
+  setText('kpi-occ', (occ*100).toFixed(1) + '%');
+  setText('kpi-nights', nights + '泊');
+
+  setHtml('kpi-ci-delta', deltaSpan(ci, prevCi, 'abs', 'vs 前週').replace(fmtYen(Math.abs(ci-prevCi)), Math.abs(ci-prevCi) + '件'));
+  setHtml('kpi-co-delta', `<span class="${co>=prevCo?'positive':'negative'}">${co>=prevCo?'▲':'▼'} ${Math.abs(co-prevCo)}件 vs 前週</span>`);
+  setHtml('kpi-occ-delta', deltaSpan(occ, prevOcc, 'pt', 'vs 前週'));
+  setHtml('kpi-nights-delta', `<span class="${nights>=prevNights?'positive':'negative'}">${nights>=prevNights?'▲':'▼'} ${Math.abs(nights-prevNights)}泊 vs 前週</span>`);
+
+  // Daily CI/CO chart
+  const labels = []; const ciData = []; const coData = [];
+  for (let i = 0; i < 7; i++) {
+    const d = addDays(week.start, i);
+    const dObj = new Date(d + 'T00:00:00');
+    labels.push(fmtMd(dObj) + '(' + fmtWdJp(dObj) + ')');
+    ciData.push(ALL.reservations.filter(r => codes.includes(r.propCode) && r.checkin === d).length);
+    coData.push(ALL.reservations.filter(r => codes.includes(r.propCode) && r.checkout === d).length);
+  }
+  charts.weekly = new Chart(document.getElementById('chart-weekly'), {
+    type: 'bar',
+    data: { labels, datasets: [
+      { label: 'CI', data: ciData, backgroundColor: '#007aff' },
+      { label: 'CO', data: coData, backgroundColor: '#ff9500' },
+    ]},
+    options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { labels: { font: { size: 11 } } } }, scales: { y: { beginAtZero: true, ticks: { stepSize: 1 } } } }
+  });
+
+  // Next week peak
+  const nextStart = addDays(week.end, 1);
+  const nextEnd = addDays(week.end, 7);
+  const tbody = document.querySelector('#table-nextweek tbody');
+  tbody.innerHTML = '';
+  for (let i = 0; i < 7; i++) {
+    const d = addDays(nextStart, i);
+    const dObj = new Date(d + 'T00:00:00');
+    const ciN = ALL.reservations.filter(r => codes.includes(r.propCode) && r.checkin === d).length;
+    const coN = ALL.reservations.filter(r => codes.includes(r.propCode) && r.checkout === d).length;
+    let nightsD = 0;
+    codes.forEach(c => { nightsD += countReservationNightsInRange(c, d, d); });
+    const occD = totalRooms > 0 ? nightsD / totalRooms : 0;
+    const occCls = occD >= 0.9 ? 'pill-red' : (occD >= 0.8 ? 'pill-orange' : 'pill-gray');
+    tbody.insertAdjacentHTML('beforeend', `<tr>
+      <td>${fmtMd(dObj)}(${fmtWdJp(dObj)})</td>
+      <td class="num">${ciN}</td>
+      <td class="num">${coN}</td>
+      <td class="num"><span class="pill ${occCls}">${(occD*100).toFixed(0)}%</span></td>
+    </tr>`);
+  }
+}
+
+// -- Slide 3 & 4 --
+function computeProgressData(week) {
+  // 進捗は「週末日時点での月次進捗」= MTD at end of week (または今日、どちらか早い方)
+  const today = toIso(new Date());
+  const asOf = week.end < today ? week.end : today;
+  const y = parseInt(asOf.substring(0,4), 10);
+  const m = parseInt(asOf.substring(5,7), 10);
+  const dim = daysInMonth(y, m);
+  const monthStart = `${y}-${String(m).padStart(2,'0')}-01`;
+  const monthEnd = `${y}-${String(m).padStart(2,'0')}-${String(dim).padStart(2,'0')}`;
+  const elapsed = Math.max(1, parseInt(asOf.substring(8,10),10));
+  const paceLine = elapsed / dim;
+
+  const rows = ALL.properties.map(p => {
+    const target = getTargetForMonth(p, m);
+    const actual = sumRevenueCombined(p.code, monthStart, asOf);
+    const progress = target > 0 ? actual / target : 0;
+    const gap = progress - paceLine;
+    let status;
+    if (gap >= -WARN_THRESHOLD_PT/100) status = 'ok';
+    else if (gap >= -ACTION_THRESHOLD_PT/100) status = 'warn';
+    else status = 'act';
+    return { prop: p, target, actual, progress, gap, status, missAbs: target * paceLine - actual };
+  }).filter(r => r.target > 0); // targetがない物件は表から除外
+
+  rows.sort((a, b) => b.progress - a.progress);
+  return { rows, paceLine, elapsed, dim, year: y, month: m, asOf };
+}
+
+function renderProgress(week) {
+  const data = computeProgressData(week);
+  document.getElementById('slide3-title').textContent = `${data.month}月 売上目標進捗（物件別）`;
+  document.getElementById('slide3-sub').textContent = `${data.asOf}時点｜経過 ${data.elapsed}/${data.dim}日｜ペースライン = ${(data.paceLine*100).toFixed(1)}%`;
+
+  const tbody = document.querySelector('#table-progress tbody');
+  tbody.innerHTML = '';
+  data.rows.forEach((r, i) => {
+    const pct = r.progress * 100;
+    const fillColor = r.status === 'ok' ? '#34c759' : (r.status === 'warn' ? '#ffc107' : '#ff3b30');
+    const pillClass = r.status === 'ok' ? 'pill-green' : (r.status === 'warn' ? 'pill-orange' : 'pill-red');
+    const pillText = r.status === 'ok' ? '順調' : (r.status === 'warn' ? '要注意' : '要アクション');
+    tbody.insertAdjacentHTML('beforeend', `<tr>
+      <td>${i+1}</td>
+      <td>${r.prop.code}</td>
+      <td class="num">${fmtYenFull(r.target)}</td>
+      <td class="num">${fmtYenFull(r.actual)}</td>
+      <td><div class="progress-cell"><div class="progress-bar"><div class="progress-fill" style="width:${Math.min(100,pct).toFixed(1)}%;background:${fillColor}"></div></div><span class="progress-label">${pct.toFixed(1)}%</span></div></td>
+      <td><span class="pill ${pillClass}">${pillText}</span></td>
+    </tr>`);
+  });
+
+  // Status donut
+  const counts = { ok: 0, warn: 0, act: 0 };
+  data.rows.forEach(r => counts[r.status]++);
+  const paceText = `${(data.paceLine*100).toFixed(1)}%`;
+  document.getElementById('status-legend').innerHTML = `
+    <div><span class="pill pill-green">順調</span> ≥ ${paceText} − ${WARN_THRESHOLD_PT}pt</div>
+    <div><span class="pill pill-orange">要注意</span> ペースから -${WARN_THRESHOLD_PT}〜-${ACTION_THRESHOLD_PT}pt</div>
+    <div><span class="pill pill-red">要アクション</span> ペースから -${ACTION_THRESHOLD_PT}pt以上</div>`;
+  charts.status = new Chart(document.getElementById('chart-status'), {
+    type: 'doughnut',
+    data: { labels: ['順調','要注意','要アクション'], datasets: [{ data: [counts.ok, counts.warn, counts.act], backgroundColor: ['#34c759','#ffc107','#ff3b30'] }]},
+    options: { responsive: true, maintainAspectRatio: false, cutout: '60%', plugins: { legend: { labels: { font: { size: 11 } } } } }
+  });
+
+  const totalTarget = data.rows.reduce((s, r) => s + r.target, 0);
+  const totalActual = data.rows.reduce((s, r) => s + r.actual, 0);
+  const totalProg = totalTarget > 0 ? totalActual / totalTarget : 0;
+  const gapPt = (totalProg - data.paceLine) * 100;
+  document.getElementById('total-summary').innerHTML = `<b>全社合計</b><br>目標 ${fmtYenFull(totalTarget)} / 実績 ${fmtYenFull(totalActual)}<br><b>進捗 ${(totalProg*100).toFixed(1)}%</b>（ペースから ${gapPt>=0?'+':''}${gapPt.toFixed(1)}pt）`;
+
+  // Stash for slide 4
+  window._progressData = data;
+}
+
+function renderActions(week) {
+  const data = window._progressData;
+  if (!data) return;
+  const dim = data.dim, asOf = data.asOf;
+  const daysLeft = dim - data.elapsed;
+  document.getElementById('slide4-sub').textContent = `進捗がペースラインから -${ACTION_THRESHOLD_PT}pt以上下振れの物件 — ${data.month}月末まで残り${daysLeft}日`;
+
+  const actions = data.rows.filter(r => r.status === 'act');
+  const container = document.getElementById('action-list');
+  if (actions.length === 0) {
+    container.innerHTML = `<div style="padding:40px; text-align:center; color:#999; font-size:13px;">🎉 ペースライン-${ACTION_THRESHOLD_PT}pt未満の遅延物件はありません</div>`;
+    return;
+  }
+  container.innerHTML = actions.map(r => {
+    const perDayNeeded = daysLeft > 0 ? r.missAbs / daysLeft : 0;
+    const season = ALL.seasonMap[data.month] || '通常期';
+    return `<div class="action-item">
+      <div>
+        <div class="who">${r.prop.code}</div>
+        <span class="pill pill-red">${(r.progress*100).toFixed(1)}%</span>
+      </div>
+      <div class="what">
+        <span class="miss">${fmtYenFull(Math.round(r.missAbs))} ペース不足</span> — ${r.prop.area}エリア・${season}・月目標 ${fmtYenFull(r.target)}。
+        残り${daysLeft}日で日割り ${fmtYenFull(Math.round(perDayNeeded))}/日の売上が必要。
+      </div>
+      <div class="due">担当：—<br>打ち手を記入</div>
+    </div>`;
+  }).join('');
+}
+
+// -- Slide 5 --
+function renderWeeklyKpi(week, prevWeek, prevYearWeek) {
+  const kpiProps = ALL.properties.filter(p => !p.excludeKpi);
+  const codes = kpiProps.map(p => p.code);
+  const totalRooms = kpiProps.reduce((s, p) => s + (p.rooms || 1), 0);
+
+  function weekStats(wk) {
+    let rev = 0, nights = 0;
+    codes.forEach(c => {
+      rev += sumRevenueCombined(c, wk.start, wk.end);
+      nights += countNightsCombined(c, wk.start, wk.end);
+    });
+    const avail = totalRooms * 7;
+    const occ = avail > 0 ? nights / avail : 0;
+    const adr = nights > 0 ? rev / nights : 0;
+    const revpar = avail > 0 ? rev / avail : 0;
+    return { rev, nights, occ, adr, revpar };
+  }
+  const cur = weekStats(week);
+  const prev = weekStats(prevWeek);
+  const yoy = weekStats(prevYearWeek);
+
+  setText('kpi-rev', fmtYen(cur.rev));
+  setText('kpi-occ2', (cur.occ*100).toFixed(1) + '%');
+  setText('kpi-adr', fmtYen(cur.adr));
+  setText('kpi-revpar', fmtYen(cur.revpar));
+
+  setHtml('kpi-rev-wow', deltaSpan(cur.rev, prev.rev, 'pct', 'vs 前週'));
+  setHtml('kpi-rev-yoy', deltaSpan(cur.rev, yoy.rev, 'pct', 'YoY'));
+  setHtml('kpi-occ-wow', deltaSpan(cur.occ, prev.occ, 'pt', 'vs 前週'));
+  setHtml('kpi-occ-yoy', deltaSpan(cur.occ, yoy.occ, 'pt', 'YoY'));
+  setHtml('kpi-adr-wow', deltaSpan(cur.adr, prev.adr, 'pct', 'vs 前週'));
+  setHtml('kpi-adr-yoy', deltaSpan(cur.adr, yoy.adr, 'pct', 'YoY'));
+  setHtml('kpi-revpar-wow', deltaSpan(cur.revpar, prev.revpar, 'pct', 'vs 前週'));
+  setHtml('kpi-revpar-yoy', deltaSpan(cur.revpar, yoy.revpar, 'pct', 'YoY'));
+
+  // 8-week trend (this year + last year same week)
+  const labels = []; const thisYr = []; const lastYr = [];
+  for (let i = 7; i >= 0; i--) {
+    const wk = getWeekRange(addDays(week.start, -7*i));
+    const wkLy = getWeekRange(addDays(wk.start, -364));
+    labels.push('W' + isoWeek(wk.start).week);
+    const s = weekStats(wk);
+    const sLy = weekStats(wkLy);
+    thisYr.push(s.rev / 1000000);
+    lastYr.push(sLy.rev / 1000000);
+  }
+  charts.revenue = new Chart(document.getElementById('chart-revenue'), {
+    type: 'line',
+    data: { labels, datasets: [
+      { label: `${week.startDate.getFullYear()}`, data: thisYr, borderColor: '#007aff', backgroundColor: 'rgba(0,122,255,0.1)', fill: true, tension: 0.3 },
+      { label: `${week.startDate.getFullYear()-1}`, data: lastYr, borderColor: '#999', borderDash: [4,4], fill: false, tension: 0.3 },
+    ]},
+    options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { labels: { font: { size: 11 } } } }, scales: { y: { beginAtZero: false, title: { display: true, text: '¥M' } } } }
+  });
+
+  // Anomalies
+  renderAnomalies(week, prevWeek);
+}
+
+function renderAnomalies(week, prevWeek) {
+  const tbody = document.querySelector('#table-anomaly tbody');
+  tbody.innerHTML = '';
+  const kpiProps = ALL.properties.filter(p => !p.excludeKpi);
+  const found = [];
+  kpiProps.forEach(p => {
+    // 空室5泊以上連続（週内の空き日を検出）
+    let maxGap = 0, curGap = 0;
+    for (let i = 0; i < 7; i++) {
+      const d = addDays(week.start, i);
+      const nights = countNightsCombined(p.code, d, d);
+      if (nights === 0) { curGap++; maxGap = Math.max(maxGap, curGap); }
+      else curGap = 0;
+    }
+    if (maxGap >= 5) found.push({ code: p.code, metric: '空室連続', value: `${maxGap}泊`, judge: 'warn' });
+
+    // ADR前週比 -15%
+    const rev = sumRevenueCombined(p.code, week.start, week.end);
+    const prevRev = sumRevenueCombined(p.code, prevWeek.start, prevWeek.end);
+    const n = countNightsCombined(p.code, week.start, week.end);
+    const prevN = countNightsCombined(p.code, prevWeek.start, prevWeek.end);
+    if (n >= 2 && prevN >= 2) {
+      const adr = rev / n;
+      const prevAdr = prevRev / prevN;
+      const drop = (adr - prevAdr) / prevAdr;
+      if (drop <= -0.15) found.push({ code: p.code, metric: 'ADR急落', value: `${(drop*100).toFixed(0)}% WoW`, judge: 'warn' });
+    }
+
+    // 稼働率96%以上（好調）
+    const occ = n / (p.rooms * 7);
+    if (occ >= 0.96) found.push({ code: p.code, metric: '稼働率', value: `${(occ*100).toFixed(0)}%`, judge: 'ok' });
+  });
+
+  if (found.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="4" style="text-align:center; color:#999; padding:20px;">異常値なし</td></tr>`;
+    return;
+  }
+  found.sort((a, b) => (a.judge === 'warn' ? -1 : 1));
+  found.slice(0, 12).forEach(f => {
+    const pill = f.judge === 'warn' ? 'pill-orange' : (f.judge === 'ok' ? 'pill-green' : 'pill-red');
+    const judgeText = f.judge === 'warn' ? '要注意' : (f.judge === 'ok' ? '好調' : '要確認');
+    tbody.insertAdjacentHTML('beforeend', `<tr><td>${f.code}</td><td>${f.metric}</td><td>${f.value}</td><td><span class="pill ${pill}">${judgeText}</span></td></tr>`);
+  });
+}
+
+// ==========================================================
+// Meeting notes
+// ==========================================================
+function notesKey(week, which) { const iw = isoWeek(week.start); return `weekly-${iw.year}-W${String(iw.week).padStart(2,'0')}-${which}`; }
+
+async function loadNotes(week) {
+  for (const w of ['dec','car']) {
+    const key = notesKey(week, w);
+    try {
+      const r = await fetch(`${MEETING_NOTES_URL}?key=${encodeURIComponent(key)}`);
+      const j = await r.json();
+      const el = document.getElementById(w === 'dec' ? 'notes-decisions' : 'notes-carryover');
+      el.value = j.content || '';
+      setNotesStatus(w, j.updatedAt ? `保存済: ${new Date(j.updatedAt).toLocaleString('ja-JP')}` : '未保存');
+    } catch (e) {
+      setNotesStatus(w, '読込失敗');
+    }
+  }
+}
+
+function setNotesStatus(which, text) {
+  const el = document.getElementById(which === 'dec' ? 'notes-status-dec' : 'notes-status-car');
+  if (el) el.textContent = text;
+}
+
+function saveNotesDebounced(which) {
+  clearTimeout(saveNotesDebounced['t_' + which]);
+  saveNotesDebounced['t_' + which] = setTimeout(() => saveNotes(which), 1000);
+}
+
+async function saveNotes(which) {
+  const week = getWeekRange(currentWeekStart);
+  const key = notesKey(week, which);
+  const el = document.getElementById(which === 'dec' ? 'notes-decisions' : 'notes-carryover');
+  setNotesStatus(which, '保存中…');
+  try {
+    const params = new URLSearchParams({ action: 'save', token: MEETING_NOTES_TOKEN, key, content: el.value });
+    const r = await fetch(`${MEETING_NOTES_URL}?${params.toString()}`);
+    const j = await r.json();
+    if (j.ok) setNotesStatus(which, `保存済: ${new Date(j.updatedAt).toLocaleString('ja-JP')}`);
+    else setNotesStatus(which, '保存失敗: ' + (j.error || ''));
+  } catch (e) {
+    setNotesStatus(which, '保存失敗: ' + e.message);
+  }
+}
+
+// ==========================================================
+// Navigation
+// ==========================================================
+function setText(id, v) { const e = document.getElementById(id); if (e) e.textContent = v; }
+function setHtml(id, v) { const e = document.getElementById(id); if (e) e.innerHTML = v; }
+
+function changeWeek(delta) { currentWeekStart = addDays(currentWeekStart, 7 * delta); updateUrl(); renderAll(); }
+function jumpToCurrentWeek() { currentWeekStart = getWeekRange(toIso(new Date())).start; updateUrl(); renderAll(); }
+function updateUrl() { const u = new URL(window.location); u.searchParams.set('date', currentWeekStart); history.replaceState({}, '', u); }
+
+function showSlide(i) {
+  const slides = document.querySelectorAll('.slide');
+  slides.forEach((s, idx) => s.classList.toggle('active', idx === i));
+  document.getElementById('page-num').textContent = `${i+1} / ${slides.length}`;
+  currentSlide = i;
+}
+function nextSlide() { const n = document.querySelectorAll('.slide').length; if (currentSlide < n-1) showSlide(currentSlide + 1); }
+function prevSlide() { if (currentSlide > 0) showSlide(currentSlide - 1); }
+
+document.addEventListener('keydown', e => {
+  if (document.activeElement && document.activeElement.tagName === 'TEXTAREA') return;
+  if (e.key === 'ArrowRight' || e.key === ' ') { nextSlide(); e.preventDefault(); }
+  else if (e.key === 'ArrowLeft') prevSlide();
+  else if (e.key === 'PageUp') prevSlide();
+  else if (e.key === 'PageDown') nextSlide();
+});
+
+// ==========================================================
+// Init
+// ==========================================================
+async function init() {
+  const url = new URL(window.location);
+  const dateParam = url.searchParams.get('date');
+  const anchor = dateParam || toIso(new Date());
+  currentWeekStart = getWeekRange(anchor).start;
+
+  // Wire notes autosave
+  document.getElementById('notes-decisions').addEventListener('input', () => saveNotesDebounced('dec'));
+  document.getElementById('notes-carryover').addEventListener('input', () => saveNotesDebounced('car'));
+
+  try {
+    await loadAllData();
+    renderAll();
+    document.getElementById('loading-overlay').style.display = 'none';
+  } catch (err) {
+    console.error(err);
+    document.getElementById('loading-overlay').style.display = 'none';
+    const banner = document.getElementById('error-banner');
+    banner.textContent = 'データ読込失敗: ' + err.message;
+    banner.classList.add('show');
+  }
+}
+
+init();
+</script>
+</body>
+</html>

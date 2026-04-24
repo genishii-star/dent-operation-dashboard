@@ -1,0 +1,449 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>週次運営MTG (2026/04/24) — モック</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Hiragino Sans', sans-serif;
+    background: #f5f5f7; color: #1d1d1f;
+    overflow: hidden;
+  }
+  .deck { width: 100vw; height: 100vh; position: relative; }
+  .slide {
+    position: absolute; top: 0; left: 0;
+    width: 100%; height: 100%;
+    padding: 48px 64px 64px;
+    display: none;
+    flex-direction: column;
+    background: #f5f5f7;
+  }
+  .slide.active { display: flex; }
+  .slide h1.title { font-size: 52px; font-weight: 700; letter-spacing: -0.02em; color: #1d1d1f; }
+  .slide h1.title .sub { font-size: 20px; color: #666; font-weight: 400; margin-top: 12px; display: block; letter-spacing: 0; }
+  .slide h2 { font-size: 26px; font-weight: 700; color: #1d1d1f; margin-bottom: 4px; letter-spacing: -0.01em; }
+  .slide .h2-sub { font-size: 13px; color: #999; margin-bottom: 24px; }
+
+  .nav-bar {
+    position: fixed; bottom: 16px; right: 24px;
+    background: rgba(29,29,31,0.9); color: white;
+    border-radius: 20px; padding: 6px 14px;
+    font-size: 12px; display: flex; align-items: center; gap: 12px;
+    z-index: 100;
+  }
+  .nav-bar button {
+    background: transparent; border: 1px solid #555; color: white;
+    width: 24px; height: 24px; border-radius: 50%; cursor: pointer; font-size: 14px;
+  }
+  .nav-bar button:hover { background: #555; }
+  .nav-bar .page-num { font-variant-numeric: tabular-nums; min-width: 40px; text-align: center; }
+
+  .badge-mock {
+    position: fixed; top: 16px; right: 24px;
+    background: #ff9500; color: white;
+    padding: 4px 12px; border-radius: 12px;
+    font-size: 11px; font-weight: 600;
+    z-index: 100;
+  }
+
+  /* KPI Grid */
+  .kpi-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
+  .kpi-card { background: white; border-radius: 14px; padding: 20px 22px; }
+  .kpi-card .label { font-size: 12px; color: #666; margin-bottom: 8px; font-weight: 500; }
+  .kpi-card .value { font-size: 28px; font-weight: 700; letter-spacing: -0.01em; }
+  .kpi-card .unit { font-size: 14px; color: #999; font-weight: 500; margin-left: 4px; }
+  .kpi-card .delta { font-size: 11px; margin-top: 6px; display: flex; gap: 8px; }
+  .positive { color: #34c759; }
+  .negative { color: #ff3b30; }
+  .neutral { color: #999; }
+  .warn { color: #ff9500; }
+
+  /* Layout */
+  .row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; flex: 1; min-height: 0; }
+  .row-3 { display: grid; grid-template-columns: 2fr 1fr; gap: 18px; flex: 1; min-height: 0; }
+  .card { background: white; border-radius: 14px; padding: 20px 24px; display: flex; flex-direction: column; min-height: 0; }
+  .card h3 { font-size: 13px; font-weight: 600; color: #666; margin-bottom: 14px; }
+  .card .chart-wrap { flex: 1; position: relative; min-height: 0; }
+
+  /* Tables */
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid #f0f0f0; }
+  th { font-size: 11px; color: #666; font-weight: 600; border-bottom: 2px solid #e5e5e5; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+
+  /* Progress bar */
+  .progress-bar { width: 100%; height: 8px; background: #f0f0f0; border-radius: 4px; overflow: hidden; position: relative; }
+  .progress-fill { height: 100%; border-radius: 4px; }
+  .progress-label { font-size: 12px; font-variant-numeric: tabular-nums; font-weight: 600; }
+
+  /* Status pill */
+  .pill { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; }
+  .pill-red { background: #ffe5e5; color: #ff3b30; }
+  .pill-orange { background: #fff3e0; color: #ff9500; }
+  .pill-green { background: #e5f7ec; color: #34c759; }
+  .pill-gray { background: #f0f0f0; color: #666; }
+
+  /* Action list */
+  .action-list { display: flex; flex-direction: column; gap: 10px; }
+  .action-item { background: #fafafa; border-left: 3px solid #007aff; padding: 12px 16px; border-radius: 6px; display: grid; grid-template-columns: 90px 1fr 100px; gap: 14px; align-items: center; }
+  .action-item.urgent { border-left-color: #ff3b30; }
+  .action-item .who { font-size: 11px; color: #666; font-weight: 600; }
+  .action-item .what { font-size: 13px; color: #1d1d1f; line-height: 1.5; }
+  .action-item .due { font-size: 11px; color: #999; text-align: right; }
+
+  /* Title slide */
+  .slide.title-slide { justify-content: center; align-items: flex-start; padding: 64px 96px; }
+  .slide.title-slide .meta { margin-top: 28px; font-size: 15px; color: #666; }
+
+  /* Two column text */
+  .col-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; flex: 1; }
+  ul.agenda { list-style: none; font-size: 17px; line-height: 2; color: #333; margin-top: 20px; }
+  ul.agenda li::before { content: "→ "; color: #007aff; font-weight: 600; }
+</style>
+</head>
+<body>
+<div class="badge-mock">MOCK</div>
+
+<div class="deck">
+
+  <!-- Slide 1: Title -->
+  <section class="slide title-slide active">
+    <h1 class="title">週次運営MTG
+      <span class="sub">2026年4月24日（金）— 第17週（4/21–4/27）</span>
+    </h1>
+    <ul class="agenda">
+      <li>今週のオペレーション状況</li>
+      <li>売上目標進捗と要アクション物件</li>
+      <li>前週比KPIサマリ</li>
+      <li>懸案・決定事項</li>
+    </ul>
+    <div class="meta">出席：石井 / 運営メンバー全員 &nbsp;｜&nbsp; 所要：30分</div>
+  </section>
+
+  <!-- Slide 2: Operations this week -->
+  <section class="slide">
+    <h2>今週のオペレーション状況</h2>
+    <div class="h2-sub">4/21（月）– 4/27（日）| チェックイン/アウト・清掃・稼働</div>
+
+    <div class="kpi-grid" style="margin-bottom: 16px;">
+      <div class="kpi-card">
+        <div class="label">チェックイン件数</div>
+        <div class="value">48<span class="unit">件</span></div>
+        <div class="delta"><span class="positive">▲ 6件 vs 前週</span></div>
+      </div>
+      <div class="kpi-card">
+        <div class="label">チェックアウト件数</div>
+        <div class="value">44<span class="unit">件</span></div>
+        <div class="delta"><span class="neutral">▲ 2件 vs 前週</span></div>
+      </div>
+      <div class="kpi-card">
+        <div class="label">今週平均稼働率</div>
+        <div class="value">82.4<span class="unit">%</span></div>
+        <div class="delta"><span class="positive">+4.1pt vs 前週</span></div>
+      </div>
+      <div class="kpi-card">
+        <div class="label">清掃依頼件数</div>
+        <div class="value">44<span class="unit">件</span></div>
+        <div class="delta"><span class="warn">未確定 2件</span></div>
+      </div>
+    </div>
+
+    <div class="row-2">
+      <div class="card">
+        <h3>日別チェックイン/アウト</h3>
+        <div class="chart-wrap"><canvas id="chart-weekly"></canvas></div>
+      </div>
+      <div class="card">
+        <h3>来週（4/28–5/4）ピーク予定</h3>
+        <table>
+          <thead><tr><th>日付</th><th>CI</th><th>CO</th><th class="num">稼働率予測</th><th>備考</th></tr></thead>
+          <tbody>
+            <tr><td>4/28 (月)</td><td>7</td><td>5</td><td class="num">78%</td><td>—</td></tr>
+            <tr><td>4/29 (火・祝)</td><td>11</td><td>4</td><td class="num">91%</td><td><span class="pill pill-orange">GW初日</span></td></tr>
+            <tr><td>4/30 (水)</td><td>6</td><td>3</td><td class="num">94%</td><td>—</td></tr>
+            <tr><td>5/1 (木)</td><td>4</td><td>2</td><td class="num">95%</td><td>—</td></tr>
+            <tr><td>5/2 (金)</td><td>9</td><td>6</td><td class="num">96%</td><td><span class="pill pill-red">GW本番</span></td></tr>
+            <tr><td>5/3 (土・祝)</td><td>5</td><td>4</td><td class="num">97%</td><td>—</td></tr>
+            <tr><td>5/4 (日・祝)</td><td>3</td><td>9</td><td class="num">88%</td><td>—</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- Slide 3: Revenue target progress (all properties) -->
+  <section class="slide">
+    <h2>4月 売上目標進捗（物件別）</h2>
+    <div class="h2-sub">月末まで残り7日 | 目安進捗ライン = 76.7%（23日/30日）</div>
+
+    <div class="row-3">
+      <div class="card">
+        <h3>進捗率ランキング（全14物件）</h3>
+        <table>
+          <thead><tr><th>#</th><th>物件</th><th class="num">目標</th><th class="num">実績</th><th style="width:30%">進捗</th><th>状態</th></tr></thead>
+          <tbody>
+            <tr><td>1</td><td>OPH</td><td class="num">¥1,480,000</td><td class="num">¥1,398,200</td><td><div class="progress-bar"><div class="progress-fill" style="width:94.5%;background:#34c759"></div></div><span class="progress-label">94.5%</span></td><td><span class="pill pill-green">順調</span></td></tr>
+            <tr><td>2</td><td>SAI3</td><td class="num">¥1,120,000</td><td class="num">¥986,400</td><td><div class="progress-bar"><div class="progress-fill" style="width:88.1%;background:#34c759"></div></div><span class="progress-label">88.1%</span></td><td><span class="pill pill-green">順調</span></td></tr>
+            <tr><td>3</td><td>FIRSTBREATH1</td><td class="num">¥980,000</td><td class="num">¥824,100</td><td><div class="progress-bar"><div class="progress-fill" style="width:84.1%;background:#34c759"></div></div><span class="progress-label">84.1%</span></td><td><span class="pill pill-green">順調</span></td></tr>
+            <tr><td>4</td><td>KYT-NISHIJIN</td><td class="num">¥1,350,000</td><td class="num">¥1,080,500</td><td><div class="progress-bar"><div class="progress-fill" style="width:80.0%;background:#34c759"></div></div><span class="progress-label">80.0%</span></td><td><span class="pill pill-green">順調</span></td></tr>
+            <tr><td>5</td><td>TKY-ASAKUSA</td><td class="num">¥1,620,000</td><td class="num">¥1,248,700</td><td><div class="progress-bar"><div class="progress-fill" style="width:77.1%;background:#34c759"></div></div><span class="progress-label">77.1%</span></td><td><span class="pill pill-green">ライン通過</span></td></tr>
+            <tr><td>6</td><td>OSK-DOTON</td><td class="num">¥1,280,000</td><td class="num">¥960,000</td><td><div class="progress-bar"><div class="progress-fill" style="width:75.0%;background:#ffc107"></div></div><span class="progress-label">75.0%</span></td><td><span class="pill pill-orange">要注意</span></td></tr>
+            <tr><td>7</td><td>NPA</td><td class="num">¥890,000</td><td class="num">¥645,600</td><td><div class="progress-bar"><div class="progress-fill" style="width:72.5%;background:#ffc107"></div></div><span class="progress-label">72.5%</span></td><td><span class="pill pill-orange">要注意</span></td></tr>
+            <tr><td>8</td><td>OSK-NAMBA2</td><td class="num">¥1,050,000</td><td class="num">¥735,000</td><td><div class="progress-bar"><div class="progress-fill" style="width:70.0%;background:#ffc107"></div></div><span class="progress-label">70.0%</span></td><td><span class="pill pill-orange">要注意</span></td></tr>
+            <tr><td>9</td><td>KYT-GION</td><td class="num">¥1,420,000</td><td class="num">¥937,200</td><td><div class="progress-bar"><div class="progress-fill" style="width:66.0%;background:#ff9500"></div></div><span class="progress-label">66.0%</span></td><td><span class="pill pill-red">遅延</span></td></tr>
+            <tr><td>10</td><td>LIB-UMEDA</td><td class="num">¥1,180,000</td><td class="num">¥755,200</td><td><div class="progress-bar"><div class="progress-fill" style="width:64.0%;background:#ff9500"></div></div><span class="progress-label">64.0%</span></td><td><span class="pill pill-red">遅延</span></td></tr>
+            <tr><td>11</td><td>TKY-UENO</td><td class="num">¥1,340,000</td><td class="num">¥804,000</td><td><div class="progress-bar"><div class="progress-fill" style="width:60.0%;background:#ff3b30"></div></div><span class="progress-label">60.0%</span></td><td><span class="pill pill-red">要アクション</span></td></tr>
+            <tr><td>12</td><td>OSK-TENNOJI</td><td class="num">¥920,000</td><td class="num">¥524,400</td><td><div class="progress-bar"><div class="progress-fill" style="width:57.0%;background:#ff3b30"></div></div><span class="progress-label">57.0%</span></td><td><span class="pill pill-red">要アクション</span></td></tr>
+            <tr><td>13</td><td>KYT-KIYOMIZU</td><td class="num">¥1,150,000</td><td class="num">¥621,000</td><td><div class="progress-bar"><div class="progress-fill" style="width:54.0%;background:#ff3b30"></div></div><span class="progress-label">54.0%</span></td><td><span class="pill pill-red">要アクション</span></td></tr>
+            <tr><td>14</td><td>LIB-SHIN</td><td class="num">¥980,000</td><td class="num">¥470,400</td><td><div class="progress-bar"><div class="progress-fill" style="width:48.0%;background:#ff3b30"></div></div><span class="progress-label">48.0%</span></td><td><span class="pill pill-red">要アクション</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="card">
+        <h3>進捗区分サマリ</h3>
+        <div class="chart-wrap" style="max-height:220px;"><canvas id="chart-status"></canvas></div>
+        <div style="margin-top:16px; font-size:12px; color:#666; line-height:1.7;">
+          <div><span class="pill pill-green">順調</span> ≥ 76.7%</div>
+          <div><span class="pill pill-orange">要注意</span> 67–76%</div>
+          <div><span class="pill pill-red">遅延/要アクション</span> &lt; 67%</div>
+        </div>
+        <div style="margin-top:16px; padding:12px; background:#fff3e0; border-radius:8px; font-size:12px; color:#333;">
+          <b>全社合計</b><br>
+          目標 ¥15,760,000 / 実績 ¥11,990,700<br>
+          <b>進捗 76.1%</b>（ラインより -0.6pt）
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Slide 4: Action properties (filtered by progress %) -->
+  <section class="slide">
+    <h2>要アクション物件（進捗率 &lt; 67%）</h2>
+    <div class="h2-sub">残り7日でリカバリ検討が必要な4物件 — 担当と打ち手を決める</div>
+
+    <div class="action-list" style="flex:1; overflow-y:auto;">
+      <div class="action-item urgent">
+        <div>
+          <div class="who">LIB-SHIN</div>
+          <span class="pill pill-red">48.0%</span>
+        </div>
+        <div class="what">
+          <b>¥509,600 不足 / 7日</b> — 直近2週間で空室7泊発生。GW期間（5/2–5/4）の3泊はまだ空き、値下げ＋Booking.comブースト検討。清掃枠は空いているのでin-day対応可。
+        </div>
+        <div class="due">担当：田中<br>4/25までに判断</div>
+      </div>
+      <div class="action-item urgent">
+        <div>
+          <div class="who">KYT-KIYOMIZU</div>
+          <span class="pill pill-red">54.0%</span>
+        </div>
+        <div class="what">
+          <b>¥529,000 不足 / 7日</b> — 連泊割引（3泊以上-10%）を本日付で設定済み、効果測定は月曜。長期ステイ問合せ1件あり、返信優先。
+        </div>
+        <div class="due">担当：佐藤<br>4/28効果確認</div>
+      </div>
+      <div class="action-item urgent">
+        <div>
+          <div class="who">OSK-TENNOJI</div>
+          <span class="pill pill-red">57.0%</span>
+        </div>
+        <div class="what">
+          <b>¥395,600 不足 / 7日</b> — 4月前半の★3レビュー2件で平均4.2→3.9に下落。返信投稿＋写真差替えを今週実施、AirDNA市場ADR比-18%なので価格は据え置き可。
+        </div>
+        <div class="due">担当：石井<br>今週中</div>
+      </div>
+      <div class="action-item urgent">
+        <div>
+          <div class="who">TKY-UENO</div>
+          <span class="pill pill-red">60.0%</span>
+        </div>
+        <div class="what">
+          <b>¥536,000 不足 / 7日</b> — GW期間すでに満室、残りは平日リカバリ。ビジネス向けプロモ（4/28–5/1）をBooking.comで1日限定配信。
+        </div>
+        <div class="due">担当：田中<br>4/26配信</div>
+      </div>
+    </div>
+
+    <div style="margin-top:14px; padding:12px 18px; background:white; border-radius:10px; font-size:12px; color:#666; display:flex; justify-content:space-between;">
+      <div>抽出条件：月次売上目標に対する進捗率が <b>67%未満</b>（目安ラインから -10pt以上）</div>
+      <div>データ出典：Airhost予約実績 × 物件マスタ売上目標（2026/04/24 08:00時点）</div>
+    </div>
+  </section>
+
+  <!-- Slide 5: Weekly KPI comparison -->
+  <section class="slide">
+    <h2>前週比KPI</h2>
+    <div class="h2-sub">全社合計 | 4/14–4/20 vs 4/21–4/27（見込み）</div>
+
+    <div class="kpi-grid" style="margin-bottom:16px;">
+      <div class="kpi-card">
+        <div class="label">売上（週計）</div>
+        <div class="value">¥3.24<span class="unit">M</span></div>
+        <div class="delta">
+          <span class="positive">+8.2% vs 前週</span>
+          <span class="positive">+12.4% YoY</span>
+        </div>
+      </div>
+      <div class="kpi-card">
+        <div class="label">稼働率</div>
+        <div class="value">82.4<span class="unit">%</span></div>
+        <div class="delta">
+          <span class="positive">+4.1pt vs 前週</span>
+          <span class="positive">+6.8pt YoY</span>
+        </div>
+      </div>
+      <div class="kpi-card">
+        <div class="label">ADR</div>
+        <div class="value">¥12,840</div>
+        <div class="delta">
+          <span class="negative">-2.1% vs 前週</span>
+          <span class="positive">+5.3% YoY</span>
+        </div>
+      </div>
+      <div class="kpi-card">
+        <div class="label">RevPAR</div>
+        <div class="value">¥10,580</div>
+        <div class="delta">
+          <span class="positive">+2.4% vs 前週</span>
+          <span class="positive">+13.9% YoY</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="row-2">
+      <div class="card">
+        <h3>週次売上推移（直近8週）</h3>
+        <div class="chart-wrap"><canvas id="chart-revenue"></canvas></div>
+      </div>
+      <div class="card">
+        <h3>異常値アラート</h3>
+        <table>
+          <thead><tr><th>物件</th><th>指標</th><th>値</th><th>判定</th></tr></thead>
+          <tbody>
+            <tr><td>KYT-GION</td><td>空室日数</td><td>8泊連続</td><td><span class="pill pill-red">要確認</span></td></tr>
+            <tr><td>LIB-UMEDA</td><td>ADR急落</td><td>-22% WoW</td><td><span class="pill pill-orange">要注意</span></td></tr>
+            <tr><td>OSK-NAMBA2</td><td>レビュー★3</td><td>2件連続</td><td><span class="pill pill-orange">要注意</span></td></tr>
+            <tr><td>SAI3</td><td>稼働率</td><td>96%</td><td><span class="pill pill-green">好調</span></td></tr>
+            <tr><td>OPH</td><td>ADR上昇</td><td>+8% WoW</td><td><span class="pill pill-green">好調</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- Slide 6: Action items & decisions -->
+  <section class="slide">
+    <h2>懸案・決定事項</h2>
+    <div class="h2-sub">今週決めること・来週への持ち越し</div>
+
+    <div class="col-2">
+      <div class="card">
+        <h3>今週決定したい論点</h3>
+        <div class="action-list">
+          <div class="action-item">
+            <div class="who">価格戦略</div>
+            <div class="what">LIB-SHIN のGW価格：現状 ¥14,800 → ¥12,800 に下げるか据え置きか</div>
+            <div class="due">本日決定</div>
+          </div>
+          <div class="action-item">
+            <div class="who">清掃体制</div>
+            <div class="what">GW期間（5/2–5/5）に清掃員+1名アサイン要否。現状44件/週 → 見込み62件/週</div>
+            <div class="due">4/26まで</div>
+          </div>
+          <div class="action-item">
+            <div class="who">ホスト対応</div>
+            <div class="what">OSK-TENNOJI オーナーから写真差替えの承認待ち。督促するか差し止めるか</div>
+            <div class="due">本日決定</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>先週からの持ち越し</h3>
+        <table>
+          <thead><tr><th>案件</th><th>担当</th><th>ステータス</th><th>期限</th></tr></thead>
+          <tbody>
+            <tr><td>NPA レビュー返信18件バッチ</td><td>石井</td><td><span class="pill pill-green">完了</span></td><td>4/22</td></tr>
+            <tr><td>AirDNA 市場データ週次取込自動化</td><td>外注</td><td><span class="pill pill-orange">進行中</span></td><td>4/30</td></tr>
+            <tr><td>新物件 KYT-FUSHIMI 5月受入準備</td><td>田中</td><td><span class="pill pill-orange">進行中</span></td><td>5/10</td></tr>
+            <tr><td>freee 仕訳ルール棚卸し</td><td>佐藤</td><td><span class="pill pill-gray">未着手</span></td><td>5/15</td></tr>
+            <tr><td>LIB 清掃依頼シート連携バグ修正</td><td>石井</td><td><span class="pill pill-green">完了</span></td><td>4/23</td></tr>
+          </tbody>
+        </table>
+
+        <h3 style="margin-top:20px;">来週のフォーカス</h3>
+        <ul style="list-style:none; font-size:13px; line-height:2; color:#333;">
+          <li>• GW期間のオペレーション（5/2–5/5 要員配置）</li>
+          <li>• 遅延4物件のリカバリ効果測定</li>
+          <li>• 5月売上目標の設定（ピークの反動織り込み）</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+</div>
+
+<div class="nav-bar">
+  <button onclick="prev()">‹</button>
+  <span class="page-num" id="page-num">1 / 6</span>
+  <button onclick="next()">›</button>
+</div>
+
+<script>
+  const slides = document.querySelectorAll('.slide');
+  let current = 0;
+  function show(i) {
+    slides.forEach((s, idx) => s.classList.toggle('active', idx === i));
+    document.getElementById('page-num').textContent = `${i + 1} / ${slides.length}`;
+    current = i;
+  }
+  function next() { if (current < slides.length - 1) show(current + 1); }
+  function prev() { if (current > 0) show(current - 1); }
+  document.addEventListener('keydown', e => {
+    if (e.key === 'ArrowRight' || e.key === ' ') next();
+    if (e.key === 'ArrowLeft') prev();
+  });
+
+  // Charts
+  const chartDefaults = { plugins: { legend: { labels: { font: { size: 11 } } } } };
+
+  new Chart(document.getElementById('chart-weekly'), {
+    type: 'bar',
+    data: {
+      labels: ['4/21(月)','4/22(火)','4/23(水)','4/24(木)','4/25(金)','4/26(土)','4/27(日)'],
+      datasets: [
+        { label: 'チェックイン', data: [6, 8, 5, 7, 9, 8, 5], backgroundColor: '#007aff' },
+        { label: 'チェックアウト', data: [4, 7, 5, 6, 8, 9, 5], backgroundColor: '#ff9500' }
+      ]
+    },
+    options: { ...chartDefaults, responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true } } }
+  });
+
+  new Chart(document.getElementById('chart-status'), {
+    type: 'doughnut',
+    data: {
+      labels: ['順調 (≥76.7%)', '要注意 (67–76%)', '遅延/要アクション (<67%)'],
+      datasets: [{
+        data: [5, 3, 6],
+        backgroundColor: ['#34c759', '#ffc107', '#ff3b30']
+      }]
+    },
+    options: { ...chartDefaults, responsive: true, maintainAspectRatio: false, cutout: '60%' }
+  });
+
+  new Chart(document.getElementById('chart-revenue'), {
+    type: 'line',
+    data: {
+      labels: ['W10','W11','W12','W13','W14','W15','W16','W17'],
+      datasets: [
+        { label: '2026', data: [2.82, 2.94, 3.05, 2.98, 3.12, 2.88, 2.99, 3.24], borderColor: '#007aff', backgroundColor: 'rgba(0,122,255,0.1)', fill: true, tension: 0.3 },
+        { label: '2025', data: [2.52, 2.68, 2.71, 2.88, 2.75, 2.60, 2.74, 2.88], borderColor: '#999', borderDash: [4,4], fill: false, tension: 0.3 }
+      ]
+    },
+    options: { ...chartDefaults, responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: false, title: { display: true, text: '¥M' } } } }
+  });
+</script>
+</body>
+</html>
