@@ -368,10 +368,25 @@ window.addEventListener('DOMContentLoaded', async () => {
 
 <!-- Slide 10: Closing -->
 <section class="slide">
-  <h2>連絡事項</h2>
-  <div class="h2-sub">今月のお知らせ</div>
-  <div style="margin-top: 24px; font-size: 16px; color: #666; line-height: 2;">
-    （当日記載）
+  <h2>
+    連絡事項
+    <button id="notes-edit-btn" style="float:right;font-size:12px;padding:6px 14px;border:1px solid #ddd;background:white;border-radius:6px;cursor:pointer;font-weight:500;">編集</button>
+  </h2>
+  <div class="h2-sub" id="notes-meta">今月のお知らせ</div>
+
+  <div id="notes-view" style="margin-top: 12px; flex: 1; overflow: auto; min-height: 0;">
+    <div id="notes-content" style="background: white; border-radius: 12px; padding: 28px 32px; font-size: 16px; line-height: 1.9; color: #1d1d1f; white-space: pre-wrap; min-height: 200px;">
+      <span style="color: #999;">読み込み中...</span>
+    </div>
+  </div>
+
+  <div id="notes-edit" style="display:none; margin-top: 12px; flex: 1; min-height: 0; flex-direction: column;">
+    <textarea id="notes-textarea" style="flex:1; min-height: 240px; width: 100%; padding: 20px 24px; border: 2px solid #007aff; border-radius: 12px; font-size: 16px; line-height: 1.9; font-family: inherit; resize: none; outline: none;"></textarea>
+    <div style="margin-top: 14px; display: flex; gap: 10px; justify-content: flex-end; align-items: center;">
+      <span id="notes-status" style="font-size: 12px; color: #999; margin-right: auto;"></span>
+      <button id="notes-cancel-btn" style="padding: 10px 20px; background: white; border: 1px solid #ddd; border-radius: 8px; cursor: pointer; font-size: 13px;">キャンセル</button>
+      <button id="notes-save-btn" style="padding: 10px 22px; background: #007aff; color: white; border: none; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 600;">保存</button>
+    </div>
   </div>
 </section>
 
@@ -678,6 +693,108 @@ insights.forEach(i => {
 });
 
 } // end renderAll
+
+// === Meeting Notes (連絡事項) ===
+const MEETING_NOTES_URL = 'https://script.google.com/macros/s/AKfycbw43wQ2-8vDRv_XqKR_ZrZdsuWdFJnifk1GVSh4zE1XbwTHOCzDGHc0SFM2ynllke9F/exec';
+const MEETING_NOTES_TOKEN = 'dent_meeting_notes_2026';
+const MEETING_NOTES_KEY = '2026-04';
+
+async function loadMeetingNotes() {
+  const contentEl = document.getElementById('notes-content');
+  const metaEl = document.getElementById('notes-meta');
+  try {
+    const res = await fetch(`${MEETING_NOTES_URL}?key=${encodeURIComponent(MEETING_NOTES_KEY)}&_=${Date.now()}`);
+    const data = await res.json();
+    if (data.ok) {
+      const text = data.content || '';
+      if (text.trim()) {
+        contentEl.textContent = text;
+        contentEl.style.color = '#1d1d1f';
+      } else {
+        contentEl.innerHTML = '<span style="color:#999;">未記入。「編集」から記入してください。</span>';
+      }
+      if (data.updatedAt) {
+        const d = new Date(data.updatedAt);
+        metaEl.textContent = `今月のお知らせ ・ 最終更新: ${d.toLocaleString('ja-JP')}`;
+      }
+    } else {
+      contentEl.innerHTML = '<span style="color:#ff3b30;">読み込み失敗: ' + (data.error || 'unknown') + '</span>';
+    }
+  } catch(e) {
+    contentEl.innerHTML = '<span style="color:#ff3b30;">読み込みエラー（ネットワークまたはAPI）: ' + e.message + '</span>';
+  }
+}
+
+async function saveMeetingNotes(content) {
+  const status = document.getElementById('notes-status');
+  status.textContent = '保存中...';
+  status.style.color = '#999';
+  try {
+    // Use GET for save (browsers convert POST→GET on 302 redirect which breaks GAS doPost)
+    const params = new URLSearchParams({
+      action: 'save',
+      token: MEETING_NOTES_TOKEN,
+      key: MEETING_NOTES_KEY,
+      content
+    });
+    const res = await fetch(`${MEETING_NOTES_URL}?${params.toString()}`);
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || 'save failed');
+    await loadMeetingNotes();
+    status.textContent = '保存しました ✓';
+    status.style.color = '#34c759';
+    setTimeout(() => { status.textContent = ''; }, 2000);
+    return true;
+  } catch(e) {
+    status.textContent = '保存失敗: ' + e.message;
+    status.style.color = '#ff3b30';
+    return false;
+  }
+}
+
+function setupMeetingNotesUI() {
+  const editBtn = document.getElementById('notes-edit-btn');
+  const cancelBtn = document.getElementById('notes-cancel-btn');
+  const saveBtn = document.getElementById('notes-save-btn');
+  const viewEl = document.getElementById('notes-view');
+  const editEl = document.getElementById('notes-edit');
+  const textarea = document.getElementById('notes-textarea');
+  const contentEl = document.getElementById('notes-content');
+
+  editBtn.addEventListener('click', () => {
+    const current = contentEl.textContent.trim();
+    textarea.value = (current.startsWith('未記入') || current === '読み込み中...') ? '' : current;
+    viewEl.style.display = 'none';
+    editEl.style.display = 'flex';
+    editBtn.style.display = 'none';
+    textarea.focus();
+  });
+
+  cancelBtn.addEventListener('click', () => {
+    viewEl.style.display = 'block';
+    editEl.style.display = 'none';
+    editBtn.style.display = '';
+  });
+
+  saveBtn.addEventListener('click', async () => {
+    saveBtn.disabled = true;
+    cancelBtn.disabled = true;
+    const ok = await saveMeetingNotes(textarea.value);
+    saveBtn.disabled = false;
+    cancelBtn.disabled = false;
+    if (ok) {
+      viewEl.style.display = 'block';
+      editEl.style.display = 'none';
+      editBtn.style.display = '';
+    }
+  });
+}
+
+// Initialize meeting notes (independent of decryption — fetched directly from GAS)
+window.addEventListener('DOMContentLoaded', () => {
+  setupMeetingNotesUI();
+  loadMeetingNotes();
+});
 
 // === Navigation ===
 const slides = document.querySelectorAll('.slide');
