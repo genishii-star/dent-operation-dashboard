@@ -370,8 +370,10 @@ function parseTargetValue(v) {
 function facilityYamlToMasterRows(f) {
   const region = (f.region || '').toLowerCase();
   const kpiExclude = f.kpi_exclude === true || f.kpi_excluded === true;
+  // 物件コードは uppercase に統一 (日次/予約データの propName と照合するため)
+  const codeUpper = (f.code || '').toUpperCase();
   const base = {
-    '物件名': f.name || f.code || '',
+    '物件名': f.name || codeUpper,
     'オーナーID': f.owner_ref || '',
     '住所': f.address || '',
     'エリア': REGION_TO_AREA[region] || '',
@@ -385,6 +387,7 @@ function facilityYamlToMasterRows(f) {
     'タイプ': f.property_type || '',
     '間取り': f.floor_plan || '',
     '平米数': f.sqm ?? '',
+    '_parentCode': f.code || '',  // YAML filename (lowercase) for edit endpoint
   };
   const parentLow = f.revenue_target_low ?? '';
   const parentNormal = f.revenue_target_normal ?? '';
@@ -393,7 +396,7 @@ function facilityYamlToMasterRows(f) {
   if (!rooms) {
     return [{
       ...base,
-      '物件コード': f.code || '',
+      '物件コード': codeUpper,
       '閑散期目標': parentLow,
       '通常期目標': parentNormal,
       '繁忙期目標': parentHigh,
@@ -1489,6 +1492,7 @@ function processData() {
       propName: pm['物件名'] || code,
       code: code,
       propCode: code,
+      parentCode: pm['_parentCode'] || code, // YAML filename (lowercase) for edit endpoint
       address: address,
       ownerId: pm['オーナーID'] || '',
       ownerName: ownerInfo.name || '',
@@ -3773,7 +3777,11 @@ async function savePropertySpecEdits() {
       method: 'POST',
       credentials: 'include',
       headers: { 'Content-Type': 'text/plain;charset=UTF-8' },
-      body: JSON.stringify({ propCode, updates }),
+      body: JSON.stringify({
+        propCode,
+        parentCode: prop.parentCode || propCode,
+        updates,
+      }),
     });
     if (resp.status === 401 || resp.status === 302) {
       throw new Error('認証エラー — ' + DATA_API_BASE + '/internal/me を別タブで認証してから再試行');
