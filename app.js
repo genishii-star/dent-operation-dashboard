@@ -3729,25 +3729,22 @@ async function savePropertySpecEdits() {
 
   if (Object.keys(updates).length === 0) { closePropertySpecEditor(); return; }
 
-  if (!GAS_WRITE_URL) {
-    errEl.textContent = 'GAS_WRITE_URL が未設定です。デプロイしたURLを app.js に設定してください。';
-    return;
-  }
-  // Phase 1.14 γ: マスタ参照は YAML に切替済み。GAS への書き込みは反映されないため一旦無効化。δ で YAML PR endpoint に置換予定。
-  errEl.textContent = '編集機能は Phase 1.14 δ 実装中のため一時停止中です。マスタ変更は site/data/facilities/*.yaml を直接編集して PR を出してください。';
-  return;
-
   const saveBtn = modal.querySelector('.modal-save-btn');
   saveBtn.disabled = true;
   saveBtn.textContent = '保存中…';
 
   try {
-    const resp = await fetch(GAS_WRITE_URL, {
+    const resp = await fetch(`${DATA_API_BASE}/internal/edit-facility`, {
       method: 'POST',
-      body: JSON.stringify({ action: 'updatePropertyMaster', token: GAS_WRITE_TOKEN, propCode, updates }),
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ propCode, updates }),
     });
+    if (resp.status === 401 || resp.status === 302) {
+      throw new Error('認証エラー — ' + DATA_API_BASE + '/internal/me を別タブで認証してから再試行');
+    }
     const json = await resp.json();
-    if (!json.ok) throw new Error(json.error || 'unknown');
+    if (!resp.ok || !json.ok) throw new Error(json.error || `HTTP ${resp.status}`);
 
     applyPropertySpecToState(propCode, stateUpdates, updates);
     closePropertySpecEditor();
