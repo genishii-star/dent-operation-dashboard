@@ -85,15 +85,13 @@ function getJapaneseHolidays(year) {
   return holidays;
 }
 
+// Phase 1.14: 物件/オーナーマスタは YAML in dent-platform repo が source of truth。
+// Sheets API は予約データ・日次データ・シーズンマスタ・設定・市場データの取得のみに使用。
 const SHEET_ID = '1C7EiYSz-3ohjTy3Ul5zdgqL8cDk24jPj3ySTsAcOPhA';
-const SHEET_GID_PROPERTY_MASTER = '416395562';
-const SHEET_GID_OWNER_MASTER = '907386098';
 const API_KEY = 'AIzaSyD_16gkzGw68S4socdFAr5HtIieisPA3uk';
 
-// 物件マスタ書き込み用 GAS Web App（update_masters.gs の doPost を使用）
-// デプロイ後にURLを貼り付け。未設定時は保存機能が無効化される
-const GAS_WRITE_URL = 'https://script.google.com/macros/s/AKfycbyiSBemvDdrNFmUdXTdNoK8TBV1oz8AANeIbDY6Qd7DNt8ZPC51Ej9rLr9CjSS4zldI2g/exec';
-const GAS_WRITE_TOKEN = 'dent_dashboard_2026';
+// 物件マスタ編集用 GitHub repo URL (エラーバナーから直接 YAML を開くリンク用)
+const FACILITIES_REPO_URL = 'https://github.com/genishii-star/dent-platform/tree/main/site/data/facilities';
 
 function sheetApiUrl(sheetName) {
   return `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${encodeURIComponent(sheetName)}?key=${API_KEY}`;
@@ -1682,10 +1680,9 @@ function renderOrphanAlert(containerId) {
     return;
   }
   const items = orphans.map(o => `<li>${o.name} <span style="color:#999;">(${o.sources.join('/')}データ・${o.count}件)</span></li>`).join('');
-  const sheetUrl = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/edit#gid=${SHEET_GID_PROPERTY_MASTER}`;
   el.innerHTML = `<div class="alert-orphan">
     <div class="alert-title">⚠ マスタ未登録の物件が ${orphans.length} 件あります</div>
-    物件マスタへの追加または名称統一が必要です。<a href="${sheetUrl}" target="_blank" rel="noopener" style="color:#ff3b30;font-weight:600;text-decoration:underline;">物件マスタを開く ↗</a>
+    YAML マスタへの追加または名称統一が必要です。<a href="${FACILITIES_REPO_URL}" target="_blank" rel="noopener" style="color:#ff3b30;font-weight:600;text-decoration:underline;">facilities/ を開く ↗</a>
     <ul>${items}</ul>
   </div>`;
 }
@@ -2732,10 +2729,9 @@ function renderOwnerTab() {
     const noTargetOwners = ownerStats.filter(o => o.target === 0 && o.propCount > 0);
     if (noTargetOwners.length > 0) {
       const items = noTargetOwners.map(o => `<li>${o.name} <span style="color:#999;">(${o.propCount}物件)</span></li>`).join('');
-      const sheetUrl = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/edit#gid=${SHEET_GID_PROPERTY_MASTER}`;
       noTargetAlert.innerHTML = `<div class="alert-orphan">
         <div class="alert-title">⚠ 目標が未設定のオーナーが ${noTargetOwners.length} 名います</div>
-        物件マスタで目標売上（閑散期・通常期・繁忙期）を設定してください。<a href="${sheetUrl}" target="_blank" rel="noopener" style="color:#ff3b30;font-weight:600;text-decoration:underline;">物件マスタを開く ↗</a>
+        ダッシュボードの物件詳細ページから「編集」で目標売上（閑散期・通常期・繁忙期）を設定するか、<a href="${FACILITIES_REPO_URL}" target="_blank" rel="noopener" style="color:#ff3b30;font-weight:600;text-decoration:underline;">facilities/ の YAML を直接編集 ↗</a>してください。
         <ul>${items}</ul>
       </div>`;
     } else {
