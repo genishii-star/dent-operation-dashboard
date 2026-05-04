@@ -357,21 +357,26 @@ async function fetchDataApi(path) {
   return resp.json();
 }
 
-function facilityYamlToMaster(f) {
-  const code = f.code || '';
+function parseTargetValue(v) {
+  if (typeof v === 'number') return v;
+  if (typeof v !== 'string' || !v) return null;
+  const n = Number(v.replace(/[¥,円\s]/g, ''));
+  return isNaN(n) ? null : n;
+}
+
+// Multi-room facility (rooms array) → expand to per-room master rows.
+// Single facility → 1 row (code as 物件コード).
+// Mirrors the spreadsheet's per-room row structure that 日次データ matches against.
+function facilityYamlToMasterRows(f) {
   const region = (f.region || '').toLowerCase();
   const kpiExclude = f.kpi_exclude === true || f.kpi_excluded === true;
-  return {
-    '物件コード': code,
-    '物件名': f.name || code,
+  const base = {
+    '物件名': f.name || f.code || '',
     'オーナーID': f.owner_ref || '',
     '住所': f.address || '',
     'エリア': REGION_TO_AREA[region] || '',
     'KPI除外': kpiExclude ? 'TRUE' : '',
     'ステータス': STATUS_TO_JA[f.status] || '稼働中',
-    '閑散期目標': f.revenue_target_low ?? '',
-    '通常期目標': f.revenue_target_normal ?? '',
-    '繁忙期目標': f.revenue_target_high ?? '',
     'airbnbアカウント': f.airbnb_account || '',
     'airbnbリスティングID': f.airbnb_listing_id || '',
     '許可種類': f.permit_type || '',
@@ -380,8 +385,36 @@ function facilityYamlToMaster(f) {
     'タイプ': f.property_type || '',
     '間取り': f.floor_plan || '',
     '平米数': f.sqm ?? '',
-    '部屋数': Array.isArray(f.rooms) ? f.rooms.length : 1,
   };
+  const parentLow = f.revenue_target_low ?? '';
+  const parentNormal = f.revenue_target_normal ?? '';
+  const parentHigh = f.revenue_target_high ?? '';
+  const rooms = Array.isArray(f.rooms) && f.rooms.length > 0 ? f.rooms : null;
+  if (!rooms) {
+    return [{
+      ...base,
+      '物件コード': f.code || '',
+      '閑散期目標': parentLow,
+      '通常期目標': parentNormal,
+      '繁忙期目標': parentHigh,
+      '部屋数': 1,
+    }];
+  }
+  const targetsMap = {};
+  if (Array.isArray(f.targets)) {
+    f.targets.forEach(t => { if (t && t.room) targetsMap[t.room] = t; });
+  }
+  return rooms.map(room => {
+    const t = targetsMap[room] || {};
+    return {
+      ...base,
+      '物件コード': room,
+      '閑散期目標': parseTargetValue(t.low) ?? parentLow,
+      '通常期目標': parseTargetValue(t.normal) ?? parentNormal,
+      '繁忙期目標': parseTargetValue(t.high) ?? parentHigh,
+      '部屋数': rooms.length,
+    };
+  });
 }
 
 function ownerYamlToMaster(o) {
@@ -395,7 +428,7 @@ function ownerYamlToMaster(o) {
 async function fetchPropertyMasterApi() {
   const data = await fetchDataApi('/internal/facilities.json');
   const arr = (data && data.facilities) || [];
-  return arr.map(facilityYamlToMaster);
+  return arr.flatMap(facilityYamlToMasterRows);
 }
 
 async function fetchOwnerMasterApi() {
