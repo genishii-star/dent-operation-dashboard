@@ -5015,6 +5015,176 @@ function initDailyCharts() {
       }
     });
   }
+
+  // Chart 4: 日別 売上 / 稼働率 (過去30日 + 今後60日)
+  destroyChart('dailyTrend90d');
+  const ctx4 = document.getElementById('chartDailyTrend90d');
+  if (ctx4) {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const todayStr = today.toISOString().split('T')[0];
+    const startDate = new Date(today); startDate.setDate(startDate.getDate() - 30);
+    const endDate = new Date(today); endDate.setDate(endDate.getDate() + 59);
+    const startStr = startDate.toISOString().split('T')[0];
+    const endStr = endDate.toISOString().split('T')[0];
+
+    const targetProps = filterPropertiesByArea(area).filter(p => !p.excludeKpi);
+    const targetCodes = new Set(targetProps.map(p => p.propCode).filter(Boolean));
+    const targetNames = new Set(targetProps.map(p => p.propName).filter(Boolean));
+    const propCount = targetProps.length || 1;
+
+    // 過去〜今日: 日次データから date→{sales, bookedSet}
+    const pastByDate = {};
+    rawDailyData.forEach(rd => {
+      const date = normalizeDate(rd['日付']);
+      if (!date || date < startStr || date > todayStr) return;
+      const status = rd['状態'] || '';
+      if (status === 'システムキャンセル' || status === 'ブロックされた') return;
+      const code = generatePropCode(rd['物件名'] || '', rd['ルーム番号'] || '');
+      if (!targetCodes.has(code)) return;
+      const cleaning = parseNum(rd['清掃料']);
+      const sl = parseNum(rd['売上合計']);
+      if (cleaning > 0 && Math.abs(sl - cleaning) < 1) return; // 清掃料のみ行は除外
+      if (!pastByDate[date]) pastByDate[date] = { sales: 0, booked: new Set() };
+      pastByDate[date].sales += sl;
+      pastByDate[date].booked.add(code);
+    });
+
+    // 未来: 確定予約から date→{sales(日割り), bookedSet}
+    const futByDate = {};
+    reservations.forEach(r => {
+      if (r.status === 'キャンセル' || r.status === 'システムキャンセル' || r.status === 'ブロックされた') return;
+      if (!targetCodes.has(r.propCode) && !targetNames.has(r.property)) return;
+      if (!r.checkin || !r.checkout || !r.nights || r.nights <= 0) return;
+      const netSales = (r.sales || 0) - (r.cleaningFee || 0);
+      const dailyRate = netSales / r.nights;
+      const ci = new Date(r.checkin);
+      const co = new Date(r.checkout);
+      for (let d = new Date(ci); d < co; d.setDate(d.getDate() + 1)) {
+        const ds = d.toISOString().split('T')[0];
+        if (ds <= todayStr || ds > endStr) continue;
+        if (!futByDate[ds]) futByDate[ds] = { sales: 0, booked: new Set() };
+        futByDate[ds].sales += dailyRate;
+        futByDate[ds].booked.add(r.propCode || r.property);
+      }
+    });
+
+    const dayLabels = [];
+    const daySales = [];
+    const dayOcc = [];
+    const dayBgColors = [];
+    const isPastFlags = [];
+    const todayIdx = 30;
+    const dowChars = ['日', '月', '火', '水', '木', '金', '土'];
+
+    for (let i = -30; i < 60; i++) {
+      const d = new Date(today); d.setDate(d.getDate() + i);
+      const ds = d.toISOString().split('T')[0];
+      const dow = d.getDay();
+      const isPast = i < 0;
+      const isToday = i === 0;
+      isPastFlags.push(!isPast && !isToday ? false : true);
+
+      dayLabels.push(`${d.getMonth() + 1}/${d.getDate()}(${dowChars[dow]})`);
+
+      let sales = 0;
+      let booked = 0;
+      if (i <= 0) {
+        const e = pastByDate[ds];
+        if (e) { sales = e.sales; booked = e.booked.size; }
+      } else {
+        const e = futByDate[ds];
+        if (e) { sales = e.sales; booked = e.booked.size; }
+      }
+      daySales.push(Math.round(sales));
+      dayOcc.push(Math.round((booked / propCount) * 1000) / 10);
+
+      // 色: 今日=オレンジ強、過去=青、未来=オレンジ淡、土日は少し濃く
+      const isWeekend = dow === 0 || dow === 6;
+      if (isToday) dayBgColors.push('rgba(245,166,35,0.9)');
+      else if (isPast) dayBgColors.push(isWeekend ? 'rgba(74,144,217,0.85)' : 'rgba(74,144,217,0.6)');
+      else dayBgColors.push(isWeekend ? 'rgba(245,166,35,0.55)' : 'rgba(245,166,35,0.3)');
+    }
+
+    const todayLinePlugin = {
+      id: 'dailyTrendTodayLine',
+      afterDatasetsDraw(chart) {
+        const { ctx: c, scales: { x }, chartArea } = chart;
+        if (!chartArea) return;
+        const xPos = x.getPixelForValue(todayIdx);
+        c.save();
+        c.beginPath();
+        c.strokeStyle = 'rgba(231,76,60,0.5)';
+        c.lineWidth = 1;
+        c.setLineDash([4, 4]);
+        c.moveTo(xPos, chartArea.top);
+        c.lineTo(xPos, chartArea.bottom);
+        c.stroke();
+        c.setLineDash([]);
+        c.fillStyle = 'rgba(231,76,60,0.85)';
+        c.font = 'bold 10px -apple-system, sans-serif';
+        c.textAlign = 'center';
+        c.fillText('今日', xPos, chartArea.top - 2);
+        c.restore();
+      }
+    };
+
+    allCharts['dailyTrend90d'] = new Chart(ctx4, {
+      type: 'bar',
+      data: {
+        labels: dayLabels,
+        datasets: [
+          {
+            type: 'bar',
+            label: '日別売上',
+            data: daySales,
+            backgroundColor: dayBgColors,
+            yAxisID: 'y',
+            order: 2,
+          },
+          {
+            type: 'line',
+            label: '稼働率 (%)',
+            data: dayOcc,
+            borderColor: CHART_COLORS.green,
+            backgroundColor: 'rgba(80,200,120,0.08)',
+            yAxisID: 'y1',
+            tension: 0.3,
+            pointRadius: 0,
+            borderWidth: 2,
+            fill: false,
+            order: 1,
+          },
+        ],
+      },
+      plugins: [todayLinePlugin],
+      options: {
+        responsive: true,
+        animation: { duration: 600, easing: 'easeOutQuart' },
+        plugins: {
+          legend: { position: 'top', labels: { font: { size: 11 }, padding: 12 } },
+          tooltip: {
+            mode: 'index',
+            intersect: false,
+            callbacks: {
+              label: ctx => {
+                if (ctx.dataset.label === '日別売上') {
+                  const tag = isPastFlags[ctx.dataIndex] ? '実績' : '予測';
+                  return `売上 (${tag}): ¥${Math.round(ctx.parsed.y).toLocaleString()}`;
+                }
+                return `稼働率: ${ctx.parsed.y.toFixed(1)}%`;
+              }
+            }
+          }
+        },
+        scales: {
+          x: { grid: { display: false }, ticks: { maxTicksLimit: 30, autoSkip: true, font: { size: 9 } } },
+          y: { position: 'left', beginAtZero: true, title: { display: true, text: '売上 (¥)', font: { size: 11 } }, ticks: { callback: v => (v / 10000).toFixed(0) + '万' } },
+          y1: { position: 'right', min: 0, max: 100, grid: { drawOnChartArea: false }, title: { display: true, text: '稼働率 (%)', font: { size: 11 } }, ticks: { callback: v => v + '%' } },
+        },
+      },
+    });
+  }
 }
 
 function initReservationCharts() {
