@@ -3767,10 +3767,12 @@ async function savePropertySpecEdits() {
   saveBtn.textContent = '保存中…';
 
   try {
+    // Note: Content-Type は text/plain にして CORS preflight を回避
+    // (Cloudflare Access が OPTIONS を阻む問題)。Worker 側は body を text から JSON parse。
     const resp = await fetch(`${DATA_API_BASE}/internal/edit-facility`, {
       method: 'POST',
       credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'text/plain;charset=UTF-8' },
       body: JSON.stringify({ propCode, updates }),
     });
     if (resp.status === 401 || resp.status === 302) {
