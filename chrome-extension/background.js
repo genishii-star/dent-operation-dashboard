@@ -115,13 +115,27 @@ async function handleReadSheet(sheetName) {
 
 async function handleWriteToSheet(sheetName, rows) {
   try {
-    const token = await getAuthToken();
     const stored = await chrome.storage.local.get(['sheetId']);
     const spreadsheetId = stored.sheetId || SPREADSHEET_ID_DEFAULT;
 
-    await ensureSheetSize(token, spreadsheetId, sheetName, rows.length, rows[0]?.length || 42);
-    await clearSheet(token, spreadsheetId, sheetName);
-    await writeData(token, spreadsheetId, sheetName, rows);
+    // CSV取得に時間がかかってトークン失効するケースに備え、401時はキャッシュを破棄して1度だけ再試行
+    let token = await getAuthToken();
+    const runWrite = async (tk) => {
+      await ensureSheetSize(tk, spreadsheetId, sheetName, rows.length, rows[0]?.length || 42);
+      await clearSheet(tk, spreadsheetId, sheetName);
+      await writeData(tk, spreadsheetId, sheetName, rows);
+    };
+    try {
+      await runWrite(token);
+    } catch (err) {
+      if (err.status === 401) {
+        await removeCachedToken(token);
+        token = await getAuthToken();
+        await runWrite(token);
+      } else {
+        throw err;
+      }
+    }
 
     const now = new Date();
     const syncTime = now.getFullYear() + '-' +
@@ -171,10 +185,30 @@ function getAuthToken() {
   });
 }
 
+function removeCachedToken(token) {
+  return new Promise(resolve => {
+    if (!token) return resolve();
+    chrome.identity.removeCachedAuthToken({ token }, () => resolve());
+  });
+}
+
+// HTTPエラー時のメッセージを詳細化（status + Google APIのerror.message + 本文）
+async function describeHttpError(res, prefix) {
+  const text = await res.text().catch(() => '');
+  let detail = text;
+  try {
+    const j = JSON.parse(text);
+    detail = j?.error?.message || text;
+  } catch (e) { /* not JSON */ }
+  const err = new Error(`${prefix} (HTTP ${res.status}): ${String(detail).slice(0, 400)}`);
+  err.status = res.status;
+  return err;
+}
+
 async function ensureSheetSize(token, spreadsheetId, sheetName, rowCount, colCount) {
   const url = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}?fields=sheets(properties)`;
   const res = await fetch(url, { headers: { 'Authorization': `Bearer ${token}` } });
-  if (!res.ok) throw new Error('シート情報取得失敗');
+  if (!res.ok) throw await describeHttpError(res, 'シート情報取得失敗');
   const data = await res.json();
 
   const sheet = data.sheets.find(s => s.properties.title === sheetName);
@@ -209,20 +243,14 @@ async function ensureSheetSize(token, spreadsheetId, sheetName, rowCount, colCou
       headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ requests })
     });
-    if (!batchRes.ok) {
-      const err = await batchRes.json();
-      throw new Error(`シートサイズ調整失敗: ${err.error.message}`);
-    }
+    if (!batchRes.ok) throw await describeHttpError(batchRes, 'シートサイズ調整失敗');
   }
 }
 
 async function clearSheet(token, sheetId, sheetName) {
   const url = `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/${encodeURIComponent(sheetName)}:clear`;
   const res = await fetch(url, { method: 'POST', headers: { 'Authorization': `Bearer ${token}` } });
-  if (!res.ok) {
-    const err = await res.json();
-    throw new Error(`クリア失敗: ${err.error.message}`);
-  }
+  if (!res.ok) throw await describeHttpError(res, 'クリア失敗');
 }
 
 async function writeData(token, sheetId, sheetName, rows) {
@@ -239,10 +267,7 @@ async function writeData(token, sheetId, sheetName, rows) {
       headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ values: batch })
     });
-    if (!res.ok) {
-      const err = await res.json();
-      throw new Error(`書き込み失敗: ${err.error.message}`);
-    }
+    if (!res.ok) throw await describeHttpError(res, '書き込み失敗');
   }
 }
 
