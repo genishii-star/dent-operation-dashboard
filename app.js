@@ -328,6 +328,83 @@ async function fetchSheet(sheetName) {
 }
 
 // ============================================================
+// dent-data-api (Phase 1.14 γ) — YAML in git is source of truth
+// ============================================================
+const DATA_API_BASE = 'https://api.dent-inc.com';
+const REGION_TO_AREA = {
+  osaka: '大阪', kyoto: '京都', tokyo: '東京', hyogo: '兵庫', okinawa: '沖縄',
+};
+const STATUS_TO_JA = { active: '稼働中' };
+
+async function fetchDataApi(path) {
+  let resp;
+  try {
+    resp = await fetch(`${DATA_API_BASE}${path}`, {
+      credentials: 'include',
+      headers: { 'Accept': 'application/json' },
+    });
+  } catch (e) {
+    const err = new Error(`API ${path} 通信失敗: ${e.message}`);
+    err.requiresAuth = true;
+    throw err;
+  }
+  if (resp.status === 401 || resp.status === 302 || resp.type === 'opaqueredirect') {
+    const err = new Error(`API ${path} 認証が必要です`);
+    err.requiresAuth = true;
+    throw err;
+  }
+  if (!resp.ok) throw new Error(`API ${path} failed (${resp.status})`);
+  return resp.json();
+}
+
+function facilityYamlToMaster(f) {
+  const code = f.code || '';
+  const region = (f.region || '').toLowerCase();
+  const kpiExclude = f.kpi_exclude === true || f.kpi_excluded === true;
+  return {
+    '物件コード': code,
+    '物件名': f.name || code,
+    'オーナーID': f.owner_ref || '',
+    '住所': f.address || '',
+    'エリア': REGION_TO_AREA[region] || '',
+    'KPI除外': kpiExclude ? 'TRUE' : '',
+    'ステータス': STATUS_TO_JA[f.status] || '稼働中',
+    '閑散期目標': f.revenue_target_low ?? '',
+    '通常期目標': f.revenue_target_normal ?? '',
+    '繁忙期目標': f.revenue_target_high ?? '',
+    'airbnbアカウント': f.airbnb_account || '',
+    'airbnbリスティングID': f.airbnb_listing_id || '',
+    '許可種類': f.permit_type || '',
+    '営業日数上限': f.business_days_limit ?? '',
+    '運用開始日': f.operation_start || '',
+    'タイプ': f.property_type || '',
+    '間取り': f.floor_plan || '',
+    '平米数': f.sqm ?? '',
+    '部屋数': Array.isArray(f.rooms) ? f.rooms.length : 1,
+  };
+}
+
+function ownerYamlToMaster(o) {
+  return {
+    'オーナーID': o.key || '',
+    'ロイヤリティ': o.royalty || '',
+    '計算用ロイヤリティ': o.royalty_calc || '',
+  };
+}
+
+async function fetchPropertyMasterApi() {
+  const data = await fetchDataApi('/internal/facilities.json');
+  const arr = (data && data.facilities) || [];
+  return arr.map(facilityYamlToMaster);
+}
+
+async function fetchOwnerMasterApi() {
+  const data = await fetchDataApi('/internal/owners.json');
+  const arr = (data && data.owners) || [];
+  return arr.map(ownerYamlToMaster);
+}
+
+// ============================================================
 // localStorage Cache
 // ============================================================
 const CACHE_KEY = 'dent_dashboard_cache';
@@ -393,7 +470,11 @@ async function loadAllData() {
   } catch (err) {
     console.error('Data loading error:', err);
     overlay.style.display = 'none';
-    errorBanner.textContent = 'データの読み込みに失敗しました: ' + err.message;
+    if (err.requiresAuth) {
+      errorBanner.innerHTML = `データ API の認証が必要です。<a href="${DATA_API_BASE}/internal/me" target="_blank" rel="noopener" style="color:#fff;text-decoration:underline;font-weight:600;">こちらをクリック</a>して別タブで認証完了後、ページを再読み込みしてください。`;
+    } else {
+      errorBanner.textContent = 'データの読み込みに失敗しました: ' + err.message;
+    }
     errorBanner.classList.add('show');
   }
 }
@@ -405,8 +486,8 @@ async function fetchAndUpdate() {
   const [resv, daily, propMaster, ownMaster, seasMaster, settingsRaw, marketRaw, estatRaw] = await Promise.all([
     fetchSheet('予約データ'),
     fetchSheet('日次データ'),
-    fetchSheet('物件マスタ'),
-    fetchSheet('オーナーマスタ'),
+    fetchPropertyMasterApi(),
+    fetchOwnerMasterApi(),
     fetchSheet('シーズンマスタ'),
     fetch(sheetApiUrl('設定')).then(r => r.json()).catch(() => ({})),
     fetchAirdnaSheets().catch(() => ({})),
@@ -3652,6 +3733,9 @@ async function savePropertySpecEdits() {
     errEl.textContent = 'GAS_WRITE_URL が未設定です。デプロイしたURLを app.js に設定してください。';
     return;
   }
+  // Phase 1.14 γ: マスタ参照は YAML に切替済み。GAS への書き込みは反映されないため一旦無効化。δ で YAML PR endpoint に置換予定。
+  errEl.textContent = '編集機能は Phase 1.14 δ 実装中のため一時停止中です。マスタ変更は site/data/facilities/*.yaml を直接編集して PR を出してください。';
+  return;
 
   const saveBtn = modal.querySelector('.modal-save-btn');
   saveBtn.disabled = true;
@@ -8658,21 +8742,5 @@ function initReviewCharts() {
   }
 }
 
-// ── Auth ──
-const LOGIN_PW = 'TDGnq!uPu@KVM!EcZ3';
-let _dataReady = false;
-// ログイン画面表示中にバックグラウンドでデータ読み込み開始
-loadAllData().then(() => { _dataReady = true; });
-
-function tryLogin() {
-  const pw = document.getElementById('login-pw').value;
-  if (pw === LOGIN_PW) {
-    document.getElementById('login-overlay').classList.add('hidden');
-    if (!_dataReady) {
-      document.getElementById('loading-overlay').style.display = 'flex';
-    }
-  } else {
-    document.getElementById('login-error').style.display = 'block';
-  }
-}
-document.getElementById('login-pw').addEventListener('keydown', e => { if (e.key === 'Enter') tryLogin(); });
+// Phase 1.14 γ: 認証は Cloudflare Access (op.dent-inc.com) に一元化。独自 password ログインは廃止。
+loadAllData();
