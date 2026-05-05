@@ -1682,7 +1682,6 @@ function renderOrphanAlert(containerId) {
   const items = orphans.map(o => `<li>${o.name} <span style="color:#999;">(${o.sources.join('/')}データ・${o.count}件)</span></li>`).join('');
   el.innerHTML = `<div class="alert-orphan">
     <div class="alert-title">⚠ マスタ未登録の物件が ${orphans.length} 件あります</div>
-    YAML マスタへの追加または名称統一が必要です。<a href="${FACILITIES_REPO_URL}" target="_blank" rel="noopener" style="color:#ff3b30;font-weight:600;text-decoration:underline;">facilities/ を開く ↗</a>
     <ul>${items}</ul>
   </div>`;
 }
