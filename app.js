@@ -1396,6 +1396,26 @@ function processData() {
     return true;
   });
 
+  // 稼働中以外の物件は全画面で非表示（マスタ/予約/日次データから一括除外）
+  propertyMaster = propertyMaster.filter(pm => (pm['ステータス'] || '稼働中') === '稼働中');
+  const _activePropIds = new Set();
+  propertyMaster.forEach(pm => {
+    const c = (pm['物件コード'] || '').trim();
+    const n = pm['物件名'] || '';
+    if (c) _activePropIds.add(c);
+    if (n) _activePropIds.add(n);
+  });
+  rawReservations = rawReservations.filter(r => {
+    const n = r['物件名'] || '';
+    const c = (n + (r['部屋番号'] || ''));
+    return _activePropIds.has(n) || _activePropIds.has(c);
+  });
+  rawDailyData = rawDailyData.filter(d => {
+    const n = d['物件名'] || '';
+    const c = (n + (d['ルーム番号'] || ''));
+    return _activePropIds.has(n) || _activePropIds.has(c);
+  });
+
   // 物件コードSetを構築（マスタの物件コード列がそのまま正規化キー）
   const codeSet = new Set();
   propertyMaster.forEach(pm => {
