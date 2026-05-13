@@ -825,17 +825,17 @@
 <div id="tab-review" class="tab-content">
   <div class="container">
 
-    <div style="background:#fff8e1;border:1px solid #ffd54f;border-radius:8px;padding:10px 16px;margin-bottom:16px;font-size:12px;color:#795548;">
-      ⚠ <strong>仮実装（モックデータ）</strong> — 表示中のレビューはサンプルデータです。実データ連携は SPEC.md / SPEC.html 参照
+    <div id="rv-status-banner" style="background:#fff8e1;border:1px solid #ffd54f;border-radius:8px;padding:10px 16px;margin-bottom:16px;font-size:12px;color:#795548;">
+      ⚠ <strong>API未接続（モックデータ）</strong>
     </div>
 
     <div class="filter-bar">
       <label>期間</label>
       <div class="filter-pills" id="review-period-filter">
-        <span class="pill" data-period="7">直近7日</span>
-        <span class="pill active" data-period="30">直近30日</span>
-        <span class="pill" data-period="90">直近90日</span>
-        <span class="pill" data-period="365">直近1年</span>
+        <span class="pill" data-months="1">直近1ヶ月</span>
+        <span class="pill active" data-months="3">直近3ヶ月</span>
+        <span class="pill" data-months="6">直近6ヶ月</span>
+        <span class="pill" data-months="12">直近1年</span>
       </div>
       <label>エリア</label>
       <div class="filter-pills" id="review-area-filter">
@@ -844,13 +844,6 @@
         <span class="pill" data-area="京都">京都</span>
         <span class="pill" data-area="東京">東京</span>
         <span class="pill" data-area="その他">その他</span>
-      </div>
-      <label>言語</label>
-      <div class="filter-pills" id="review-lang-filter">
-        <span class="pill active" data-lang="all">全て</span>
-        <span class="pill" data-lang="ja">日本語</span>
-        <span class="pill" data-lang="en">英語</span>
-        <span class="pill" data-lang="zh">中国語</span>
       </div>
     </div>
 

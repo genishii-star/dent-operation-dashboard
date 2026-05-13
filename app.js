@@ -438,6 +438,19 @@ async function fetchOwnerMasterApi() {
   return arr.map(ownerYamlToMaster);
 }
 
+// レビュー実データ (Phase 1)
+// dent-data-api 側に /internal/reviews.json 未実装のうちは null を返してモック表示にフォールバック。
+// 仕様: review/API_SPEC_reviews.md
+async function fetchReviewsApi() {
+  try {
+    const data = await fetchDataApi('/internal/reviews.json');
+    return (data && Array.isArray(data.reviews)) ? data.reviews : null;
+  } catch (e) {
+    if (e && e.requiresAuth) throw e;
+    return null;
+  }
+}
+
 // ============================================================
 // localStorage Cache
 // ============================================================
@@ -486,6 +499,7 @@ async function loadAllData() {
     seasonMaster = cached.seasMaster || [];
     window._airdnaSheets = cached.marketRaw || {};
     window._estatSheets = cached.estatRaw || {};
+    window._reviewsApi = cached.reviewsRaw || null;
     processData();
     renderAll();
     updateTimestamp();
@@ -517,7 +531,7 @@ async function fetchAndUpdate() {
   const detail = document.getElementById('loading-detail');
   if (detail) detail.textContent = '最新データを取得中...';
 
-  const [resv, daily, propMaster, ownMaster, seasMaster, settingsRaw, marketRaw, estatRaw] = await Promise.all([
+  const [resv, daily, propMaster, ownMaster, seasMaster, settingsRaw, marketRaw, estatRaw, reviewsRaw] = await Promise.all([
     fetchSheet('予約データ'),
     fetchSheet('日次データ'),
     fetchPropertyMasterApi(),
@@ -526,6 +540,7 @@ async function fetchAndUpdate() {
     fetch(sheetApiUrl('設定')).then(r => r.json()).catch(() => ({})),
     fetchAirdnaSheets().catch(() => ({})),
     fetchEstatSheets().catch(() => ({})),
+    fetchReviewsApi(),
   ]);
 
   rawReservations = resv;
@@ -535,6 +550,7 @@ async function fetchAndUpdate() {
   seasonMaster = seasMaster;
   window._airdnaSheets = marketRaw || {};
   window._estatSheets = estatRaw || {};
+  window._reviewsApi = reviewsRaw || null;
 
   // 最終同期タイムスタンプ（設定シートはキー・バリュー形式: [[key, value], ...]）
   const settingsRows = settingsRaw.values || [];
@@ -549,7 +565,7 @@ async function fetchAndUpdate() {
   updateTimestamp();
 
   // キャッシュ保存
-  saveCache({ resv, daily, propMaster, ownMaster, seasMaster, marketRaw, estatRaw });
+  saveCache({ resv, daily, propMaster, ownMaster, seasMaster, marketRaw, estatRaw, reviewsRaw });
 }
 
 // ============================================================
@@ -6411,16 +6427,68 @@ const REVIEW_MOCK = (function generateMockReviews() {
   return { reviews, logs };
 })();
 
-let _reviewFilters = { period: 30, area: '全体', lang: 'all', star: 'all' };
+let _reviewFilters = { months: 3, area: '全体', star: 'all' };
 let _rvCharts = {};
+
+// API レビュー → モック互換 shape に正規化
+// チャンネル名「Airbnb - NPA」末尾を物件マスタの airbnbアカウント と突合
+function buildReviewsFromApi(raw) {
+  const accountToProp = {};
+  (properties || []).forEach(p => {
+    const acc = (p.airbnbAccount || '').trim();
+    if (!acc) return;
+    if (!accountToProp[acc]) accountToProp[acc] = p;
+  });
+  return raw.map((r, i) => {
+    const account = (r.account || '').trim();
+    const prop = accountToProp[account];
+    const overall = Number((r.stars && r.stars.overall) || 0);
+    const hasReply = !!(r.response && String(r.response).trim());
+    return {
+      id: `${account}_${r.reservationId || i}`,
+      date: r.date || '',
+      property: prop
+        ? { code: prop.name, name: prop.propName || prop.name, room: '', area: prop.area || 'その他' }
+        : { code: account || '(unknown)', name: r.listing || account || '(unknown)', room: '', area: 'その他' },
+      guest: r.reservationId || '—',
+      star: overall,
+      body: r.publicReview || '',
+      stars: {
+        cleanliness: Number(r.stars?.cleanliness) || 0,
+        accuracy: Number(r.stars?.accuracy) || 0,
+        checkin: Number(r.stars?.checkin) || 0,
+        communication: Number(r.stars?.communication) || 0,
+        location: Number(r.stars?.location) || 0,
+        value: Number(r.stars?.value) || 0,
+      },
+      privateFeedback: r.privateFeedback || null,
+      replyStatus: hasReply ? 'posted' : 'none',
+      replyText: r.response || null,
+      // Phase 2+ で埋める
+      lang: null,
+      sentiment: null,
+      replyDraft: null,
+      _isReal: true,
+    };
+  });
+}
+
+function _getReviewsData() {
+  if (window._reviewsApi && Array.isArray(window._reviewsApi) && properties && properties.length > 0) {
+    return { reviews: buildReviewsFromApi(window._reviewsApi), isReal: true };
+  }
+  return { reviews: REVIEW_MOCK.reviews, isReal: false };
+}
 
 function _filterReviews() {
   const now = new Date();
-  const cutoff = new Date(now.getTime() - _reviewFilters.period * 86400000);
-  return REVIEW_MOCK.reviews.filter(r => {
+  // 期間: months ヶ月前の月初を境界に
+  const cutoff = new Date(now.getFullYear(), now.getMonth() - _reviewFilters.months + 1, 1);
+  const { reviews } = _getReviewsData();
+  return reviews.filter(r => {
+    if (!r.date) return false;
     if (new Date(r.date) < cutoff) return false;
     if (_reviewFilters.area !== '全体' && r.property.area !== _reviewFilters.area) return false;
-    if (_reviewFilters.lang !== 'all' && r.lang !== _reviewFilters.lang) return false;
     return true;
   });
 }
@@ -6428,9 +6496,8 @@ function _filterReviews() {
 function setReviewFilter(el, key) {
   el.parentElement.querySelectorAll('.pill').forEach(p => p.classList.remove('active'));
   el.classList.add('active');
-  if (key === 'period') _reviewFilters.period = parseInt(el.dataset.period, 10);
+  if (key === 'period') _reviewFilters.months = parseInt(el.dataset.months, 10);
   if (key === 'area') _reviewFilters.area = el.dataset.area;
-  if (key === 'lang') _reviewFilters.lang = el.dataset.lang;
   if (key === 'star') _reviewFilters.star = el.dataset.star;
   renderReviewTab();
   initReviewCharts();
@@ -8513,29 +8580,76 @@ function renderShinpouTab() {
   document.getElementById('kpi-shinpou-monthly-nights').textContent = totalMonthlyNights + '日';
 }
 
+// Phase 1 で実データから取れない要素は薄表示にする
+function _rvSetPending(el, label) {
+  if (!el) return;
+  el.style.opacity = '0.35';
+  el.style.position = 'relative';
+  el.dataset.pendingLabel = label || '準備中';
+}
+function _rvClearPending(el) {
+  if (!el) return;
+  el.style.opacity = '';
+  el.style.position = '';
+  delete el.dataset.pendingLabel;
+}
+
 function renderReviewTab() {
   if (!document.getElementById('rv-kpi-avg')) return;
+  const { reviews, isReal } = _getReviewsData();
   const filtered = _filterReviews();
 
-  // KPI
+  // 上部バナー
+  const banner = document.getElementById('rv-status-banner');
+  if (banner) {
+    if (isReal) {
+      banner.style.background = '#e8f5e9';
+      banner.style.borderColor = '#a5d6a7';
+      banner.style.color = '#2e7d32';
+      banner.innerHTML = '✓ <strong>Phase 1: 実データ表示中</strong> — 言語 / 感情分析 / キーワード / 自動返信 / 実行ログ は準備中（薄い表示）';
+    } else {
+      banner.style.background = '#fff8e1';
+      banner.style.borderColor = '#ffd54f';
+      banner.style.color = '#795548';
+      banner.innerHTML = '⚠ <strong>API未接続（モックデータ）</strong> — <code>/internal/reviews.json</code> 実装待ち。設計は <code>review/API_SPEC_reviews.md</code>';
+    }
+  }
+
+  // ===== KPI =====
   const avg = filtered.length ? (filtered.reduce((s, r) => s + r.star, 0) / filtered.length) : 0;
-  const negCount = filtered.filter(r => r.sentiment === 'neg').length;
-  const posted = REVIEW_MOCK.logs.filter(l => l.system === 'A_post' && l.status === 'success').length;
-  document.getElementById('rv-kpi-avg').textContent = avg.toFixed(2) + ' ★';
+  document.getElementById('rv-kpi-avg').textContent = filtered.length ? avg.toFixed(2) + ' ★' : '—';
   document.getElementById('rv-kpi-avg-sub').textContent = filtered.length ? `n=${filtered.length}` : '';
   document.getElementById('rv-kpi-count').textContent = filtered.length;
-  document.getElementById('rv-kpi-count-sub').textContent = `直近${_reviewFilters.period}日`;
-  // 記載率: mock = received / (received + 推定未記載)
-  const totalReservations = Math.floor(filtered.length / 0.62);
-  const rate = totalReservations ? (filtered.length / totalReservations * 100) : 0;
-  document.getElementById('rv-kpi-rate').textContent = rate.toFixed(0) + '%';
-  const negRate = filtered.length ? (negCount / filtered.length * 100) : 0;
-  document.getElementById('rv-kpi-neg').textContent = negRate.toFixed(1) + '%';
-  document.getElementById('rv-kpi-neg-sub').textContent = `${negCount} 件`;
-  document.getElementById('rv-kpi-posted').textContent = posted;
-  document.getElementById('rv-kpi-posted-sub').textContent = '直近14日';
+  document.getElementById('rv-kpi-count-sub').textContent = `直近${_reviewFilters.months}ヶ月`;
 
-  // 物件別テーブル
+  const rateCard = document.getElementById('rv-kpi-rate').closest('.kpi-card');
+  const negCard = document.getElementById('rv-kpi-neg').closest('.kpi-card');
+  const postedCard = document.getElementById('rv-kpi-posted').closest('.kpi-card');
+
+  if (isReal) {
+    _rvSetPending(rateCard, 'Phase 1.5');
+    _rvSetPending(negCard, 'Phase 2');
+    _rvSetPending(postedCard, '系統A');
+    document.getElementById('rv-kpi-rate').textContent = '—';
+    document.getElementById('rv-kpi-neg').textContent = '—';
+    document.getElementById('rv-kpi-neg-sub').textContent = '感情分析未実装';
+    document.getElementById('rv-kpi-posted').textContent = '—';
+    document.getElementById('rv-kpi-posted-sub').textContent = '自動投稿未実装';
+  } else {
+    _rvClearPending(rateCard); _rvClearPending(negCard); _rvClearPending(postedCard);
+    const totalReservations = Math.floor(filtered.length / 0.62);
+    const rate = totalReservations ? (filtered.length / totalReservations * 100) : 0;
+    document.getElementById('rv-kpi-rate').textContent = rate.toFixed(0) + '%';
+    const negCount = filtered.filter(r => r.sentiment === 'neg').length;
+    const negRate = filtered.length ? (negCount / filtered.length * 100) : 0;
+    document.getElementById('rv-kpi-neg').textContent = negRate.toFixed(1) + '%';
+    document.getElementById('rv-kpi-neg-sub').textContent = `${negCount} 件`;
+    const posted = REVIEW_MOCK.logs.filter(l => l.system === 'A_post' && l.status === 'success').length;
+    document.getElementById('rv-kpi-posted').textContent = posted;
+    document.getElementById('rv-kpi-posted-sub').textContent = '直近14日';
+  }
+
+  // ===== 物件別テーブル =====
   const byProp = {};
   filtered.forEach(r => {
     const k = r.property.code;
@@ -8545,13 +8659,11 @@ function renderReviewTab() {
   const propRows = Object.values(byProp).map(o => {
     const cnt = o.list.length;
     const avgS = o.list.reduce((s, r) => s + r.star, 0) / cnt;
-    const neg = o.list.filter(r => r.sentiment === 'neg').length;
+    const neg = isReal ? null : o.list.filter(r => r.sentiment === 'neg').length;
     const latest = o.list.map(r => r.date).sort().slice(-1)[0];
-    const rateP = Math.min(100, 50 + Math.random() * 40);
-    return { prop: o.prop, cnt, avg: avgS, neg, latest, rate: rateP };
+    return { prop: o.prop, cnt, avg: avgS, neg, latest };
   }).sort((a, b) => b.cnt - a.cnt);
 
-  // 物件マスタからAirbnb情報をルックアップ（コード正規化マッチ）
   const airbnbByCode = {};
   (propertyMaster || []).forEach(pm => {
     const code = pm['物件コード'] || '';
@@ -8565,49 +8677,57 @@ function renderReviewTab() {
   const tbody = document.querySelector('#rv-property-table tbody');
   tbody.innerHTML = propRows.map(r => {
     const starColor = r.avg >= 4.7 ? 'positive' : r.avg < 4.3 ? 'negative' : '';
-    const negPct = (r.neg / r.cnt * 100).toFixed(0);
-    const trend = r.avg >= 4.7 ? '▲' : r.avg < 4.3 ? '▼' : '→';
     const ab = airbnbByCode[r.prop.code] || {};
     const link = ab.listingId
       ? ` <a href="https://www.airbnb.com/rooms/${ab.listingId}" target="_blank" style="font-size:11px;color:#007aff;text-decoration:none;">↗</a>`
       : '';
     const acctBadge = ab.account ? ` <span class="badge-blue">${ab.account}</span>` : '';
+    const roomStr = r.prop.room ? ` #${r.prop.room}` : '';
+    const rateCell = isReal ? '<span style="opacity:.35">—</span>' : `${Math.min(100, 50 + Math.random() * 40).toFixed(0)}%`;
+    const negCell = isReal
+      ? '<span style="opacity:.35">—</span>'
+      : `<span class="${r.neg > 0 ? 'negative' : ''}">${(r.neg / r.cnt * 100).toFixed(0)}%</span>`;
+    const trendCell = isReal ? '<span style="opacity:.35">—</span>' : (r.avg >= 4.7 ? '▲' : r.avg < 4.3 ? '▼' : '→');
     return `<tr>
-      <td>${r.prop.name} #${r.prop.room}${link}${acctBadge}</td>
+      <td>${r.prop.name}${roomStr}${link}${acctBadge}</td>
       <td>${r.prop.area}</td>
       <td class="text-right">${r.cnt}</td>
       <td class="text-right ${starColor}">${r.avg.toFixed(2)}</td>
-      <td class="text-right">${r.rate.toFixed(0)}%</td>
-      <td class="text-right ${r.neg > 0 ? 'negative' : ''}">${negPct}%</td>
-      <td>${r.latest}</td>
-      <td>${trend}</td>
+      <td class="text-right">${rateCell}</td>
+      <td class="text-right">${negCell}</td>
+      <td>${latestOrDash(r.latest)}</td>
+      <td>${trendCell}</td>
     </tr>`;
-  }).join('');
+  }).join('') || '<tr><td colspan="8" style="color:#999;text-align:center;padding:20px;">該当レビューがありません</td></tr>';
 
-  // 承認待ち
-  const pending = filtered.filter(r => r.replyStatus === 'pending');
-  document.getElementById('rv-approval-count').textContent = pending.length;
-  document.getElementById('rv-approval-list').innerHTML = pending.length ? pending.map(r => `
-    <div style="border:1px solid #ffe1c2;background:#fffbf5;border-radius:8px;padding:14px 16px;margin-bottom:10px;">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-        <div style="font-size:13px;font-weight:600;">${r.property.name} #${r.property.room} <span style="color:#999;font-weight:400;margin-left:8px;">${r.guest} / ${r.date}</span></div>
-        <div><span class="badge-red">★${r.star}</span></div>
+  // ===== 承認待ち =====
+  const approvalCard = document.getElementById('rv-approval-card');
+  if (isReal) {
+    _rvSetPending(approvalCard, 'Phase 4');
+    document.getElementById('rv-approval-count').textContent = '—';
+    document.getElementById('rv-approval-list').innerHTML = '<div style="color:#999;font-size:13px;padding:20px 0;text-align:center;">返信ドラフト生成は Phase 4 で実装予定</div>';
+  } else {
+    _rvClearPending(approvalCard);
+    const pending = filtered.filter(r => r.replyStatus === 'pending');
+    document.getElementById('rv-approval-count').textContent = pending.length;
+    document.getElementById('rv-approval-list').innerHTML = pending.length ? pending.map(r => `
+      <div style="border:1px solid #ffe1c2;background:#fffbf5;border-radius:8px;padding:14px 16px;margin-bottom:10px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+          <div style="font-size:13px;font-weight:600;">${r.property.name} #${r.property.room} <span style="color:#999;font-weight:400;margin-left:8px;">${r.guest} / ${r.date}</span></div>
+          <div><span class="badge-red">★${r.star}</span></div>
+        </div>
+        <div style="font-size:12px;color:#444;background:#f5f5f7;padding:8px 12px;border-radius:6px;margin-bottom:8px;"><strong>レビュー本文:</strong> ${r.body}</div>
+        <div style="font-size:12px;color:#444;background:#eef5ff;padding:8px 12px;border-radius:6px;margin-bottom:10px;"><strong>提案返信（Claude生成）:</strong> ${r.replyDraft}</div>
+        <div style="display:flex;gap:8px;">
+          <button class="refresh-btn" style="background:#34c759;color:white;border:none;">承認</button>
+          <button class="refresh-btn" style="background:#ff9500;color:white;border:none;">編集</button>
+          <button class="refresh-btn" style="background:#ff3b30;color:white;border:none;">却下</button>
+        </div>
       </div>
-      <div style="font-size:12px;color:#444;background:#f5f5f7;padding:8px 12px;border-radius:6px;margin-bottom:8px;">
-        <strong>レビュー本文:</strong> ${r.body}
-      </div>
-      <div style="font-size:12px;color:#444;background:#eef5ff;padding:8px 12px;border-radius:6px;margin-bottom:10px;">
-        <strong>提案返信（Claude生成）:</strong> ${r.replyDraft}
-      </div>
-      <div style="display:flex;gap:8px;">
-        <button class="refresh-btn" style="background:#34c759;color:white;border:none;">承認</button>
-        <button class="refresh-btn" style="background:#ff9500;color:white;border:none;">編集</button>
-        <button class="refresh-btn" style="background:#ff3b30;color:white;border:none;">却下</button>
-      </div>
-    </div>
-  `).join('') : '<div style="color:#999;font-size:13px;padding:20px 0;text-align:center;">承認待ちはありません</div>';
+    `).join('') : '<div style="color:#999;font-size:13px;padding:20px 0;text-align:center;">承認待ちはありません</div>';
+  }
 
-  // プライベートFB
+  // ===== プライベートFB =====
   const withPrivate = filtered.filter(r => r.privateFeedback);
   const privByProp = {};
   withPrivate.forEach(r => {
@@ -8618,13 +8738,13 @@ function renderReviewTab() {
   document.getElementById('rv-private-list').innerHTML = Object.values(privByProp).length
     ? Object.values(privByProp).slice(0, 8).map(o => `
       <div style="border-left:3px solid #ff9500;padding:8px 14px;margin-bottom:10px;background:#fafafa;border-radius:0 6px 6px 0;">
-        <div style="font-weight:600;font-size:12px;margin-bottom:6px;">${o.prop.name} #${o.prop.room} <span style="color:#999;font-weight:400;">（${o.list.length}件）</span></div>
+        <div style="font-weight:600;font-size:12px;margin-bottom:6px;">${o.prop.name}${o.prop.room ? ' #' + o.prop.room : ''} <span style="color:#999;font-weight:400;">（${o.list.length}件）</span></div>
         ${o.list.slice(0, 3).map(r => `<div style="font-size:12px;color:#555;margin:3px 0;">・ ${r.privateFeedback} <span style="color:#999;">(${r.date} / ${r.guest})</span></div>`).join('')}
       </div>
     `).join('')
     : '<div style="color:#999;font-size:13px;padding:20px 0;text-align:center;">プライベートフィードバックはありません</div>';
 
-  // レビュー一覧
+  // ===== レビュー一覧 =====
   let listFiltered = filtered;
   if (_reviewFilters.star !== 'all') {
     if (_reviewFilters.star === 'lt3') listFiltered = listFiltered.filter(r => r.star < 3);
@@ -8635,7 +8755,8 @@ function renderReviewTab() {
   listBody.innerHTML = listFiltered.map(r => {
     const sentBadge = r.sentiment === 'pos' ? '<span class="badge-green">ポジ</span>' :
                       r.sentiment === 'neg' ? '<span class="badge-red">ネガ</span>' :
-                      '<span class="badge-gray">中立</span>';
+                      r.sentiment === 'neu' ? '<span class="badge-gray">中立</span>' :
+                      '<span style="opacity:.35">—</span>';
     const replyBadge = {
       none: '<span class="badge-gray">未返信</span>',
       draft: '<span class="badge-blue">下書き</span>',
@@ -8643,13 +8764,15 @@ function renderReviewTab() {
       approved: '<span class="badge-blue">承認済</span>',
       posted: '<span class="badge-green">投稿済</span>',
       rejected: '<span class="badge-gray">却下</span>'
-    }[r.replyStatus];
+    }[r.replyStatus] || '<span style="opacity:.35">—</span>';
     const starColor = r.star >= 4 ? 'positive' : r.star <= 2 ? 'negative' : '';
+    const langCell = r.lang ? r.lang.toUpperCase() : '<span style="opacity:.35">—</span>';
+    const roomStr = r.property.room ? ` #${r.property.room}` : '';
     return `<tr>
       <td>${r.date}</td>
-      <td>${r.property.name} #${r.property.room}</td>
+      <td>${r.property.name}${roomStr}</td>
       <td>${r.guest}</td>
-      <td>${r.lang.toUpperCase()}</td>
+      <td>${langCell}</td>
       <td class="text-right ${starColor}">★${r.star}</td>
       <td style="max-width:380px;white-space:normal;font-size:12px;">${r.body}</td>
       <td>${sentBadge}</td>
@@ -8657,53 +8780,71 @@ function renderReviewTab() {
     </tr>`;
   }).join('');
 
-  // ★フィルタのpill clickをbind
   document.querySelectorAll('#rv-list-star-filter .pill').forEach(p => {
     p.onclick = () => setReviewFilter(p, 'star');
   });
 
-  // 実行ログ
+  // ===== 実行ログ =====
   const logBody = document.querySelector('#rv-log-table tbody');
-  logBody.innerHTML = REVIEW_MOCK.logs.map(l => {
-    const stBadge = l.status === 'success' ? '<span class="badge-green">成功</span>' :
-                    l.status === 'skipped' ? '<span class="badge-gray">スキップ</span>' :
-                    '<span class="badge-red">失敗</span>';
-    return `<tr>
-      <td style="font-size:12px;">${l.datetime}</td>
-      <td><span class="badge-blue">${l.system}</span></td>
-      <td>${l.property.name} #${l.property.room}</td>
-      <td>${l.guest}</td>
-      <td>${l.lang.toUpperCase()}</td>
-      <td>${stBadge}</td>
-      <td style="font-size:12px;color:#666;">${l.note}</td>
-    </tr>`;
-  }).join('');
+  const logCard = logBody.closest('.card');
+  if (isReal) {
+    _rvSetPending(logCard, '系統A');
+    logBody.innerHTML = '<tr><td colspan="7" style="color:#999;text-align:center;padding:20px;">自動投稿（系統A）実装後に表示されます</td></tr>';
+  } else {
+    _rvClearPending(logCard);
+    logBody.innerHTML = REVIEW_MOCK.logs.map(l => {
+      const stBadge = l.status === 'success' ? '<span class="badge-green">成功</span>' :
+                      l.status === 'skipped' ? '<span class="badge-gray">スキップ</span>' :
+                      '<span class="badge-red">失敗</span>';
+      return `<tr>
+        <td style="font-size:12px;">${l.datetime}</td>
+        <td><span class="badge-blue">${l.system}</span></td>
+        <td>${l.property.name} #${l.property.room}</td>
+        <td>${l.guest}</td>
+        <td>${l.lang.toUpperCase()}</td>
+        <td>${stBadge}</td>
+        <td style="font-size:12px;color:#666;">${l.note}</td>
+      </tr>`;
+    }).join('');
+  }
 
-  // キーワード
-  const kwPos = [
-    { w: '清潔', n: 42 }, { w: '立地', n: 38 }, { w: '快適', n: 31 },
-    { w: '広い', n: 24 }, { w: 'スタッフ', n: 19 }, { w: 'recommended', n: 17 },
-    { w: 'comfortable', n: 14 }, { w: '便利', n: 12 }
-  ];
-  const kwNeg = [
-    { w: 'Wi-Fi', n: 8 }, { w: '狭い', n: 5 }, { w: '臭い', n: 3 },
-    { w: '騒音', n: 3 }, { w: 'shower', n: 2 }
-  ];
-  const kwHtml = arr => arr.map(k => {
-    const sz = 11 + Math.min(k.n / 4, 8);
-    return `<span style="display:inline-block;margin:3px;padding:3px 10px;background:#f0f0f0;border-radius:12px;font-size:${sz}px;">${k.w} <span style="color:#999;font-size:10px;">×${k.n}</span></span>`;
-  }).join('');
-  document.getElementById('rv-kw-pos').innerHTML = kwHtml(kwPos);
-  document.getElementById('rv-kw-neg').innerHTML = kwHtml(kwNeg);
+  // ===== キーワード =====
+  const kwPosEl = document.getElementById('rv-kw-pos');
+  const kwNegEl = document.getElementById('rv-kw-neg');
+  const kwCard = kwPosEl ? kwPosEl.closest('.card') : null;
+  if (isReal) {
+    _rvSetPending(kwCard, 'Phase 2');
+    if (kwPosEl) kwPosEl.innerHTML = '<div style="color:#999;font-size:12px;padding:8px 0;">LLM感情分析実装後に表示されます</div>';
+    if (kwNegEl) kwNegEl.innerHTML = '';
+  } else {
+    _rvClearPending(kwCard);
+    const kwPos = [
+      { w: '清潔', n: 42 }, { w: '立地', n: 38 }, { w: '快適', n: 31 },
+      { w: '広い', n: 24 }, { w: 'スタッフ', n: 19 }, { w: 'recommended', n: 17 },
+      { w: 'comfortable', n: 14 }, { w: '便利', n: 12 }
+    ];
+    const kwNeg = [
+      { w: 'Wi-Fi', n: 8 }, { w: '狭い', n: 5 }, { w: '臭い', n: 3 },
+      { w: '騒音', n: 3 }, { w: 'shower', n: 2 }
+    ];
+    const kwHtml = arr => arr.map(k => {
+      const sz = 11 + Math.min(k.n / 4, 8);
+      return `<span style="display:inline-block;margin:3px;padding:3px 10px;background:#f0f0f0;border-radius:12px;font-size:${sz}px;">${k.w} <span style="color:#999;font-size:10px;">×${k.n}</span></span>`;
+    }).join('');
+    if (kwPosEl) kwPosEl.innerHTML = kwHtml(kwPos);
+    if (kwNegEl) kwNegEl.innerHTML = kwHtml(kwNeg);
+  }
 
-  // フィルタpillのbind（毎回再bind）
+  // フィルタpillのbind（毎回再bind、言語フィルタは Phase 1 で削除済み）
   document.querySelectorAll('#review-period-filter .pill').forEach(p => p.onclick = () => setReviewFilter(p, 'period'));
   document.querySelectorAll('#review-area-filter .pill').forEach(p => p.onclick = () => setReviewFilter(p, 'area'));
-  document.querySelectorAll('#review-lang-filter .pill').forEach(p => p.onclick = () => setReviewFilter(p, 'lang'));
 }
+
+function latestOrDash(s) { return s || '<span style="opacity:.35">—</span>'; }
 
 function initReviewCharts() {
   if (typeof Chart === 'undefined') return;
+  const { isReal } = _getReviewsData();
   const filtered = _filterReviews();
 
   // 月別集計
@@ -8712,12 +8853,12 @@ function initReviewCharts() {
     const m = r.date.slice(0, 7);
     if (!byMonth[m]) byMonth[m] = { stars: [], pos: 0, neu: 0, neg: 0 };
     byMonth[m].stars.push(r.star);
-    byMonth[m][r.sentiment]++;
+    if (r.sentiment) byMonth[m][r.sentiment]++;
   });
   const months = Object.keys(byMonth).sort();
   const trendData = months.map(m => {
     const ss = byMonth[m].stars;
-    return ss.reduce((a, b) => a + b, 0) / ss.length;
+    return ss.length ? ss.reduce((a, b) => a + b, 0) / ss.length : 0;
   });
   const posData = months.map(m => byMonth[m].pos);
   const neuData = months.map(m => byMonth[m].neu);
@@ -8746,24 +8887,32 @@ function initReviewCharts() {
     });
   }
 
-  if (_rvCharts.sent) _rvCharts.sent.destroy();
+  // 月次ネガポジ: Phase 1 では実データから出ない
   const sentCtx = document.getElementById('rv-sentiment-chart');
-  if (sentCtx) {
-    _rvCharts.sent = new Chart(sentCtx, {
-      type: 'bar',
-      data: {
-        labels: months,
-        datasets: [
-          { label: 'ポジ', data: posData, backgroundColor: '#34c759' },
-          { label: '中立', data: neuData, backgroundColor: '#aaa' },
-          { label: 'ネガ', data: negData, backgroundColor: '#ff3b30' }
-        ]
-      },
-      options: {
-        responsive: true,
-        scales: { x: { stacked: true }, y: { stacked: true } }
-      }
-    });
+  const sentCard = sentCtx ? sentCtx.closest('.card') : null;
+  if (_rvCharts.sent) { _rvCharts.sent.destroy(); _rvCharts.sent = null; }
+  if (isReal) {
+    _rvSetPending(sentCard, 'Phase 2');
+    // Chartは描画せず、canvas上に注釈は出さず空のまま（カード自体が薄い）
+  } else {
+    _rvClearPending(sentCard);
+    if (sentCtx) {
+      _rvCharts.sent = new Chart(sentCtx, {
+        type: 'bar',
+        data: {
+          labels: months,
+          datasets: [
+            { label: 'ポジ', data: posData, backgroundColor: '#34c759' },
+            { label: '中立', data: neuData, backgroundColor: '#aaa' },
+            { label: 'ネガ', data: negData, backgroundColor: '#ff3b30' }
+          ]
+        },
+        options: {
+          responsive: true,
+          scales: { x: { stacked: true }, y: { stacked: true } }
+        }
+      });
+    }
   }
 
   // レーダー（カテゴリ別★平均）
