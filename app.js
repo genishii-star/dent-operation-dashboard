@@ -332,7 +332,12 @@ const DATA_API_BASE = 'https://api.dent-inc.com';
 const REGION_TO_AREA = {
   osaka: '大阪', kyoto: '京都', tokyo: '東京', hyogo: '兵庫', okinawa: '沖縄',
 };
-const STATUS_TO_JA = { active: '稼働中' };
+const STATUS_TO_JA = {
+  active: '稼働中',
+  preparing: '準備中',
+  paused: '停止中',
+  ended: '終了',
+};
 
 async function fetchDataApi(path) {
   let resp;
@@ -376,7 +381,10 @@ function facilityYamlToMasterRows(f) {
     '住所': f.address || '',
     'エリア': REGION_TO_AREA[region] || '',
     'KPI除外': kpiExclude ? 'TRUE' : '',
-    'ステータス': STATUS_TO_JA[f.status] || '稼働中',
+    // status 未設定の YAML のみ '稼働中' フォールバック。
+    // preparing/paused/ended 等は STATUS_TO_JA で明示マップし、未知の値は raw を残す
+    // (誤って 稼働中 扱いされてフィルタを素通りしないように)
+    'ステータス': STATUS_TO_JA[f.status] || (f.status ? f.status : '稼働中'),
     'airbnbアカウント': f.airbnb_account || '',
     'airbnbリスティングID': f.airbnb_listing_id || '',
     '許可種類': f.permit_type || '',
@@ -6431,17 +6439,52 @@ let _reviewFilters = { months: 3, area: '全体', star: 'all' };
 let _rvCharts = {};
 
 // API レビュー → モック互換 shape に正規化
-// チャンネル名「Airbnb - NPA」末尾を物件マスタの airbnbアカウント と突合
+// チャンネル名「Airbnb - NPA」末尾を物件マスタの 物件コード と突合。
+// 95% は code uppercase で直接一致するが、以下の例外がある:
+//   - 複数部屋 1 アカウント (DIS → DIS207/DIS606): listing title 内の部屋番号で disambiguate
+//   - 別名アカウント (SSI→SOL, HGK2→HGK): エイリアステーブルで吸収
+const REVIEW_ACCOUNT_ALIASES = {
+  SSI: 'SOL',
+  HGK2: 'HGK',
+};
+
 function buildReviewsFromApi(raw) {
-  const accountToProp = {};
+  // (1) 物件コード(uppercase) → property
+  const codeToProp = {};
+  // (2) 同じ "account 接頭辞" を持つ部屋を束ねる (multi-room facility 用)
+  //     e.g. accountPrefix "DIS" → [DIS207, DIS606]
+  const accountToRooms = {};
   (properties || []).forEach(p => {
-    const acc = (p.airbnbAccount || '').trim();
-    if (!acc) return;
-    if (!accountToProp[acc]) accountToProp[acc] = p;
+    const code = (p.name || '').toUpperCase();
+    if (!code) return;
+    codeToProp[code] = p;
+    const prefix = (code.match(/^([A-Z]+)/) || [, code])[1];
+    (accountToRooms[prefix] ||= []).push(p);
   });
+
+  function resolveProp(account, listing) {
+    const a = (account || '').trim().toUpperCase();
+    if (!a) return null;
+    if (codeToProp[a]) return codeToProp[a];
+    const aliased = REVIEW_ACCOUNT_ALIASES[a];
+    if (aliased && codeToProp[aliased]) return codeToProp[aliased];
+    const prefix = aliased || a;
+    const rooms = accountToRooms[prefix];
+    if (!rooms || rooms.length === 0) return null;
+    if (rooms.length === 1) return rooms[0];
+    const ls = (listing || '').toUpperCase();
+    // 部屋コードの接頭辞を剥がしたサフィックス (e.g. DIS207 → "207") が listing 内にあれば一致
+    for (const r of rooms) {
+      const code = (r.name || '').toUpperCase();
+      const suffix = code.slice(prefix.length);
+      if (suffix && ls.includes(suffix)) return r;
+    }
+    return rooms[0];
+  }
+
   return raw.map((r, i) => {
     const account = (r.account || '').trim();
-    const prop = accountToProp[account];
+    const prop = resolveProp(account, r.listing);
     const overall = Number((r.stars && r.stars.overall) || 0);
     const hasReply = !!(r.response && String(r.response).trim());
     return {
@@ -8688,8 +8731,13 @@ function renderReviewTab() {
       ? '<span style="opacity:.35">—</span>'
       : `<span class="${r.neg > 0 ? 'negative' : ''}">${(r.neg / r.cnt * 100).toFixed(0)}%</span>`;
     const trendCell = isReal ? '<span style="opacity:.35">—</span>' : (r.avg >= 4.7 ? '▲' : r.avg < 4.3 ? '▼' : '→');
+    const codeStr = r.prop.code || '—';
+    const codeLabel = `<strong style="font-family:ui-monospace,monospace;">${codeStr}</strong>`;
+    const nameLabel = r.prop.name && r.prop.name !== codeStr
+      ? ` <span style="color:#666;font-size:12px;">${r.prop.name}</span>`
+      : '';
     return `<tr>
-      <td>${r.prop.name}${roomStr}${link}${acctBadge}</td>
+      <td>${codeLabel}${nameLabel}${roomStr}${link}${acctBadge}</td>
       <td>${r.prop.area}</td>
       <td class="text-right">${r.cnt}</td>
       <td class="text-right ${starColor}">${r.avg.toFixed(2)}</td>
@@ -8736,12 +8784,16 @@ function renderReviewTab() {
     privByProp[k].list.push(r);
   });
   document.getElementById('rv-private-list').innerHTML = Object.values(privByProp).length
-    ? Object.values(privByProp).slice(0, 8).map(o => `
+    ? Object.values(privByProp).slice(0, 8).map(o => {
+        const c = o.prop.code || '—';
+        const n = o.prop.name && o.prop.name !== c ? ` <span style="color:#666;font-weight:400;">${o.prop.name}</span>` : '';
+        return `
       <div style="border-left:3px solid #ff9500;padding:8px 14px;margin-bottom:10px;background:#fafafa;border-radius:0 6px 6px 0;">
-        <div style="font-weight:600;font-size:12px;margin-bottom:6px;">${o.prop.name}${o.prop.room ? ' #' + o.prop.room : ''} <span style="color:#999;font-weight:400;">（${o.list.length}件）</span></div>
+        <div style="font-weight:600;font-size:12px;margin-bottom:6px;"><span style="font-family:ui-monospace,monospace;">${c}</span>${n}${o.prop.room ? ' #' + o.prop.room : ''} <span style="color:#999;font-weight:400;">（${o.list.length}件）</span></div>
         ${o.list.slice(0, 3).map(r => `<div style="font-size:12px;color:#555;margin:3px 0;">・ ${r.privateFeedback} <span style="color:#999;">(${r.date} / ${r.guest})</span></div>`).join('')}
       </div>
-    `).join('')
+    `;
+      }).join('')
     : '<div style="color:#999;font-size:13px;padding:20px 0;text-align:center;">プライベートフィードバックはありません</div>';
 
   // ===== レビュー一覧 =====

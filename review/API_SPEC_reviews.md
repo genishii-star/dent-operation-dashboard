@@ -7,8 +7,8 @@ operation 側 (`app.js`) は `fetchDataApi('/internal/reviews.json')` で呼ぶ�
 
 - スプシ ID: `1uBghVbJw50HN3C3ehhtYKwNHPRCHhOwvJZxy_U83HwE`
 - タイトル: `test2026年度LookerStudio用売上データ`
-- タブ名: 「レビューデータ」（gid=491525933）
-- 認証: スプシオーナーのサービスアカウント or 既存の Sheets API キーで読める権限
+- タブ名: 「レビュー」（gid=491525933）
+- 認証: 既存の Sheets API キー（シートはリンク共有で閲覧可能に設定済み）
 
 ### 元シートのカラム
 
@@ -76,7 +76,7 @@ GET https://api.dent-inc.com/internal/reviews.json
 ## 実装メモ
 
 - 既存の `fetchEstatSheets` / `fetchAirdnaSheets` (app.js:248-) と同じく `sheets.googleapis.com/v4/spreadsheets/{ID}/values/{range}` を叩く実装で十分
-- レンジは `'レビューデータ'!A:O` 等で指定
+- レンジは `'レビュー'!A:O` 等で指定
 - スプシのカラム順が変わる可能性に備え、ヘッダー行を読んで動的にマッピング
 
 ## TODO（運用フェーズ）
