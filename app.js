@@ -5023,8 +5023,6 @@ function initChartsForTab(tabId) {
 function initDailyCharts() {
   const area = currentFilters.dailyArea;
   const now = new Date();
-  const today = new Date(now); today.setHours(0, 0, 0, 0);
-  const todayStr = today.toISOString().split('T')[0];
 
   // Past 3 months + current + future 3 months = 7 months (always, regardless of period filter)
   const chartMonths = [];
@@ -5037,32 +5035,6 @@ function initDailyCharts() {
     chartLabels.push(`${m}月`);
   }
   const currentIdx = 3;
-
-  // 目標/見込みライン用: area適用済み active 物件
-  const activeProps = filterPropertiesByArea(area).filter(p => !p.excludeKpi);
-  const activeCodes = new Set(activeProps.map(p => p.propCode).filter(Boolean));
-  const activeNames = new Set(activeProps.map(p => p.propName).filter(Boolean));
-
-  // Booking curve (CDF): 過去180日 stay 確定済みからリードタイム分布を推定
-  const LEAD_MAX = 180;
-  const _leadCounts = new Array(LEAD_MAX).fill(0);
-  let _leadTotal = 0;
-  const _histStart = new Date(today); _histStart.setDate(_histStart.getDate() - 180);
-  const _histStartStr = _histStart.toISOString().split('T')[0];
-  reservations.forEach(r => {
-    if (r.status === 'キャンセル' || r.status === 'システムキャンセル' || r.status === 'ブロックされた') return;
-    if (!activeCodes.has(r.propCode) && !activeNames.has(r.property)) return;
-    if (!r.checkin || !r.date || !r.nights || r.nights <= 0) return;
-    if (r.checkin < _histStartStr || r.checkin > todayStr) return;
-    const lead = Math.max(0, Math.round((new Date(r.checkin) - new Date(r.date)) / 86400000));
-    _leadCounts[Math.min(lead, LEAD_MAX - 1)] += r.nights;
-    _leadTotal += r.nights;
-  });
-  const monthlyCdf = new Array(LEAD_MAX);
-  if (_leadTotal > 0) {
-    let cum = 0;
-    for (let k = LEAD_MAX - 1; k >= 0; k--) { cum += _leadCounts[k]; monthlyCdf[k] = cum / _leadTotal; }
-  } else { monthlyCdf.fill(1); }
 
   // Collect channel sales per month (checkin-based, from reservation data)
   const channelSet = new Set();
@@ -5080,34 +5052,6 @@ function initDailyCharts() {
     const ch = r.channel || 'その他';
     channelSet.add(ch);
     monthChannelSales[ciYm][ch] = (monthChannelSales[ciYm][ch] || 0) + (r.sales || 0);
-  });
-
-  // 月別目標 (シーズン別合計) + 月別見込み (pace補正)
-  const monthlyTargets = chartMonths.map(ym => {
-    const monthNum = parseInt(ym.split('-')[1], 10);
-    return Math.round(activeProps.reduce((s, p) => s + (getTargetForProperty(p, monthNum) || 0), 0));
-  });
-  const monthlyForecasts = chartMonths.map((ym, idx) => {
-    const booked = Object.values(monthChannelSales[ym] || {}).reduce((s, v) => s + v, 0);
-    const [yy, mm] = ym.split('-').map(Number);
-    const monthStart = new Date(yy, mm - 1, 1);
-    const monthEnd = new Date(yy, mm, 0);
-    if (monthEnd < today) return Math.round(booked); // past month → 確定
-    const startEff = new Date(Math.max(monthStart.getTime(), today.getTime()));
-    let totalAhead = 0, n = 0;
-    for (let cur = new Date(startEff); cur <= monthEnd; cur.setDate(cur.getDate() + 1)) {
-      totalAhead += Math.round((cur - today) / 86400000); n++;
-    }
-    const avgAhead = n > 0 ? Math.round(totalAhead / n) : 0;
-    const factor = Math.max(0.05, monthlyCdf[Math.min(avgAhead, LEAD_MAX - 1)] || 1);
-    if (idx === currentIdx) {
-      // 当月: 経過日数は確定、残日数のみ pace補正
-      const daysInMonth = monthEnd.getDate();
-      const pastDays = Math.max(0, today.getDate() - 1);
-      const futureDays = daysInMonth - pastDays;
-      return Math.round(booked * (pastDays / daysInMonth) + (booked * (futureDays / daysInMonth)) / factor);
-    }
-    return Math.round(booked / factor);
   });
 
   const channels = [...channelSet].sort((a, b) => {
@@ -5153,14 +5097,9 @@ function initDailyCharts() {
         c.restore();
       }
     };
-    const datasetsWithLines = [
-      ...datasets.map(ds => ({ ...ds, type: 'bar', stack: 'sales', order: 4 })),
-      { type: 'line', label: '見込み (pace)', data: monthlyForecasts, borderColor: 'rgba(231,76,60,0.85)', backgroundColor: 'transparent', borderDash: [6, 4], borderWidth: 2, tension: 0.25, pointRadius: 3, pointBackgroundColor: 'rgba(231,76,60,0.85)', order: 1 },
-      { type: 'line', label: '目標', data: monthlyTargets, borderColor: 'rgba(120,120,120,0.85)', backgroundColor: 'transparent', borderDash: [2, 3], borderWidth: 1.5, tension: 0, pointRadius: 2, pointBackgroundColor: 'rgba(120,120,120,0.85)', order: 2 },
-    ];
     allCharts['dailyMonthlySales'] = new Chart(ctx1, {
       type: 'bar',
-      data: { labels: chartLabels, datasets: datasetsWithLines },
+      data: { labels: chartLabels, datasets },
       plugins: [stackedTotalPlugin],
       options: {
         responsive: true,
