@@ -5179,14 +5179,14 @@ function initDailyCharts() {
     });
   }
 
-  // Chart 4: 日別 売上 / 稼働率 (過去30日 + 今後90日)
+  // Chart 4: 日別 売上 / 稼働率 (過去60日 + 今後90日)
   destroyChart('dailyTrend90d');
   const ctx4 = document.getElementById('chartDailyTrend90d');
   if (ctx4) {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     const todayStr = today.toISOString().split('T')[0];
-    const startDate = new Date(today); startDate.setDate(startDate.getDate() - 30);
+    const startDate = new Date(today); startDate.setDate(startDate.getDate() - 60);
     const endDate = new Date(today); endDate.setDate(endDate.getDate() + 89);
     const startStr = startDate.toISOString().split('T')[0];
     const endStr = endDate.toISOString().split('T')[0];
@@ -5237,10 +5237,10 @@ function initDailyCharts() {
     const dayOcc = [];
     const dayBgColors = [];
     const isPastFlags = [];
-    const todayIdx = 30;
+    const todayIdx = 60;
     const dowChars = ['日', '月', '火', '水', '木', '金', '土'];
 
-    for (let i = -30; i < 90; i++) {
+    for (let i = -60; i < 90; i++) {
       const d = new Date(today); d.setDate(d.getDate() + i);
       const ds = d.toISOString().split('T')[0];
       const dow = d.getDay();
