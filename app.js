@@ -5023,6 +5023,8 @@ function initChartsForTab(tabId) {
 function initDailyCharts() {
   const area = currentFilters.dailyArea;
   const now = new Date();
+  const today = new Date(now); today.setHours(0, 0, 0, 0);
+  const todayStr = today.toISOString().split('T')[0];
 
   // Past 3 months + current + future 3 months = 7 months (always, regardless of period filter)
   const chartMonths = [];
@@ -5035,6 +5037,32 @@ function initDailyCharts() {
     chartLabels.push(`${m}月`);
   }
   const currentIdx = 3;
+
+  // 目標/見込みライン用: area適用済み active 物件
+  const activeProps = filterPropertiesByArea(area).filter(p => !p.excludeKpi);
+  const activeCodes = new Set(activeProps.map(p => p.propCode).filter(Boolean));
+  const activeNames = new Set(activeProps.map(p => p.propName).filter(Boolean));
+
+  // Booking curve (CDF): 過去180日 stay 確定済みからリードタイム分布を推定
+  const LEAD_MAX = 180;
+  const _leadCounts = new Array(LEAD_MAX).fill(0);
+  let _leadTotal = 0;
+  const _histStart = new Date(today); _histStart.setDate(_histStart.getDate() - 180);
+  const _histStartStr = _histStart.toISOString().split('T')[0];
+  reservations.forEach(r => {
+    if (r.status === 'キャンセル' || r.status === 'システムキャンセル' || r.status === 'ブロックされた') return;
+    if (!activeCodes.has(r.propCode) && !activeNames.has(r.property)) return;
+    if (!r.checkin || !r.date || !r.nights || r.nights <= 0) return;
+    if (r.checkin < _histStartStr || r.checkin > todayStr) return;
+    const lead = Math.max(0, Math.round((new Date(r.checkin) - new Date(r.date)) / 86400000));
+    _leadCounts[Math.min(lead, LEAD_MAX - 1)] += r.nights;
+    _leadTotal += r.nights;
+  });
+  const monthlyCdf = new Array(LEAD_MAX);
+  if (_leadTotal > 0) {
+    let cum = 0;
+    for (let k = LEAD_MAX - 1; k >= 0; k--) { cum += _leadCounts[k]; monthlyCdf[k] = cum / _leadTotal; }
+  } else { monthlyCdf.fill(1); }
 
   // Collect channel sales per month (checkin-based, from reservation data)
   const channelSet = new Set();
@@ -5052,6 +5080,34 @@ function initDailyCharts() {
     const ch = r.channel || 'その他';
     channelSet.add(ch);
     monthChannelSales[ciYm][ch] = (monthChannelSales[ciYm][ch] || 0) + (r.sales || 0);
+  });
+
+  // 月別目標 (シーズン別合計) + 月別見込み (pace補正)
+  const monthlyTargets = chartMonths.map(ym => {
+    const monthNum = parseInt(ym.split('-')[1], 10);
+    return Math.round(activeProps.reduce((s, p) => s + (getTargetForProperty(p, monthNum) || 0), 0));
+  });
+  const monthlyForecasts = chartMonths.map((ym, idx) => {
+    const booked = Object.values(monthChannelSales[ym] || {}).reduce((s, v) => s + v, 0);
+    const [yy, mm] = ym.split('-').map(Number);
+    const monthStart = new Date(yy, mm - 1, 1);
+    const monthEnd = new Date(yy, mm, 0);
+    if (monthEnd < today) return Math.round(booked); // past month → 確定
+    const startEff = new Date(Math.max(monthStart.getTime(), today.getTime()));
+    let totalAhead = 0, n = 0;
+    for (let cur = new Date(startEff); cur <= monthEnd; cur.setDate(cur.getDate() + 1)) {
+      totalAhead += Math.round((cur - today) / 86400000); n++;
+    }
+    const avgAhead = n > 0 ? Math.round(totalAhead / n) : 0;
+    const factor = Math.max(0.05, monthlyCdf[Math.min(avgAhead, LEAD_MAX - 1)] || 1);
+    if (idx === currentIdx) {
+      // 当月: 経過日数は確定、残日数のみ pace補正
+      const daysInMonth = monthEnd.getDate();
+      const pastDays = Math.max(0, today.getDate() - 1);
+      const futureDays = daysInMonth - pastDays;
+      return Math.round(booked * (pastDays / daysInMonth) + (booked * (futureDays / daysInMonth)) / factor);
+    }
+    return Math.round(booked / factor);
   });
 
   const channels = [...channelSet].sort((a, b) => {
@@ -5097,9 +5153,14 @@ function initDailyCharts() {
         c.restore();
       }
     };
+    const datasetsWithLines = [
+      ...datasets.map(ds => ({ ...ds, type: 'bar', stack: 'sales', order: 4 })),
+      { type: 'line', label: '見込み (pace)', data: monthlyForecasts, borderColor: 'rgba(231,76,60,0.85)', backgroundColor: 'transparent', borderDash: [6, 4], borderWidth: 2, tension: 0.25, pointRadius: 3, pointBackgroundColor: 'rgba(231,76,60,0.85)', order: 1 },
+      { type: 'line', label: '目標', data: monthlyTargets, borderColor: 'rgba(120,120,120,0.85)', backgroundColor: 'transparent', borderDash: [2, 3], borderWidth: 1.5, tension: 0, pointRadius: 2, pointBackgroundColor: 'rgba(120,120,120,0.85)', order: 2 },
+    ];
     allCharts['dailyMonthlySales'] = new Chart(ctx1, {
       type: 'bar',
-      data: { labels: chartLabels, datasets },
+      data: { labels: chartLabels, datasets: datasetsWithLines },
       plugins: [stackedTotalPlugin],
       options: {
         responsive: true,
@@ -8544,83 +8605,18 @@ function initPmbmCharts() {
 
   // Build 7-month series (-3 to +3)
   const now = new Date();
-  const today = new Date(now); today.setHours(0, 0, 0, 0);
-  const todayStr = today.toISOString().split('T')[0];
   const labels = [];
   const pmSeries = [];
   const bmSeries = [];
   const rateSeries = [];
-  const targetSeries = [];   // 月別目標 (繁忙期/通常期/閑散期で切替)
-  const forecastSeries = []; // 月別見込み (過去=実績、未来=確定+pace予測)
-
-  const monthlyProps = filterPropertiesByArea(area).filter(p => !p.excludeKpi);
-  const monthlyCodes = new Set(monthlyProps.map(p => p.propCode).filter(Boolean));
-  const monthlyNames = new Set(monthlyProps.map(p => p.propName).filter(Boolean));
-
-  // 過去180日 stay からの booking curve (CDF: checkin の X 日以上前 booked の割合)
-  const LEAD_MAX = 180;
-  const _leadCounts = new Array(LEAD_MAX).fill(0);
-  let _leadTotal = 0;
-  const _histStart = new Date(today); _histStart.setDate(_histStart.getDate() - 180);
-  const _histStartStr = _histStart.toISOString().split('T')[0];
-  reservations.forEach(r => {
-    if (r.status === 'キャンセル' || r.status === 'システムキャンセル' || r.status === 'ブロックされた') return;
-    if (!monthlyCodes.has(r.propCode) && !monthlyNames.has(r.property)) return;
-    if (!r.checkin || !r.date || !r.nights || r.nights <= 0) return;
-    if (r.checkin < _histStartStr || r.checkin > todayStr) return;
-    const lead = Math.max(0, Math.round((new Date(r.checkin) - new Date(r.date)) / 86400000));
-    _leadCounts[Math.min(lead, LEAD_MAX - 1)] += r.nights;
-    _leadTotal += r.nights;
-  });
-  const monthCdf = new Array(LEAD_MAX);
-  if (_leadTotal > 0) {
-    let cum = 0;
-    for (let k = LEAD_MAX - 1; k >= 0; k--) { cum += _leadCounts[k]; monthCdf[k] = cum / _leadTotal; }
-  } else { monthCdf.fill(1); }
-
   for (let i = -3; i <= 3; i++) {
     const d = new Date(now.getFullYear(), now.getMonth() + i, 1);
     const ym = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
-    const monthNum = d.getMonth() + 1;
-    labels.push(monthNum + '月');
+    labels.push((d.getMonth() + 1) + '月');
     const det = computePmBmDetail([ym], area);
     pmSeries.push(Math.round(det.pmSales));
     bmSeries.push(Math.round(det.bmSales));
     rateSeries.push(Math.round(det.pmRate * 10) / 10);
-
-    // 目標: 全 active 物件のシーズン別目標合計
-    const tgt = monthlyProps.reduce((s, p) => s + (getTargetForProperty(p, monthNum) || 0), 0);
-    targetSeries.push(Math.round(tgt));
-
-    // 見込み:
-    //   PM/BM は checkin/checkout 月単位の集計なので、月の「平均 days-ahead」で
-    //   pace 補正係数を引き、現確定額に乗算する。当月は経過済み日数分を等比で
-    //   実績扱い、残日数分を pace 補正、と分割。
-    const monthEnd = new Date(d.getFullYear(), d.getMonth() + 1, 0);
-    const booked = det.pmSales + det.bmSales;
-    if (monthEnd < today) {
-      forecastSeries.push(Math.round(booked));
-    } else {
-      const monthStartEff = new Date(Math.max(d.getTime(), today.getTime()));
-      let totalAhead = 0, nDays = 0;
-      for (let cur = new Date(monthStartEff); cur <= monthEnd; cur.setDate(cur.getDate() + 1)) {
-        totalAhead += Math.round((cur - today) / 86400000);
-        nDays++;
-      }
-      const avgAhead = nDays > 0 ? Math.round(totalAhead / nDays) : 0;
-      const factor = Math.max(0.05, monthCdf[Math.min(avgAhead, LEAD_MAX - 1)] || 1);
-      let lifted;
-      if (i === 0) {
-        // 当月: 経過日数分は確定、残日数分のみ pace 補正
-        const daysInMonth = monthEnd.getDate();
-        const pastDays = Math.max(0, today.getDate() - 1);
-        const futureDays = daysInMonth - pastDays;
-        lifted = booked * (pastDays / daysInMonth) + (booked * (futureDays / daysInMonth)) / factor;
-      } else {
-        lifted = booked / factor;
-      }
-      forecastSeries.push(Math.round(lifted));
-    }
   }
 
   const monthlyCtx = document.getElementById('chartPmbmMonthly');
@@ -8630,16 +8626,14 @@ function initPmbmCharts() {
       data: {
         labels,
         datasets: [
-          { type: 'bar', label: 'PM売上', data: pmSeries, backgroundColor: CHART_COLORS.blue, borderRadius: 4, stack: 'sales', order: 4 },
-          { type: 'bar', label: 'BM売上', data: bmSeries, backgroundColor: CHART_COLORS.green, borderRadius: 4, stack: 'sales', order: 4 },
-          { type: 'line', label: '見込み (pace)', data: forecastSeries, borderColor: 'rgba(231,76,60,0.8)', backgroundColor: 'transparent', borderDash: [6, 4], borderWidth: 2, tension: 0.25, pointRadius: 3, pointBackgroundColor: 'rgba(231,76,60,0.8)', order: 1 },
-          { type: 'line', label: '目標', data: targetSeries, borderColor: 'rgba(120,120,120,0.9)', backgroundColor: 'transparent', borderDash: [2, 3], borderWidth: 1.5, tension: 0, pointRadius: 2, pointBackgroundColor: 'rgba(120,120,120,0.9)', order: 2 },
+          { label: 'PM売上', data: pmSeries, backgroundColor: CHART_COLORS.blue, borderRadius: 4 },
+          { label: 'BM売上', data: bmSeries, backgroundColor: CHART_COLORS.green, borderRadius: 4 },
         ],
       },
       options: {
         responsive: true,
         plugins: { legend: { position: 'top' }, tooltip: { callbacks: { label: (c) => `${c.dataset.label}: ${fmtYen(c.parsed.y)}` } } },
-        scales: { x: { stacked: true }, y: { stacked: true, beginAtZero: true, ticks: { callback: (v) => fmtYen(v) } } },
+        scales: { y: { beginAtZero: true, ticks: { callback: (v) => fmtYen(v) } } },
       },
     });
   }
