@@ -111,6 +111,7 @@
 
     <div class="card">
       <h2>PM / BM 月次推移 (過去3ヶ月 + 今月 + 未来3ヶ月)</h2>
+      <p style="font-size:12px;color:#86868b;margin:-4px 0 12px;">📊 売上はPM+BM積み上げ。<span style="color:rgba(231,76,60,0.85);">赤破線</span>=pace補正済み見込み (今月は経過実績+残日数の予測、未来月は確定×pace)、<span style="color:#888;">灰点線</span>=月別目標 (シーズン別合計)</p>
       <canvas id="chartPmbmMonthly" height="100"></canvas>
     </div>
 
@@ -456,7 +457,7 @@
 
     <div class="card">
       <h2>日別 売上 / 稼働率 (過去60日 + 今後90日)</h2>
-      <p style="font-size:12px;color:#86868b;margin:-4px 0 12px;">📊 過去は日次データ実績、未来は確定予約から日割り按分。今日を境にバー色が変化します。</p>
+      <p style="font-size:12px;color:#86868b;margin:-4px 0 12px;">📊 過去は日次データ実績、未来は確定予約から日割り按分。<span style="color:rgba(231,76,60,0.85);">赤破線</span>=過去180日のbooking curveから推定した最終着地見込み (信頼度低の場合は欠落)、<span style="color:#888;">灰点線</span>=去年同日売上。今日を境にバー色が変化します。</p>
       <canvas id="chartDailyTrend90d" height="100"></canvas>
     </div>
 
