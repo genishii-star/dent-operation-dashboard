@@ -1,0 +1,89 @@
+name: Review draft poster (weekly)
+
+# Runs Monday 18:00 JST (09:00 UTC) — drains drafts that humans approved in
+# Slack #review-approval over the day. Companion to `review-generate-weekly.yml`.
+#
+# Spaced 9 hours after the generator gives humans an unhurried morning to
+# review. Adjust the cron if your team's approval cadence differs.
+
+on:
+  schedule:
+    - cron: '0 9 * * 1'  # Mon 09:00 UTC = Mon 18:00 JST
+  workflow_dispatch:
+    inputs:
+      account:
+        description: 'Single account to run (overrides matrix)'
+        required: false
+        type: string
+      dry_run:
+        description: 'Read but do not post or mutate D1'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: review-post
+  cancel-in-progress: false
+
+jobs:
+  post:
+    name: Post approved drafts (${{ matrix.account }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        account:
+          - NAGAI
+    steps:
+      - name: Skip if manual override targets a different account
+        if: github.event_name == 'workflow_dispatch' && inputs.account != '' && inputs.account != matrix.account
+        run: |
+          echo "Skipping ${{ matrix.account }} (manual run targets ${{ inputs.account }})"
+          exit 0
+
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: review/package-lock.json
+
+      - name: Install deps
+        working-directory: review
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Post approved drafts
+        working-directory: review
+        env:
+          CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+          ACCOUNTS_JSON: ${{ secrets.ACCOUNTS_JSON }}
+        run: |
+          set -o pipefail
+          node post-approved.mjs \
+            --account=${{ matrix.account }} \
+            ${{ (github.event_name == 'workflow_dispatch' && inputs.dry_run) && '--dry-run' || '' }} \
+            2>&1 | tee run.log
+          exit ${PIPESTATUS[0]}
+
+      - name: Notify Slack on session-expiry
+        if: failure() && hashFiles('review/run.log') != ''
+        working-directory: review
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          SLACK_REVIEW_CHANNEL: ${{ secrets.SLACK_REVIEW_CHANNEL }}
+        run: |
+          if grep -q "SESSION_EXPIRED_NO_AUTO_RECOVERY" run.log; then
+            MSG=":warning: *Airbnb session expired for \`${{ matrix.account }}\`* — approved drafts are stuck. Re-run \`node login.mjs ${{ matrix.account }}\` locally, re-upload the session blob, then re-run this workflow."
+            curl -fsS -X POST https://slack.com/api/chat.postMessage \
+              -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
+              -H "Content-Type: application/json; charset=utf-8" \
+              -d "$(jq -nc --arg ch "$SLACK_REVIEW_CHANNEL" --arg t "$MSG" '{channel:$ch,text:$t}')"
+          fi

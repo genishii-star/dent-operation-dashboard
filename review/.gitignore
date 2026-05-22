@@ -1,0 +1,10 @@
+sessions/
+node_modules/
+accounts.json
+
+# Test/debug artifacts (may contain customer review content)
+debug-*.png
+output-*.json
+replies-*.json
+reviews-*.json
+run.log

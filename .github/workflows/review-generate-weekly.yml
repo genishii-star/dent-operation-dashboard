@@ -1,0 +1,97 @@
+name: Review draft generator (weekly)
+
+# Phase 1 entry point. Runs Monday 09:00 JST (00:00 UTC) — generates drafts and
+# sends them to Slack #review-approval for human approval. The companion
+# workflow `review-post-weekly.yml` drains approved drafts later in the day.
+#
+# Add new accounts to `accounts` in the matrix below. Each account needs:
+#   - KV entries: airbnb-session:{account}, airbnb-totp:{account}
+#   - Setup: see operation/review/SETUP_AUTOMATION.md
+
+on:
+  schedule:
+    - cron: '0 0 * * 1'  # Mon 00:00 UTC = Mon 09:00 JST
+  workflow_dispatch:
+    inputs:
+      account:
+        description: 'Single account to run (overrides matrix)'
+        required: false
+        type: string
+      dry_run:
+        description: 'Generate but do not write to D1/Slack'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: review-generate
+  cancel-in-progress: false
+
+jobs:
+  generate:
+    name: Generate drafts (${{ matrix.account }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        account:
+          # Edit this list to add/remove accounts. Manual-dispatch with a
+          # single account name overrides the matrix via the if: below.
+          - NAGAI
+    steps:
+      - name: Skip if manual override targets a different account
+        if: github.event_name == 'workflow_dispatch' && inputs.account != '' && inputs.account != matrix.account
+        run: |
+          echo "Skipping ${{ matrix.account }} (manual run targets ${{ inputs.account }})"
+          exit 0
+
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: review/package-lock.json
+
+      - name: Install deps
+        working-directory: review
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Generate drafts
+        id: generate
+        working-directory: review
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          SLACK_REVIEW_CHANNEL: ${{ secrets.SLACK_REVIEW_CHANNEL }}
+          ACCOUNTS_JSON: ${{ secrets.ACCOUNTS_JSON }}
+        run: |
+          set -o pipefail
+          node generate-drafts.mjs \
+            --account=${{ matrix.account }} \
+            ${{ (github.event_name == 'workflow_dispatch' && inputs.dry_run) && '--dry-run' || '' }} \
+            2>&1 | tee run.log
+          exit ${PIPESTATUS[0]}
+
+      - name: Notify Slack on session-expiry
+        if: failure() && hashFiles('review/run.log') != ''
+        working-directory: review
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          SLACK_REVIEW_CHANNEL: ${{ secrets.SLACK_REVIEW_CHANNEL }}
+        run: |
+          if grep -q "SESSION_EXPIRED_NO_AUTO_RECOVERY" run.log; then
+            MSG=":warning: *Airbnb session expired for \`${{ matrix.account }}\`* — TOTP auto-recovery is not available for this account. Re-run \`node login.mjs ${{ matrix.account }}\` locally and re-upload the session blob to the Worker. (See operation/review/SETUP_AUTOMATION.md Step 6–7.)"
+            curl -fsS -X POST https://slack.com/api/chat.postMessage \
+              -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
+              -H "Content-Type: application/json; charset=utf-8" \
+              -d "$(jq -nc --arg ch "$SLACK_REVIEW_CHANNEL" --arg t "$MSG" '{channel:$ch,text:$t}')"
+          fi
