@@ -434,31 +434,32 @@ function diffText(cur, prv, suffix='', labelPrefix='前月差') {
 function setKpi(id, cur, prv, yoy, fmt) {
   const mom = document.getElementById(`kpi-${id}-mom`);
   const yoyEl = document.getElementById(`kpi-${id}-yoy`);
+  const hasYoy = yoy != null && yoy !== 0;
   if (fmt === 'pct') {
     mom.textContent = pctText(cur, prv, '前月');
     mom.className = cur >= prv ? 'positive' : 'negative';
-    if (yoyEl) {
+    if (yoyEl && hasYoy) {
       yoyEl.textContent = pctText(cur, yoy, '前年');
       yoyEl.className = cur >= yoy ? 'positive' : 'negative';
     }
   } else if (fmt === 'diff-guests') {
     mom.textContent = diffText(cur, prv, '人', '前月差');
     mom.className = cur >= prv ? 'positive' : 'negative';
-    if (yoyEl) {
+    if (yoyEl && hasYoy) {
       yoyEl.textContent = diffText(cur, yoy, '人', '前年差');
       yoyEl.className = cur >= yoy ? 'positive' : 'negative';
     }
   } else if (fmt === 'diff-nights') {
     mom.textContent = diffText(cur, prv, '泊', '前月差');
     mom.className = cur >= prv ? 'positive' : 'negative';
-    if (yoyEl) {
+    if (yoyEl && hasYoy) {
       yoyEl.textContent = diffText(cur, yoy, '泊', '前年差');
       yoyEl.className = cur >= yoy ? 'positive' : 'negative';
     }
   } else if (fmt === 'diff-props') {
     mom.textContent = diffText(cur, prv, '件', '前月差');
     mom.className = cur >= prv ? 'positive' : 'negative';
-    if (yoyEl) {
+    if (yoyEl && hasYoy) {
       yoyEl.textContent = diffText(cur, yoy, '件', '前年差');
       yoyEl.className = cur >= yoy ? 'positive' : 'negative';
     }
@@ -516,18 +517,12 @@ new Chart(trendCtx, {
   data: {
     labels: trend.months.map(m => {
       const [y,mm] = m.split('-');
-      const isPartial = m === '2026-04';
-      return mm + '月' + (isPartial ? '*' : '') + (mm==='01'||mm==='04' ? '\n('+y+')' : '');
+      return mm + '月' + (mm==='01'||mm==='04' ? '\n('+y+')' : '');
     }),
     datasets: trend.channels.filter(ch => trend.months.some(m => trend.data[m][ch] > 0)).map(ch => ({
       label: ch,
       data: trend.months.map(m => Math.round((trend.data[m][ch]||0)/10000)),
-      backgroundColor: trend.months.map(m => {
-        const baseColor = palette[ch] || '#888';
-        // Make April 2026 (partial) semi-transparent
-        if (m === '2026-04') return baseColor + '66'; // ~40% alpha
-        return baseColor;
-      }),
+      backgroundColor: palette[ch] || '#888',
       borderWidth: 0
     }))
   },
@@ -537,10 +532,7 @@ new Chart(trendCtx, {
       legend: { position: 'bottom', labels: { font: {size: 11}, padding: 10, boxWidth: 12 } },
       tooltip: {
         callbacks: {
-          title: (items) => {
-            const m = trend.months[items[0].dataIndex];
-            return m === '2026-04' ? items[0].label.replace('*','') + ' (集計途中)' : items[0].label.replace('\n',' ');
-          },
+          title: (items) => items[0].label.replace('\n',' '),
           label: (c) => c.dataset.label + ': ' + c.parsed.y.toLocaleString() + '万円'
         }
       }
@@ -553,8 +545,8 @@ new Chart(trendCtx, {
 });
 
 // === Pie chart ===
-const marchData = trend.data['2026-03'];
-const pieEntries = Object.entries(marchData).filter(([_,v]) => v > 0).sort((a,b)=>b[1]-a[1]);
+const targetMonthData = trend.data['2026-04'];
+const pieEntries = Object.entries(targetMonthData).filter(([_,v]) => v > 0).sort((a,b)=>b[1]-a[1]);
 new Chart(document.getElementById('pieChart'), {
   type: 'doughnut',
   data: {
