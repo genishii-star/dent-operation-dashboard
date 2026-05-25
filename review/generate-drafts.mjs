@@ -124,21 +124,19 @@ async function probeTotpAvailable() {
 
 // ---------- scraping ----------
 //
-// Replies use (guest_name + date) as the natural key — Airbnb doesn't expose a
-// stable review_id in the public DOM for reply cards. Guest reviews use the
-// reservation_id extracted from the /hosting/reviews/{id} href.
+// Replies use the real Airbnb review_id from /performance/quality/overall/reviews/review/{id}.
+// Guest reviews use the reservation_id extracted from the /hosting/reviews/{id} href.
 async function scrapeWorkItems(page) {
   console.log("[scrape] unreplied reviews + pending guest reviews");
-  const [replies, guest_reviews] = await Promise.all([
-    scrapeUnrepliedReviews(page),
-    scrapePendingGuestReviews(page),
-  ]);
+  // Sequential, not parallel — both use the same page object and would conflict.
+  const replies = await scrapeUnrepliedReviews(page);
+  const guest_reviews = await scrapePendingGuestReviews(page);
   // Normalize shape for downstream code.
   return {
     replies: replies.map((r) => ({
-      review_id: `${r.guest_name}::${r.date || "?"}`,
+      review_id: r.review_id,
       guest_name: r.guest_name,
-      property_name: null, // Not directly available from the reply card; resolve later
+      property_name: r.property_name || null,
       room_no: null,
       original_text: r.original_text,
       language: null, // Claude will infer from original_text
@@ -177,7 +175,7 @@ async function getFacility(propName, roomNo) {
     const { facilities } = await workerGet("/internal/facilities.json");
     _facilities = facilities ?? [];
   }
-  const key = (s) => (s ?? "").trim().toLowerCase();
+  const key = (s) => String(s ?? "").trim().toLowerCase();
   // Try exact match by code (single-room) then by name
   return (
     _facilities.find((f) => key(f.code) === key(propName)) ??
@@ -430,9 +428,13 @@ async function main() {
     }
   }
 
-  // Save (possibly refreshed) cookies back to KV
-  await context.storageState({ path: sessionPath });
-  await saveSession(sessionPath);
+  // Save (possibly refreshed) cookies back to KV — but only in non-dry-run mode.
+  // In dry-run we don't want to clobber a known-good session with whatever state
+  // happened to be in the context when scraping finished.
+  if (!DRY_RUN) {
+    await context.storageState({ path: sessionPath });
+    await saveSession(sessionPath);
+  }
   await browser.close();
 
   console.log(JSON.stringify({ account: ACCOUNT, created, skipped, failed }));

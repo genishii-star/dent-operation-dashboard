@@ -8,3 +8,4 @@ output-*.json
 replies-*.json
 reviews-*.json
 run.log
+probe-*.mjs

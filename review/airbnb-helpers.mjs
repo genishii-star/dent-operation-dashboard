@@ -9,27 +9,69 @@
  * Shared by generate-drafts.mjs and post-approved.mjs.
  */
 
-/** Goto /users/reviews and scroll until fully loaded. */
-export async function loadReviewsPage(page) {
-  await page.goto("https://www.airbnb.com/users/reviews", { waitUntil: "domcontentloaded", timeout: 30000 });
-  await page.waitForTimeout(3000);
+/**
+ * Open the host's reviews list. The new Airbnb UI is /performance/quality/overall/reviews/review/<id>
+ * which shows the full list on the left and one review's detail on the right.
+ * Pass reviewId=0 (or any sentinel) to just load the list — the right panel will
+ * show "Something went wrong" which we don't care about for list scraping.
+ */
+export async function loadReviewsPage(page, reviewId = "0") {
+  const url = `https://www.airbnb.com/performance/quality/overall/reviews/review/${reviewId}`;
+  await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
+  await page.waitForTimeout(4000);
+  // Lazy-load the list by scrolling
   let prevHeight = 0;
-  for (let i = 0; i < 20; i++) {
+  for (let i = 0; i < 30; i++) {
     await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
-    await page.waitForTimeout(1500);
+    await page.waitForTimeout(1200);
     const h = await page.evaluate(() => document.body.scrollHeight);
     if (h === prevHeight) break;
     prevHeight = h;
   }
 }
 
-async function clickTab(page, tabName) {
-  await page.evaluate((name) => {
-    const btns = [...document.querySelectorAll("button")];
-    const tab = btns.find((b) => b.innerText.trim() === name);
-    if (tab) tab.click();
-  }, tabName);
-  await page.waitForTimeout(3000);
+/** Wait until the right "Review details" panel shows content for the currently selected review. */
+async function waitForReviewDetailsPanel(page, timeoutMs = 8000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const ready = await page.evaluate(() => {
+      const heading = [...document.querySelectorAll("h1, h2, h3, [role='heading']")]
+        .find((h) => (h.innerText || "").trim() === "Review details");
+      if (!heading) return false;
+      let p = heading;
+      for (let j = 0; j < 10; j++) {
+        p = p.parentElement;
+        if (!p) return false;
+        const text = (p.innerText || "");
+        if (text.length > 200 && !text.includes("Something went wrong")) return true;
+        if (p.querySelector("button") && text.length > 200) return true;
+      }
+      return false;
+    });
+    if (ready) return true;
+    await page.waitForTimeout(500);
+  }
+  return false;
+}
+
+/** Classify the currently selected review (right panel) as 'unreplied', 'replied', or 'unknown'. */
+async function classifyRightPanel(page) {
+  return page.evaluate(() => {
+    const heading = [...document.querySelectorAll("h1, h2, h3, [role='heading']")]
+      .find((h) => (h.innerText || "").trim() === "Review details");
+    if (!heading) return { status: "unknown", reason: "no Review details heading" };
+    let panel = heading;
+    for (let j = 0; j < 10; j++) {
+      panel = panel.parentElement;
+      if (!panel) break;
+      if (panel.querySelector("button") && (panel.innerText || "").length > 200) break;
+    }
+    if (!panel) return { status: "unknown", reason: "no panel container" };
+    const buttons = [...panel.querySelectorAll("button")].map((b) => (b.innerText || "").trim());
+    if (buttons.includes("Write a public reply")) return { status: "unreplied", buttons };
+    if (buttons.includes("Edit") || buttons.includes("Delete")) return { status: "replied", buttons };
+    return { status: "unknown", buttons };
+  });
 }
 
 /**
@@ -40,71 +82,51 @@ async function clickTab(page, tabName) {
  * cards. The de-facto natural key is (guest_name + date). Callers should use
  * `${guest_name}::${date}` as the D1 `target_id`.
  */
+/**
+ * Walk the reviews list, opening each entry's right-panel detail to classify it.
+ * Returns only the unreplied ones, each with the real Airbnb review_id (from URL).
+ *
+ * Returns [{ review_id, guest_name, date, original_text, property_name }].
+ */
 export async function scrapeUnrepliedReviews(page) {
   await loadReviewsPage(page);
-  await clickTab(page, "Reviews about you");
-  let prevHeight = 0;
-  for (let i = 0; i < 20; i++) {
-    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
-    await page.waitForTimeout(1500);
-    const h = await page.evaluate(() => document.body.scrollHeight);
-    if (h === prevHeight) break;
-    prevHeight = h;
-  }
 
-  return page.evaluate(() => {
+  // Snapshot all card-level info from the left list (guest, date, property, rating)
+  // before we start clicking, so we don't lose data when the panel updates.
+  const cards = await page.evaluate(() => {
     const results = [];
-    const buttons = [...document.querySelectorAll("button")].filter(
-      (b) => b.innerText.trim() === "Leave Public Response",
-    );
-
-    for (const btn of buttons) {
-      let container = btn;
+    const seen = new Set();
+    const viewBtns = [...document.querySelectorAll("button, a, span")]
+      .filter((el) => (el.innerText || "").trim() === "View details");
+    for (const btn of viewBtns) {
+      // Walk up to find the card container
+      let card = btn;
       for (let i = 0; i < 10; i++) {
-        container = container.parentElement;
-        if (!container) break;
-        const text = container.innerText || "";
-        if (text.includes("Leave Public Response") && text.length > 50 && text.length < 3000) {
-          // Prefer profile link for guest name (language-agnostic)
-          const profileLink = [...container.querySelectorAll("a")].find((a) => {
-            const href = a.href || "";
-            return href.includes("/users/profile/") || href.includes("/users/show/");
-          });
-          let guestName = profileLink ? profileLink.innerText.trim() : "";
-
-          const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
-          const months = "January|February|March|April|May|June|July|August|September|October|November|December";
-          const dateRegex = new RegExp(`(${months})\\s+\\d{4}`);
-
-          // Fallback: parse name from text
-          if (!guestName) {
-            for (let j = 0; j < lines.length; j++) {
-              const m = lines[j].match(dateRegex);
-              if (m) {
-                const beforeDate = lines[j].substring(0, lines[j].indexOf(m[0])).trim();
-                guestName = beforeDate || (j > 0 ? lines[j - 1] : "");
-                break;
-              }
-            }
-          }
-
-          let reviewDate = "";
-          let reviewText = "";
-          for (let j = 0; j < lines.length; j++) {
-            const m = lines[j].match(dateRegex);
-            if (m) {
-              reviewDate = m[0];
-              const tl = [];
-              for (let k = j + 1; k < lines.length; k++) {
-                if (["Leave Public Response", "Private feedback", "Read more"].includes(lines[k])) break;
-                tl.push(lines[k]);
-              }
-              reviewText = tl.join(" ").substring(0, 2000);
-              break;
-            }
-          }
-          if (guestName) {
-            results.push({ guest_name: guestName, date: reviewDate, original_text: reviewText });
+        card = card.parentElement;
+        if (!card) break;
+        const text = (card.innerText || "");
+        if (text.length > 80 && text.length < 4000 && text.includes("View details")) {
+          // Stop at the smallest card-shaped container
+          if (text.includes("Overall quality") || text.match(/Rating\s+\d/)) {
+            const key = text.substring(0, 100);
+            if (seen.has(key)) break;
+            seen.add(key);
+            const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
+            // Line 0: guest name. Line 1: "<dates> • <property name>". Body follows.
+            const guest = lines[0] || "";
+            const dateLine = lines[1] || "";
+            const dateMatch = dateLine.match(/^([A-Za-z]+\s+\d+\s*[-–]\s*\d+,?\s*\d{4})/) ||
+                              dateLine.match(/^(\d{1,2}月\d+日\s*[-–]\s*\d+日)/);
+            const date = dateMatch ? dateMatch[1] : "";
+            const propMatch = dateLine.match(/[•·]\s*(.+)$/);
+            const property_name = propMatch ? propMatch[1].trim() : "";
+            // Body: lines after the rating/star line, before "View details"
+            const bodyStart = lines.findIndex((l) => /^\d+$/.test(l)) + 1;
+            const bodyEnd = lines.indexOf("View details");
+            const body = bodyStart > 0 && bodyEnd > bodyStart
+              ? lines.slice(bodyStart, bodyEnd).join(" ").substring(0, 2000)
+              : "";
+            results.push({ guest, date, property_name, body });
           }
           break;
         }
@@ -112,6 +134,39 @@ export async function scrapeUnrepliedReviews(page) {
     }
     return results;
   });
+
+  // Click each View details one-by-one, harvest review_id from URL + status from panel
+  const out = [];
+  const N = cards.length;
+  for (let i = 0; i < N; i++) {
+    const clicked = await page.evaluate((idx) => {
+      const els = [...document.querySelectorAll("button, a, span")]
+        .filter((el) => (el.innerText || "").trim() === "View details");
+      if (!els[idx]) return false;
+      els[idx].scrollIntoView({ block: "center" });
+      els[idx].click();
+      return true;
+    }, i);
+    if (!clicked) continue;
+    await page.waitForTimeout(1500);
+    await waitForReviewDetailsPanel(page);
+    const url = page.url();
+    const m = url.match(/\/review\/(\d+)/);
+    if (!m) continue;
+    const review_id = m[1];
+    const status = await classifyRightPanel(page);
+    if (status.status === "unreplied") {
+      const c = cards[i] || {};
+      out.push({
+        review_id,
+        guest_name: c.guest || "",
+        date: c.date || "",
+        property_name: c.property_name || "",
+        original_text: c.body || "",
+      });
+    }
+  }
+  return out;
 }
 
 /**
@@ -311,88 +366,98 @@ export async function ensureLoggedIn(page, context, sessionPath, loadCredentials
  *
  * @returns {Promise<{ok: boolean, error?: string}>}
  */
-export async function postReply(page, { guest_name, draft_text }) {
-  if (!guest_name) return { ok: false, error: "missing guest_name" };
+/**
+ * Post a public reply via the new Airbnb UI.
+ *   1. Navigate directly to /performance/quality/overall/reviews/review/<review_id>
+ *      (auto-selects this review in the right panel)
+ *   2. Wait for the right panel to render and verify status == 'unreplied'
+ *      (if status == 'replied', someone else already replied — abort)
+ *   3. Click "Write a public reply" → textarea appears (initially Save disabled)
+ *   4. Fill textarea via native setter + dispatch input event (Airbnb listens to it
+ *      to enable Save)
+ *   5. Click Save once it becomes enabled
+ *
+ * @param {object} args
+ * @param {string} args.review_id  Airbnb review_id (numeric string from URL)
+ * @param {string} args.draft_text Reply body
+ * @returns {Promise<{ok: boolean, error?: string}>}
+ */
+export async function postReply(page, { review_id, draft_text }) {
+  if (!review_id) return { ok: false, error: "missing review_id" };
   if (!draft_text) return { ok: false, error: "missing draft_text" };
 
-  await loadReviewsPage(page);
-  await clickTab(page, "Reviews about you");
+  // Direct goto = no list traversal, no risk of clicking the wrong card
+  await loadReviewsPage(page, review_id);
+  const panelReady = await waitForReviewDetailsPanel(page, 10000);
+  if (!panelReady) return { ok: false, error: "right panel never rendered" };
 
-  // Close any open forms
-  await page.evaluate(() => {
-    [...document.querySelectorAll("button")]
-      .filter((b) => b.innerText.trim() === "Cancel")
-      .forEach((b) => b.click());
-  });
-  await page.waitForTimeout(1000);
-
-  const clicked = await page.evaluate((name) => {
-    const buttons = [...document.querySelectorAll("button")].filter(
-      (b) => b.innerText.trim() === "Leave Public Response",
-    );
-    let best = null, bestSize = Infinity;
-    for (const btn of buttons) {
-      let container = btn;
-      for (let i = 0; i < 10; i++) {
-        container = container.parentElement;
-        if (!container) break;
-        const len = (container.innerText || "").length;
-        if (len > 1000) break;
-        const link = [...container.querySelectorAll("a")].find((a) => {
-          const href = a.href || "";
-          return (
-            (href.includes("/users/profile/") || href.includes("/users/show/")) &&
-            a.innerText.trim() === name
-          );
-        });
-        if (link && container.innerText.includes("Leave Public Response")) {
-          if (len < bestSize) { best = btn; bestSize = len; }
-          break;
-        }
-      }
-    }
-    if (best) { best.scrollIntoView({ block: "center" }); best.click(); return true; }
-    return false;
-  }, guest_name);
-
-  if (!clicked) return { ok: false, error: `no matching "Leave Public Response" for ${guest_name}` };
-  await page.waitForTimeout(2000);
-
-  const info = await page.evaluate((name) => {
-    const tas = [...document.querySelectorAll("textarea")];
-    for (const ta of tas) {
-      const label = ta.getAttribute("aria-label") || ta.placeholder || "";
-      if (label.toLowerCase().includes(name.toLowerCase())) {
-        return { id: ta.id || null, verified: true, label };
-      }
-    }
-    if (tas.length > 0) {
-      const ta = tas[0];
-      return { id: ta.id || null, verified: false, label: ta.getAttribute("aria-label") || ta.placeholder || "" };
-    }
-    return null;
-  }, guest_name);
-
-  if (!info) return { ok: false, error: "textarea not found" };
-  if (!info.verified) {
-    return { ok: false, error: `aria-label mismatch — got "${info.label}", expected to include "${guest_name}"` };
+  const status = await classifyRightPanel(page);
+  if (status.status === "replied") {
+    return { ok: false, error: "already replied (Edit/Delete present, not Write a public reply)" };
+  }
+  if (status.status !== "unreplied") {
+    return { ok: false, error: `unexpected panel status: ${status.status}; buttons=${JSON.stringify(status.buttons)}` };
   }
 
-  await page.evaluate(({ id, text }) => {
-    const ta = id ? document.getElementById(id) : document.querySelector("textarea");
+  // Click "Write a public reply"
+  const clicked = await page.evaluate(() => {
+    const btn = [...document.querySelectorAll("button")]
+      .find((b) => (b.innerText || "").trim() === "Write a public reply");
+    if (!btn) return false;
+    btn.scrollIntoView({ block: "center" });
+    btn.click();
+    return true;
+  });
+  if (!clicked) return { ok: false, error: "could not click 'Write a public reply'" };
+  await page.waitForTimeout(1500);
+
+  // Find the textarea that just appeared
+  const taFound = await page.evaluate(() => {
+    const tas = [...document.querySelectorAll("textarea")].filter((t) => t.offsetParent !== null);
+    return tas.length > 0;
+  });
+  if (!taFound) return { ok: false, error: "textarea not found after clicking Write a public reply" };
+
+  // Fill via native setter so React/internal state picks it up
+  await page.evaluate((text) => {
+    const ta = [...document.querySelectorAll("textarea")].find((t) => t.offsetParent !== null);
     if (!ta) return;
     const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value").set;
     setter.call(ta, text);
     ta.dispatchEvent(new Event("input", { bubbles: true }));
-  }, { id: info.id, text: draft_text });
-  await page.waitForTimeout(1000);
+    ta.dispatchEvent(new Event("change", { bubbles: true }));
+  }, draft_text);
+  await page.waitForTimeout(1500);
 
+  // Wait for Save to become enabled (max 5s)
+  const enabled = await (async () => {
+    const deadline = Date.now() + 5000;
+    while (Date.now() < deadline) {
+      const ok = await page.evaluate(() => {
+        const btn = [...document.querySelectorAll("button")]
+          .find((b) => (b.innerText || "").trim() === "Save");
+        return !!btn && !btn.disabled;
+      });
+      if (ok) return true;
+      await page.waitForTimeout(500);
+    }
+    return false;
+  })();
+  if (!enabled) return { ok: false, error: "Save button never became enabled" };
+
+  // Click Save
   await page.evaluate(() => {
-    const btn = [...document.querySelectorAll("button")].find((b) => b.innerText.trim() === "Submit");
+    const btn = [...document.querySelectorAll("button")]
+      .find((b) => (b.innerText || "").trim() === "Save");
     if (btn) btn.click();
   });
   await page.waitForTimeout(3000);
 
+  // Verify: panel should now show Edit/Delete (replied state)
+  const after = await classifyRightPanel(page);
+  if (after.status !== "replied") {
+    return { ok: false, error: `post submitted but panel did not transition to 'replied' (got '${after.status}')` };
+  }
   return { ok: true };
 }
 

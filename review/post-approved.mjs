@@ -123,7 +123,7 @@ async function probeTotpAvailable() {
 
 // ----- posters -----
 async function postReply(page, draft) {
-  return postReplyImpl(page, { guest_name: draft.guest_name, draft_text: draft.draft_text });
+  return postReplyImpl(page, { review_id: draft.target_id, draft_text: draft.draft_text });
 }
 
 async function postGuestReview(page, draft) {
