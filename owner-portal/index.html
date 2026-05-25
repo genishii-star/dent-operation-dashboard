@@ -1,0 +1,331 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="robots" content="noindex,nofollow">
+  <title>レビュー返信 承認 / Dent</title>
+  <style>
+    :root {
+      --bg: #f5f5f7;
+      --card: #ffffff;
+      --border: #d2d2d7;
+      --accent: #007aff;
+      --green: #34c759;
+      --gray: #8e8e93;
+      --warn: #ff9500;
+      --text: #1d1d1f;
+      --muted: #6e6e73;
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      padding: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Helvetica Neue", Arial, sans-serif;
+      font-size: 15px;
+      line-height: 1.55;
+      -webkit-font-smoothing: antialiased;
+    }
+    header {
+      padding: 24px 20px 12px;
+      max-width: 720px;
+      margin: 0 auto;
+    }
+    header h1 {
+      font-size: 22px;
+      font-weight: 700;
+      margin: 0 0 6px;
+    }
+    header .sub {
+      font-size: 13px;
+      color: var(--muted);
+    }
+    main {
+      max-width: 720px;
+      margin: 0 auto;
+      padding: 0 20px 60px;
+    }
+    .banner {
+      padding: 12px 16px;
+      border-radius: 10px;
+      font-size: 13px;
+      margin-bottom: 20px;
+    }
+    .banner.err { background: #fef0f0; color: #c00; border: 1px solid #ffd0d0; }
+    .banner.warn { background: #fff8e1; color: #795548; border: 1px solid #ffd54f; }
+    .banner.empty { background: #eef5ff; color: #1e4d8b; border: 1px solid #cfe1ff; }
+    .count-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+      font-size: 13px;
+      color: var(--muted);
+    }
+    .count-row .reload {
+      background: none;
+      border: none;
+      color: var(--accent);
+      font-size: 13px;
+      cursor: pointer;
+      padding: 4px 8px;
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px 18px;
+      margin-bottom: 14px;
+      box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+    }
+    .meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      font-size: 12px;
+      color: var(--muted);
+      margin-bottom: 10px;
+    }
+    .badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 600;
+    }
+    .badge.reply { background: #e3f2fd; color: #1565c0; }
+    .badge.review { background: #e8f5e9; color: #2e7d32; }
+    .prop {
+      font-weight: 600;
+      font-size: 14px;
+      color: var(--text);
+    }
+    .orig {
+      background: #f5f5f7;
+      border-radius: 8px;
+      padding: 10px 12px;
+      font-size: 13px;
+      margin-bottom: 10px;
+      white-space: pre-wrap;
+      color: #333;
+    }
+    .orig .label {
+      display: block;
+      font-size: 11px;
+      color: var(--muted);
+      margin-bottom: 4px;
+      font-weight: 600;
+    }
+    textarea {
+      width: 100%;
+      min-height: 140px;
+      font-size: 14px;
+      font-family: inherit;
+      line-height: 1.6;
+      padding: 12px 14px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: white;
+      resize: vertical;
+      margin-bottom: 12px;
+    }
+    textarea:focus {
+      outline: none;
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(0,122,255,0.15);
+    }
+    .btn-row {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+    button.act {
+      padding: 8px 16px;
+      border-radius: 8px;
+      border: none;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity 0.15s;
+    }
+    button.act:disabled { opacity: 0.5; cursor: not-allowed; }
+    button.approve { background: var(--green); color: white; }
+    button.save    { background: var(--accent); color: white; }
+    button.skip    { background: var(--gray); color: white; }
+    .status-msg {
+      font-size: 12px;
+      color: var(--muted);
+      margin-left: 4px;
+    }
+    .status-msg.err { color: #c00; }
+    footer {
+      max-width: 720px;
+      margin: 40px auto 0;
+      padding: 0 20px 30px;
+      font-size: 11px;
+      color: var(--muted);
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>レビュー返信 承認</h1>
+    <div class="sub" id="account-label">読み込み中…</div>
+  </header>
+  <main>
+    <div id="banner-area"></div>
+    <div class="count-row" id="count-row" style="display:none;">
+      <span id="count-label"></span>
+      <button class="reload" onclick="load()">↻ 再読み込み</button>
+    </div>
+    <div id="list"></div>
+  </main>
+  <footer>
+    Dent Inc. — このページのURLは外部に共有しないでください
+  </footer>
+
+  <script>
+    const API_BASE = 'https://api.dent-inc.com';
+    const token = new URLSearchParams(location.search).get('token') || '';
+
+    function esc(s) {
+      return String(s ?? '').replace(/[&<>"']/g, (c) => (
+        { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+      ));
+    }
+
+    function setBanner(html, kind) {
+      const el = document.getElementById('banner-area');
+      el.innerHTML = html ? `<div class="banner ${kind}">${html}</div>` : '';
+    }
+
+    async function load() {
+      if (!token) {
+        document.getElementById('account-label').textContent = '';
+        setBanner('URLにトークンが含まれていません。担当者から共有された正しいURLを開いてください。', 'err');
+        return;
+      }
+      setBanner('読み込み中…', 'empty');
+      document.getElementById('count-row').style.display = 'none';
+      document.getElementById('list').innerHTML = '';
+
+      let data;
+      try {
+        const resp = await fetch(`${API_BASE}/owner/review-drafts?token=${encodeURIComponent(token)}`);
+        if (resp.status === 401) {
+          setBanner('トークンが無効か期限切れです。担当者にお問い合わせください。', 'err');
+          return;
+        }
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        data = await resp.json();
+      } catch (e) {
+        setBanner(`通信エラー: ${esc(e.message)}`, 'err');
+        return;
+      }
+
+      document.getElementById('account-label').textContent = `アカウント: ${data.account}`;
+      setBanner('', '');
+
+      const drafts = data.drafts || [];
+      const row = document.getElementById('count-row');
+      const label = document.getElementById('count-label');
+      row.style.display = '';
+      label.textContent = `承認待ち: ${drafts.length} 件`;
+
+      const list = document.getElementById('list');
+      if (drafts.length === 0) {
+        setBanner('承認待ちの返信はありません。', 'empty');
+        return;
+      }
+      list.innerHTML = drafts.map(renderCard).join('');
+    }
+
+    function renderCard(d) {
+      let ctx = {};
+      try { ctx = d.context_json ? JSON.parse(d.context_json) : {}; } catch { ctx = {}; }
+
+      const isReply = d.draft_type === 'reply';
+      const typeBadge = isReply
+        ? '<span class="badge reply">📩 ゲストへの返信</span>'
+        : '<span class="badge review">📝 ゲストレビュー</span>';
+      const propName = ctx.property_name || d.property_code || '(物件未マッチ)';
+      const genDate = (d.generated_at || '').slice(0, 10);
+      const guest = d.guest_name || '(ゲスト不明)';
+
+      const origBlock = isReply && ctx.original_text
+        ? `<div class="orig"><span class="label">元のレビュー (${esc(ctx.language || '')})</span>${esc(ctx.original_text)}</div>`
+        : '';
+      const stayBlock = !isReply && (ctx.check_in || ctx.check_out)
+        ? `<div class="orig"><span class="label">宿泊期間</span>${esc(ctx.check_in || '?')} → ${esc(ctx.check_out || '?')} (${esc(ctx.nights || '?')}泊)</div>`
+        : '';
+
+      return `
+        <div class="card" data-id="${esc(d.id)}">
+          <div class="meta">
+            ${typeBadge}
+            <span class="prop">${esc(propName)}</span>
+            <span>${esc(guest)}</span>
+            <span>${esc(genDate)}</span>
+          </div>
+          ${origBlock}
+          ${stayBlock}
+          <textarea class="draft-text">${esc(d.draft_text || '')}</textarea>
+          <div class="btn-row">
+            <button class="act approve" onclick="act('${esc(d.id)}', 'approve')">✅ 承認</button>
+            <button class="act save"    onclick="act('${esc(d.id)}', 'save')">💾 保存</button>
+            <button class="act skip"    onclick="act('${esc(d.id)}', 'skip')">⏭ スキップ</button>
+            <span class="status-msg"></span>
+          </div>
+        </div>
+      `;
+    }
+
+    async function act(id, kind) {
+      const card = document.querySelector(`.card[data-id="${CSS.escape(id)}"]`);
+      if (!card) return;
+      const buttons = card.querySelectorAll('button.act');
+      const status = card.querySelector('.status-msg');
+      const ta = card.querySelector('.draft-text');
+
+      let body, label;
+      if (kind === 'approve') { body = { status: 'approved' }; label = '承認中…'; }
+      else if (kind === 'skip') { body = { status: 'rejected' }; label = 'スキップ中…'; }
+      else if (kind === 'save') {
+        const text = ta.value.trim();
+        if (!text) { status.textContent = '本文が空です'; status.classList.add('err'); return; }
+        body = { draft_text: text };
+        label = '保存中…';
+      } else return;
+
+      buttons.forEach(b => b.disabled = true);
+      status.textContent = label;
+      status.classList.remove('err');
+
+      try {
+        const resp = await fetch(
+          `${API_BASE}/owner/review-drafts/${encodeURIComponent(id)}?token=${encodeURIComponent(token)}`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'text/plain;charset=UTF-8' },
+            body: JSON.stringify(body),
+          },
+        );
+        const json = await resp.json().catch(() => ({}));
+        if (!resp.ok) throw new Error(json.error || `HTTP ${resp.status}`);
+        // success → reload entire list (card may have disappeared on approve/skip)
+        await load();
+      } catch (e) {
+        status.textContent = `エラー: ${e.message}`;
+        status.classList.add('err');
+        buttons.forEach(b => b.disabled = false);
+      }
+    }
+
+    load();
+  </script>
+</body>
+</html>
