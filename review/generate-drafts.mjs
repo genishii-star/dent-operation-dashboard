@@ -8,16 +8,14 @@
  *   4. Scrape unreplied reviews + completed stays needing a guest review
  *   5. For each one not already in D1 with active status, generate a draft via
  *      Claude API and POST to /internal/review-drafts (status='pending')
- *   6. Post a Slack Block Kit message with [✅承認/❌却下] buttons per draft
- *   7. Save (possibly refreshed) session back to KV
+ *   6. Save (possibly refreshed) session back to KV
+ *
+ * Approval happens in the dashboard (op.dent-inc.com → レビュータブ → 承認待ち).
+ * The Slack #review-approval flow was retired 2026-05-25.
  *
  * Run:
  *   ANTHROPIC_API_KEY=... CF_ACCESS_CLIENT_ID=... CF_ACCESS_CLIENT_SECRET=... \
- *   SLACK_BOT_TOKEN=... SLACK_REVIEW_CHANNEL=C0... \
  *   node generate-drafts.mjs --account=NPA [--dry-run] [--gui]
- *
- * Not yet implemented (Phase 1.5): the scrape stage is a placeholder. Hook it
- * up to the existing fetch-reviews.mjs logic when wiring this into CI.
  */
 
 import { chromium } from "playwright";
@@ -33,7 +31,6 @@ import {
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DATA_API = "https://api.dent-inc.com";
-const SLACK_API = "https://slack.com/api";
 const MODEL = "claude-opus-4-7";
 
 // ---------- CLI ----------
@@ -54,11 +51,10 @@ if (!ACCOUNT || !/^[A-Za-z0-9_-]{1,32}$/.test(ACCOUNT)) {
 }
 
 // ---------- env ----------
-const ENV = ["ANTHROPIC_API_KEY", "CF_ACCESS_CLIENT_ID", "CF_ACCESS_CLIENT_SECRET", "SLACK_BOT_TOKEN", "SLACK_REVIEW_CHANNEL", "ACCOUNTS_JSON"];
+const ENV = ["ANTHROPIC_API_KEY", "CF_ACCESS_CLIENT_ID", "CF_ACCESS_CLIENT_SECRET", "ACCOUNTS_JSON"];
 for (const k of ENV) if (!process.env[k]) { console.error(`missing env: ${k}`); process.exit(2); }
 const {
   ANTHROPIC_API_KEY, CF_ACCESS_CLIENT_ID, CF_ACCESS_CLIENT_SECRET,
-  SLACK_BOT_TOKEN, SLACK_REVIEW_CHANNEL,
 } = process.env;
 
 const anthropic = new Anthropic({ apiKey: ANTHROPIC_API_KEY });
@@ -304,60 +300,6 @@ async function createDraft({ account, draft_type, target_id, guest_name, propert
   });
 }
 
-// ---------- Slack ----------
-async function slackPostDraft({ draftId, account, draftType, guestName, propertyName, draftText }) {
-  const typeLabel = draftType === "reply" ? "📩 返信案" : "📝 ゲストレビュー案";
-  const blocks = [
-    {
-      type: "header",
-      text: { type: "plain_text", text: `${typeLabel} — ${account}` },
-    },
-    {
-      type: "section",
-      fields: [
-        { type: "mrkdwn", text: `*ゲスト:*\n${guestName ?? "(不明)"}` },
-        { type: "mrkdwn", text: `*物件:*\n${propertyName ?? "(未マッチ)"}` },
-      ],
-    },
-    { type: "section", text: { type: "mrkdwn", text: "```\n" + draftText + "\n```" } },
-    {
-      type: "actions",
-      elements: [
-        {
-          type: "button",
-          text: { type: "plain_text", text: "✅ 承認" },
-          style: "primary",
-          action_id: "review_approve",
-          value: draftId,
-        },
-        {
-          type: "button",
-          text: { type: "plain_text", text: "❌ 却下" },
-          style: "danger",
-          action_id: "review_reject",
-          value: draftId,
-        },
-      ],
-    },
-  ];
-
-  const r = await fetch(`${SLACK_API}/chat.postMessage`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${SLACK_BOT_TOKEN}`,
-      "Content-Type": "application/json; charset=utf-8",
-    },
-    body: JSON.stringify({
-      channel: SLACK_REVIEW_CHANNEL,
-      text: `${typeLabel} (${account}) — ${guestName ?? ""}`,
-      blocks,
-    }),
-  });
-  const data = await r.json();
-  if (!data.ok) throw new Error(`slack postMessage failed: ${data.error}`);
-  return { channel: data.channel, ts: data.ts };
-}
-
 // ---------- main ----------
 async function main() {
   const sessionPath = await loadSession();
@@ -385,15 +327,11 @@ async function main() {
       const facility = await getFacility(item.property_name, item.room_no);
       const { text } = await generateReplyDraft({ item, facility });
       if (DRY_RUN) { console.log(`[dry-run reply→${item.review_id}]`, text); created++; continue; }
-      const { id } = await createDraft({
+      await createDraft({
         account: ACCOUNT, draft_type: "reply", target_id: item.review_id,
         guest_name: item.guest_name, property_code: facility?.code ?? null,
         context: { property_name: item.property_name, room_no: item.room_no, original_text: item.original_text, language: item.language },
         draft_text: text,
-      });
-      await slackPostDraft({
-        draftId: id, account: ACCOUNT, draftType: "reply",
-        guestName: item.guest_name, propertyName: facility?.name ?? item.property_name, draftText: text,
       });
       created++;
     } catch (e) {
@@ -411,15 +349,11 @@ async function main() {
       const facility = await getFacility(item.property_name, item.room_no);
       const { text } = await generateGuestReviewDraft({ item, facility });
       if (DRY_RUN) { console.log(`[dry-run review→${item.reservation_id}]`, text); created++; continue; }
-      const { id } = await createDraft({
+      await createDraft({
         account: ACCOUNT, draft_type: "review_of_guest", target_id: item.reservation_id,
         guest_name: item.guest_name, property_code: facility?.code ?? null,
         context: { property_name: item.property_name, room_no: item.room_no, check_in: item.check_in, check_out: item.check_out, nights: item.nights, edit_href: item.edit_href },
         draft_text: text,
-      });
-      await slackPostDraft({
-        draftId: id, account: ACCOUNT, draftType: "review_of_guest",
-        guestName: item.guest_name, propertyName: facility?.name ?? item.property_name, draftText: text,
       });
       created++;
     } catch (e) {

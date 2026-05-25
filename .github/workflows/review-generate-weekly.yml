@@ -1,8 +1,10 @@
 name: Review draft generator (weekly)
 
-# Phase 1 entry point. Runs Monday 09:00 JST (00:00 UTC) — generates drafts and
-# sends them to Slack #review-approval for human approval. The companion
-# workflow `review-post-weekly.yml` drains approved drafts later in the day.
+# Phase 1 entry point. Runs Monday 09:00 JST (00:00 UTC) — generates drafts
+# into D1 (status='pending'). Humans approve / edit / skip them in the
+# operations dashboard (op.dent-inc.com → レビュータブ → 承認待ち). The
+# companion workflow `review-post-weekly.yml` drains approved drafts later in
+# the day.
 #
 # Add new accounts to `accounts` in the matrix below. Each account needs:
 #   - KV entries: airbnb-session:{account}, airbnb-totp:{account}
@@ -18,7 +20,7 @@ on:
         required: false
         type: string
       dry_run:
-        description: 'Generate but do not write to D1/Slack'
+        description: 'Generate but do not write to D1'
         required: false
         type: boolean
         default: false
@@ -70,8 +72,6 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
           CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
-          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
-          SLACK_REVIEW_CHANNEL: ${{ secrets.SLACK_REVIEW_CHANNEL }}
           ACCOUNTS_JSON: ${{ secrets.ACCOUNTS_JSON }}
         run: |
           set -o pipefail

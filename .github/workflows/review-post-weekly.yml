@@ -1,7 +1,8 @@
 name: Review draft poster (weekly)
 
-# Runs Monday 18:00 JST (09:00 UTC) — drains drafts that humans approved in
-# Slack #review-approval over the day. Companion to `review-generate-weekly.yml`.
+# Runs Monday 18:00 JST (09:00 UTC) — drains drafts that humans approved
+# during the day in the operations dashboard (op.dent-inc.com → レビュータブ
+# → 承認待ち). Companion to `review-generate-weekly.yml`.
 #
 # Spaced 9 hours after the generator gives humans an unhurried morning to
 # review. Adjust the cron if your team's approval cadence differs.

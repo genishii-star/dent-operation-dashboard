@@ -6541,6 +6541,138 @@ const REVIEW_MOCK = (function generateMockReviews() {
 })();
 
 let _reviewFilters = { months: 3, area: '全体', star: 'all' };
+
+// 承認待ちドラフト (D1 review_drafts テーブル)。
+// レビュータブ初回描画時に loadReviewDrafts() で取得し、承認/保存/スキップ後に再ロード。
+let _reviewDrafts = { items: null, loading: false, error: null };
+
+function _rvEscape(s) {
+  return String(s ?? '').replace(/[&<>"']/g, (c) =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+async function loadReviewDrafts() {
+  _reviewDrafts.loading = true;
+  _reviewDrafts.error = null;
+  renderReviewApprovals();
+  try {
+    const data = await fetchDataApi('/internal/review-drafts?status=pending&limit=200');
+    _reviewDrafts.items = (data && Array.isArray(data.drafts)) ? data.drafts : [];
+  } catch (e) {
+    _reviewDrafts.items = _reviewDrafts.items || [];
+    _reviewDrafts.error = e.message;
+  } finally {
+    _reviewDrafts.loading = false;
+    renderReviewApprovals();
+  }
+}
+
+// 承認待ちセクションのみを再描画 (KPIなど他セクションは触らない)。
+function renderReviewApprovals() {
+  const listEl = document.getElementById('rv-approval-list');
+  const countEl = document.getElementById('rv-approval-count');
+  if (!listEl || !countEl) return;
+
+  if (_reviewDrafts.loading && _reviewDrafts.items === null) {
+    countEl.textContent = '…';
+    listEl.innerHTML = '<div style="color:#999;font-size:13px;padding:20px 0;text-align:center;">読み込み中…</div>';
+    return;
+  }
+  if (_reviewDrafts.error && (_reviewDrafts.items === null || _reviewDrafts.items.length === 0)) {
+    countEl.textContent = '!';
+    listEl.innerHTML = `<div style="color:#c00;font-size:13px;padding:20px 0;text-align:center;">取得エラー: ${_rvEscape(_reviewDrafts.error)}</div>`;
+    return;
+  }
+
+  const items = _reviewDrafts.items || [];
+  countEl.textContent = items.length;
+  if (items.length === 0) {
+    listEl.innerHTML = '<div style="color:#999;font-size:13px;padding:20px 0;text-align:center;">承認待ちはありません</div>';
+    return;
+  }
+
+  listEl.innerHTML = items.map(d => {
+    let ctx = {};
+    try { ctx = d.context_json ? JSON.parse(d.context_json) : {}; } catch { ctx = {}; }
+    const isReply = d.draft_type === 'reply';
+    const typeLabel = isReply
+      ? '<span class="badge-blue">返信</span>'
+      : '<span class="badge-green">ホスト→ゲストレビュー</span>';
+    const propLabel = d.property_code
+      ? `<strong style="font-family:ui-monospace,monospace;">${_rvEscape(d.property_code)}</strong>`
+      : '<span style="color:#999;">(物件未マッチ)</span>';
+    const propName = ctx.property_name && ctx.property_name !== d.property_code
+      ? ` <span style="color:#666;font-size:12px;">${_rvEscape(ctx.property_name)}</span>`
+      : '';
+    const genDate = (d.generated_at || '').slice(0, 10);
+    const origBlock = isReply && ctx.original_text
+      ? `<div style="font-size:12px;color:#444;background:#f5f5f7;padding:8px 12px;border-radius:6px;margin-bottom:8px;white-space:pre-wrap;"><strong>元レビュー:</strong> ${_rvEscape(ctx.original_text)}</div>`
+      : '';
+    const stayBlock = !isReply && (ctx.check_in || ctx.check_out)
+      ? `<div style="font-size:12px;color:#444;background:#f5f5f7;padding:8px 12px;border-radius:6px;margin-bottom:8px;"><strong>宿泊:</strong> ${_rvEscape(ctx.check_in || '?')} → ${_rvEscape(ctx.check_out || '?')} (${_rvEscape(ctx.nights || '?')}泊)</div>`
+      : '';
+    return `
+      <div class="rv-draft-card" data-draft-id="${_rvEscape(d.id)}" style="border:1px solid #ffe1c2;background:#fffbf5;border-radius:8px;padding:14px 16px;margin-bottom:10px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;gap:8px;flex-wrap:wrap;">
+          <div style="font-size:13px;font-weight:600;">
+            ${typeLabel} ${propLabel}${propName}
+            <span style="color:#999;font-weight:400;margin-left:8px;">${_rvEscape(d.guest_name || '(ゲスト不明)')} / ${_rvEscape(d.account)} / ${_rvEscape(genDate)}</span>
+          </div>
+        </div>
+        ${origBlock}
+        ${stayBlock}
+        <textarea class="rv-draft-text" style="width:100%;min-height:120px;font-size:13px;font-family:inherit;padding:10px 12px;border:1px solid #d2d2d7;border-radius:6px;background:white;resize:vertical;margin-bottom:10px;">${_rvEscape(d.draft_text || '')}</textarea>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          <button class="refresh-btn rv-btn-approve" style="background:#34c759;color:white;border:none;" onclick="reviewApproveDraft('${_rvEscape(d.id)}')">✅ 承認</button>
+          <button class="refresh-btn rv-btn-save" style="background:#007aff;color:white;border:none;" onclick="reviewSaveDraft('${_rvEscape(d.id)}')">💾 保存</button>
+          <button class="refresh-btn rv-btn-skip" style="background:#8e8e93;color:white;border:none;" onclick="reviewSkipDraft('${_rvEscape(d.id)}')">⏭ スキップ</button>
+          <span class="rv-btn-status" style="font-size:12px;color:#666;align-self:center;"></span>
+        </div>
+      </div>`;
+  }).join('');
+}
+
+async function submitDraftUpdate(id, body, statusLabel) {
+  const card = document.querySelector(`.rv-draft-card[data-draft-id="${CSS.escape(id)}"]`);
+  if (!card) return;
+  const buttons = card.querySelectorAll('button');
+  const statusEl = card.querySelector('.rv-btn-status');
+  buttons.forEach(b => b.disabled = true);
+  if (statusEl) statusEl.textContent = `${statusLabel}…`;
+  try {
+    // Content-Type は text/plain (Cloudflare Access が OPTIONS preflight を阻むため)。
+    const resp = await fetch(`${DATA_API_BASE}/internal/review-drafts/${encodeURIComponent(id)}`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'text/plain;charset=UTF-8' },
+      body: JSON.stringify(body),
+    });
+    if (resp.status === 401 || resp.status === 302) {
+      throw new Error(`認証エラー — ${DATA_API_BASE}/internal/me を別タブで開いてから再試行`);
+    }
+    const json = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw new Error(json.error || `HTTP ${resp.status}`);
+    // 成功 → 一覧をリロード (カードDOMは差し替わる)
+    await loadReviewDrafts();
+  } catch (e) {
+    if (statusEl) statusEl.textContent = `エラー: ${e.message}`;
+    buttons.forEach(b => b.disabled = false);
+  }
+}
+
+window.reviewApproveDraft = (id) => submitDraftUpdate(id, { status: 'approved' }, '承認中');
+window.reviewSkipDraft = (id) => submitDraftUpdate(id, { status: 'rejected' }, 'スキップ中');
+window.reviewSaveDraft = (id) => {
+  const card = document.querySelector(`.rv-draft-card[data-draft-id="${CSS.escape(id)}"]`);
+  const ta = card?.querySelector('.rv-draft-text');
+  const text = ta ? ta.value : '';
+  if (!text.trim()) {
+    const statusEl = card?.querySelector('.rv-btn-status');
+    if (statusEl) statusEl.textContent = '本文が空です';
+    return;
+  }
+  submitDraftUpdate(id, { draft_text: text }, '保存中');
+};
 let _rvCharts = {};
 
 // API レビュー → モック互換 shape に正規化
@@ -8853,31 +8985,13 @@ function renderReviewTab() {
     </tr>`;
   }).join('') || '<tr><td colspan="8" style="color:#999;text-align:center;padding:20px;">該当レビューがありません</td></tr>';
 
-  // ===== 承認待ち =====
-  const approvalCard = document.getElementById('rv-approval-card');
-  if (isReal) {
-    _rvSetPending(approvalCard, 'Phase 4');
-    document.getElementById('rv-approval-count').textContent = '—';
-    document.getElementById('rv-approval-list').innerHTML = '<div style="color:#999;font-size:13px;padding:20px 0;text-align:center;">返信ドラフト生成は Phase 4 で実装予定</div>';
+  // ===== 承認待ちドラフト (D1 review_drafts、isReal/モックと独立) =====
+  _rvClearPending(document.getElementById('rv-approval-card'));
+  // 初回ロード (空 + 未取得時のみ)。アクション後のリロードは submitDraftUpdate 内で発火。
+  if (_reviewDrafts.items === null && !_reviewDrafts.loading) {
+    loadReviewDrafts();
   } else {
-    _rvClearPending(approvalCard);
-    const pending = filtered.filter(r => r.replyStatus === 'pending');
-    document.getElementById('rv-approval-count').textContent = pending.length;
-    document.getElementById('rv-approval-list').innerHTML = pending.length ? pending.map(r => `
-      <div style="border:1px solid #ffe1c2;background:#fffbf5;border-radius:8px;padding:14px 16px;margin-bottom:10px;">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-          <div style="font-size:13px;font-weight:600;">${r.property.name} #${r.property.room} <span style="color:#999;font-weight:400;margin-left:8px;">${r.guest} / ${r.date}</span></div>
-          <div><span class="badge-red">★${r.star}</span></div>
-        </div>
-        <div style="font-size:12px;color:#444;background:#f5f5f7;padding:8px 12px;border-radius:6px;margin-bottom:8px;"><strong>レビュー本文:</strong> ${r.body}</div>
-        <div style="font-size:12px;color:#444;background:#eef5ff;padding:8px 12px;border-radius:6px;margin-bottom:10px;"><strong>提案返信（Claude生成）:</strong> ${r.replyDraft}</div>
-        <div style="display:flex;gap:8px;">
-          <button class="refresh-btn" style="background:#34c759;color:white;border:none;">承認</button>
-          <button class="refresh-btn" style="background:#ff9500;color:white;border:none;">編集</button>
-          <button class="refresh-btn" style="background:#ff3b30;color:white;border:none;">却下</button>
-        </div>
-      </div>
-    `).join('') : '<div style="color:#999;font-size:13px;padding:20px 0;text-align:center;">承認待ちはありません</div>';
+    renderReviewApprovals();
   }
 
   // ===== プライベートFB =====
