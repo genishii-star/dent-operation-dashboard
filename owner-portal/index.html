@@ -97,6 +97,32 @@
     }
     .badge.reply { background: #e3f2fd; color: #1565c0; }
     .badge.review { background: #e8f5e9; color: #2e7d32; }
+    .type-banner {
+      border-radius: 10px;
+      padding: 10px 12px;
+      margin-bottom: 12px;
+      border-left: 4px solid;
+    }
+    .type-banner.review { background: #e8f5e9; border-color: #2e7d32; }
+    .type-banner.reply  { background: #e3f2fd; border-color: #1565c0; }
+    .type-banner .type-title { font-size: 15px; font-weight: 700; }
+    .type-banner.review .type-title { color: #2e7d32; }
+    .type-banner.reply  .type-title { color: #1565c0; }
+    .type-banner .type-dir {
+      display: inline-block;
+      margin-top: 4px;
+      font-size: 11px;
+      font-weight: 600;
+      padding: 1px 8px;
+      border-radius: 999px;
+      background: rgba(0,0,0,.06);
+      color: #444;
+    }
+    .type-banner .type-desc {
+      margin-top: 5px;
+      font-size: 12px;
+      color: #555;
+    }
     .prop {
       font-weight: 600;
       font-size: 14px;
@@ -118,6 +144,25 @@
       margin-bottom: 4px;
       font-weight: 600;
     }
+    .orig.trans {
+      background: #eef4ff;
+      color: #1d3b6e;
+      margin-top: 8px;
+    }
+    .orig.stay .kv {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+      gap: 6px 16px;
+    }
+    .orig.stay .kv > div {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      border-bottom: 1px solid #e6e6ea;
+      padding: 2px 0;
+    }
+    .orig.stay .kv span { color: var(--muted); }
+    .orig.stay .kv b { font-weight: 600; color: #1d1d1f; }
     textarea {
       width: 100%;
       min-height: 140px;
@@ -249,9 +294,17 @@
       try { ctx = d.context_json ? JSON.parse(d.context_json) : {}; } catch { ctx = {}; }
 
       const isReply = d.draft_type === 'reply';
-      const typeBadge = isReply
-        ? '<span class="badge reply">📩 ゲストへの返信</span>'
-        : '<span class="badge review">📝 ゲストレビュー</span>';
+      const typeBanner = isReply
+        ? `<div class="type-banner reply">
+             <div class="type-title">💬 お客様の口コミへ返信</div>
+             <div class="type-dir">お客様 → Dent</div>
+             <div class="type-desc">お客様が書いた口コミに公開で返信します</div>
+           </div>`
+        : `<div class="type-banner review">
+             <div class="type-title">📝 ゲストへの評価を投稿</div>
+             <div class="type-dir">Dent → お客様</div>
+             <div class="type-desc">お客様を評価してこちらから新規投稿します</div>
+           </div>`;
       const propName = ctx.property_name || d.property_code || '(物件未マッチ)';
       const genDate = (d.generated_at || '').slice(0, 10);
       const guest = d.guest_name || '(ゲスト不明)';
@@ -259,14 +312,25 @@
       const origBlock = isReply && ctx.original_text
         ? `<div class="orig"><span class="label">元のレビュー (${esc(ctx.language || '')})</span>${esc(ctx.original_text)}</div>`
         : '';
-      const stayBlock = !isReply && (ctx.check_in || ctx.check_out)
-        ? `<div class="orig"><span class="label">宿泊期間</span>${esc(ctx.check_in || '?')} → ${esc(ctx.check_out || '?')} (${esc(ctx.nights || '?')}泊)</div>`
+      const stayRows = [];
+      if (!isReply) {
+        if (ctx.check_in)  stayRows.push(['チェックイン', esc(ctx.check_in)]);
+        if (ctx.check_out) stayRows.push(['チェックアウト', esc(ctx.check_out)]);
+        if (ctx.nights)    stayRows.push(['滞在日数', esc(String(ctx.nights)) + '泊']);
+        if (ctx.guests_label || ctx.guests) stayRows.push(['人数', esc(ctx.guests_label || (ctx.guests + '名'))]);
+        if (ctx.total_payout) stayRows.push(['総額', esc(ctx.total_payout)]);
+      }
+      const stayBlock = stayRows.length
+        ? `<div class="orig stay"><span class="label">予約情報</span><div class="kv">${stayRows.map(([k,v]) => `<div><span>${k}</span><b>${v}</b></div>`).join('')}</div></div>`
+        : '';
+      const transBlock = ctx.translation_ja
+        ? `<div class="orig trans"><span class="label">日本語訳（参考・投稿されません）</span>${esc(ctx.translation_ja)}</div>`
         : '';
 
       return `
         <div class="card" data-id="${esc(d.id)}">
+          ${typeBanner}
           <div class="meta">
-            ${typeBadge}
             <span class="prop">${esc(propName)}</span>
             <span>${esc(guest)}</span>
             <span>${esc(genDate)}</span>
@@ -274,6 +338,7 @@
           ${origBlock}
           ${stayBlock}
           <textarea class="draft-text">${esc(d.draft_text || '')}</textarea>
+          ${transBlock}
           <div class="btn-row">
             <button class="act approve" onclick="act('${esc(d.id)}', 'approve')">✅ 承認</button>
             <button class="act save"    onclick="act('${esc(d.id)}', 'save')">💾 保存</button>

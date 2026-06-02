@@ -26,6 +26,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import {
   scrapeUnrepliedReviews,
   scrapePendingGuestReviews,
+  scrapeReservationsIndex,
   ensureLoggedIn,
 } from "./airbnb-helpers.mjs";
 
@@ -127,6 +128,12 @@ async function scrapeWorkItems(page) {
   // Sequential, not parallel — both use the same page object and would conflict.
   const replies = await scrapeUnrepliedReviews(page);
   const guest_reviews = await scrapePendingGuestReviews(page);
+  // Completed-reservations table: per-stay details (dates, party size,
+  // confirmation code, payout) that the review pages don't expose. Matched
+  // to each guest review by guest name below.
+  const reservations = await scrapeReservationsIndex(page);
+  console.log(`[scrape] reservations index: ${reservations.length} rows`);
+
   // Normalize shape for downstream code.
   return {
     replies: replies.map((r) => ({
@@ -138,17 +145,58 @@ async function scrapeWorkItems(page) {
       language: null, // Claude will infer from original_text
       stay_date: r.date,
     })),
-    guest_reviews: guest_reviews.map((r) => ({
-      reservation_id: r.reservation_id,
-      guest_name: r.guest_name,
-      property_name: null,
-      room_no: null,
-      check_in: null,
-      check_out: null,
-      nights: null,
-      edit_href: r.href, // stored in context_json so post-approved can re-use
-    })),
+    guest_reviews: guest_reviews.map((r) => {
+      const resv = matchReservation(reservations, r.guest_name);
+      return {
+        reservation_id: r.reservation_id,
+        guest_name: r.guest_name,
+        property_name: null,
+        room_no: null,
+        check_in: resv?.check_in_iso ?? null,
+        check_out: resv?.check_out_iso ?? null,
+        nights: resv?.nights ?? null,
+        guests: resv?.guests ?? null,
+        guests_label: resv?.guests_label ?? null,
+        total_payout: resv?.total_payout ?? null,
+        confirmation_code: resv?.confirmation_code ?? null, // for future 国籍 join
+        edit_href: r.href, // stored in context_json so post-approved can re-use
+      };
+    }),
   };
+}
+
+// Match a review's guest name to a row in the reservations index. Airbnb's
+// review pages give only a (often first-name) guest label, while the table has
+// the full name — so we match by containment, case-insensitively. Returns the
+// enriched row (with parsed ISO dates + nights) or null.
+function matchReservation(reservations, guestName) {
+  const norm = (s) => String(s ?? "").trim().toLowerCase();
+  const g = norm(guestName);
+  if (!g) return null;
+  const hit = reservations.find((r) => {
+    const n = norm(r.name);
+    return n === g || n.includes(g) || g.includes(n.split(/\s+/)[0]);
+  });
+  if (!hit) return null;
+  const ci = parseAirbnbDate(hit.check_in);
+  const co = parseAirbnbDate(hit.check_out);
+  const nights = ci && co ? Math.round((co - ci) / 86400000) : null;
+  return {
+    check_in_iso: ci ? ci.toISOString().slice(0, 10) : hit.check_in || null,
+    check_out_iso: co ? co.toISOString().slice(0, 10) : hit.check_out || null,
+    nights: nights && nights > 0 ? nights : null,
+    guests: hit.guests,
+    guests_label: hit.guests_label || null,
+    total_payout: hit.total_payout || null,
+    confirmation_code: hit.confirmation_code || null,
+  };
+}
+
+// "May 20, 2026" → Date (UTC). Returns null if unparseable.
+function parseAirbnbDate(s) {
+  if (!s) return null;
+  const d = new Date(`${s} UTC`);
+  return Number.isNaN(d.getTime()) ? null : d;
 }
 
 // ---------- credentials (for 2FA recovery) ----------
@@ -281,6 +329,35 @@ async function generateGuestReviewDraft({ item, facility }) {
   return { text, usage: resp.usage };
 }
 
+// ---------- Japanese gloss for owner approval ----------
+//
+// The owner portal shows this as a 参考訳 so owners who don't read English can
+// understand what they're approving. It is NOT posted to Airbnb — the English
+// draft_text is what gets posted. Skip when the draft is already Japanese
+// (e.g. a reply to a Japanese review).
+function isMostlyJapanese(s) {
+  const jp = (String(s).match(/[぀-ヿ㐀-鿿]/g) || []).length;
+  return jp / Math.max(1, String(s).length) > 0.15;
+}
+
+const TRANSLATE_SYSTEM = `あなたは翻訳者です。与えられた Airbnb のレビュー/返信文を自然で読みやすい日本語に訳してください。訳文のみを出力し、説明・注釈・原文の再掲は不要です。`;
+
+async function translateToJa(text) {
+  if (!text || isMostlyJapanese(text)) return null;
+  try {
+    const resp = await anthropic.messages.create({
+      model: MODEL,
+      max_tokens: 1024,
+      system: [{ type: "text", text: TRANSLATE_SYSTEM, cache_control: { type: "ephemeral" } }],
+      messages: [{ role: "user", content: text }],
+    });
+    return resp.content.find((b) => b.type === "text")?.text?.trim() ?? null;
+  } catch (e) {
+    console.warn(`[translate] failed (${e.message}); skipping gloss`);
+    return null;
+  }
+}
+
 // ---------- D1 dedupe + write ----------
 async function alreadyHasActiveDraft({ account, draft_type, target_id }) {
   // We don't have a "by target" endpoint; just list pending+approved and check locally.
@@ -327,10 +404,11 @@ async function main() {
       const facility = await getFacility(item.property_name, item.room_no);
       const { text } = await generateReplyDraft({ item, facility });
       if (DRY_RUN) { console.log(`[dry-run reply→${item.review_id}]`, text); created++; continue; }
+      const translation_ja = await translateToJa(text);
       await createDraft({
         account: ACCOUNT, draft_type: "reply", target_id: item.review_id,
         guest_name: item.guest_name, property_code: facility?.code ?? null,
-        context: { property_name: item.property_name, room_no: item.room_no, original_text: item.original_text, language: item.language },
+        context: { property_name: item.property_name, room_no: item.room_no, original_text: item.original_text, language: item.language, translation_ja },
         draft_text: text,
       });
       created++;
@@ -349,10 +427,11 @@ async function main() {
       const facility = await getFacility(item.property_name, item.room_no);
       const { text } = await generateGuestReviewDraft({ item, facility });
       if (DRY_RUN) { console.log(`[dry-run review→${item.reservation_id}]`, text); created++; continue; }
+      const translation_ja = await translateToJa(text);
       await createDraft({
         account: ACCOUNT, draft_type: "review_of_guest", target_id: item.reservation_id,
         guest_name: item.guest_name, property_code: facility?.code ?? null,
-        context: { property_name: item.property_name, room_no: item.room_no, check_in: item.check_in, check_out: item.check_out, nights: item.nights, edit_href: item.edit_href },
+        context: { property_name: item.property_name, room_no: item.room_no, check_in: item.check_in, check_out: item.check_out, nights: item.nights, guests: item.guests, guests_label: item.guests_label, total_payout: item.total_payout, confirmation_code: item.confirmation_code, edit_href: item.edit_href, translation_ja },
         draft_text: text,
       });
       created++;

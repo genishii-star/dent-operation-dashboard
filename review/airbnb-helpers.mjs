@@ -200,6 +200,71 @@ export async function scrapePendingGuestReviews(page) {
   return results;
 }
 
+/**
+ * Scrape the host "Completed" reservations table — the only place Airbnb
+ * surfaces per-stay details (dates, party size, confirmation code, payout)
+ * to the host. Used to enrich guest-review drafts so the owner can see the
+ * stay context when approving.
+ *
+ * Returns [{ name, guests_label, guests, check_in, check_out,
+ *            confirmation_code, total_payout }].
+ *   - name           : full guest name as shown ("太晴 渡邊", "Daigo Ogasawara")
+ *   - guests_label   : raw party string ("5 adults", "2 adults, 1 infant")
+ *   - guests         : numeric total persons parsed from guests_label
+ *   - check_in/out   : "May 20, 2026" style strings (left as-is; caller parses)
+ *   - confirmation_code : "HM84JQA59J" — join key to Airhost reservation data
+ *   - total_payout   : "¥23,744" string as shown
+ */
+export async function scrapeReservationsIndex(page) {
+  await page.goto("https://www.airbnb.com/hosting/reservations/completed", {
+    waitUntil: "domcontentloaded",
+    timeout: 30000,
+  });
+  await page.waitForTimeout(5000);
+
+  const rows = await page.evaluate(() => {
+    const t = document.querySelector("table");
+    if (!t) return [];
+    const headers = [...t.querySelectorAll("thead th, thead td")].map((th) =>
+      th.innerText.trim().toLowerCase(),
+    );
+    const col = (name) => headers.findIndex((h) => h === name.toLowerCase());
+    const ix = {
+      guests: col("Guests"),
+      checkin: col("Check-in"),
+      checkout: col("Checkout"),
+      code: col("Confirmation Code"),
+      payout: col("Total Payout"),
+    };
+    return [...t.querySelectorAll("tbody tr")].map((tr) => {
+      const cells = [...tr.querySelectorAll("td,th")].map((td) => td.innerText.trim());
+      return {
+        guests_cell: cells[ix.guests] ?? "",
+        check_in: cells[ix.checkin] ?? "",
+        check_out: cells[ix.checkout] ?? "",
+        confirmation_code: cells[ix.code] ?? "",
+        total_payout: cells[ix.payout] ?? "",
+      };
+    });
+  });
+
+  return rows.map((r) => {
+    const lines = r.guests_cell.split("\n").map((s) => s.trim()).filter(Boolean);
+    const name = lines[0] ?? "";
+    const guests_label = lines.slice(1).join(", "); // "5 adults" / "2 adults, 1 infant"
+    const guests = (guests_label.match(/\d+/g) ?? []).reduce((a, n) => a + Number(n), 0) || null;
+    return {
+      name,
+      guests_label,
+      guests,
+      check_in: r.check_in,
+      check_out: r.check_out,
+      confirmation_code: r.confirmation_code,
+      total_payout: r.total_payout,
+    };
+  }).filter((r) => r.name);
+}
+
 // ============================================================
 // Login + 2FA recovery
 // ============================================================
@@ -475,9 +540,40 @@ export async function postGuestReview(page, { reservation_id, editHref, draft_te
   await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
   await page.waitForTimeout(5000);
 
+  // Success markers shown once the review is in (immediate confirmation, or
+  // the "already submitted" state if we re-enter an editor for a done review).
+  const isSubmittedBody = (b) => {
+    // Normalize whitespace first: Airbnb's confirmation copy uses &nbsp;
+    // ( ) between words, so a plain-space substring check silently misses
+    // even though the text looks identical. \s collapses nbsp too.
+    const s = (b || "").replace(/\s+/g, " ").toLowerCase();
+    return (
+      s.includes("your review has been submitted") ||
+      s.includes("thanks for your review") ||
+      s.includes("already submitted a review") ||
+      s.includes("you’ve already submitted") ||
+      s.includes("you've already submitted")
+    );
+  };
+
+  // Final safety net: when the wizard ends up in an unrecognized state, the
+  // submission may actually have gone through (the post-submit confirmation
+  // page has no "step N of M" and no radios, so it looks like an "unknown
+  // step"). Reload the editor and let Airbnb tell us if the review is done.
+  const confirmSubmitted = async () => {
+    try {
+      await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
+      await page.waitForTimeout(3000);
+      const b = await page.evaluate(() => document.body.innerText || "");
+      return isSubmittedBody(b);
+    } catch {
+      return false;
+    }
+  };
+
   for (let loop = 0; loop < 12; loop++) {
     const body = await page.evaluate(() => document.body.innerText || "");
-    if (body.includes("Your review has been submitted") || body.includes("Thanks for your review")) {
+    if (isSubmittedBody(body)) {
       return { ok: true };
     }
 
@@ -492,7 +588,10 @@ export async function postGuestReview(page, { reservation_id, editHref, draft_te
         continue;
       }
       const hasRadio = await page.locator('input[type="radio"]').count();
-      if (!hasRadio) return { ok: false, error: `unknown initial step; body: ${body.substring(0, 200)}` };
+      if (!hasRadio) {
+        if (await confirmSubmitted()) return { ok: true };
+        return { ok: false, error: `unknown initial step; body: ${body.substring(0, 200)}` };
+      }
       // fall through to step 1-3 handler
     }
 
@@ -529,7 +628,9 @@ export async function postGuestReview(page, { reservation_id, editHref, draft_te
       continue;
     }
 
+    if (await confirmSubmitted()) return { ok: true };
     return { ok: false, error: `unknown step ${stepNum}; body: ${body.substring(0, 200)}` };
   }
+  if (await confirmSubmitted()) return { ok: true };
   return { ok: false, error: "exceeded max wizard iterations" };
 }

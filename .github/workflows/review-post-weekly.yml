@@ -1,15 +1,19 @@
-name: Review draft poster (weekly)
+name: Review draft poster
 
-# Runs Monday 18:00 JST (09:00 UTC) — drains drafts that humans approved
-# during the day in the operations dashboard (op.dent-inc.com → レビュータブ
-# → 承認待ち). Companion to `review-generate-weekly.yml`.
+# Posts drafts that humans approved in the operations dashboard / owner portal
+# (op.dent-inc.com → レビュータブ → 承認待ち, or owner.dent-inc.com).
 #
-# Spaced 9 hours after the generator gives humans an unhurried morning to
-# review. Adjust the cron if your team's approval cadence differs.
+# Triggers:
+#   - repository_dispatch (review-approved): fired by dent-data-api the moment a
+#     draft is approved → "approve → auto-post" (posts within a few minutes).
+#   - schedule: weekly safety net (Mon 18:00 JST) that drains anything missed.
+#   - workflow_dispatch: manual run for a single account.
 
 on:
   schedule:
     - cron: '0 9 * * 1'  # Mon 09:00 UTC = Mon 18:00 JST
+  repository_dispatch:
+    types: [review-approved]
   workflow_dispatch:
     inputs:
       account:
@@ -30,21 +34,49 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Decide which account(s) to post for, based on what triggered the run.
+  #   repository_dispatch → the approved account from the payload
+  #   workflow_dispatch    → the manual input account (if given)
+  #   schedule             → the full configured list
+  determine:
+    name: Determine accounts
+    runs-on: ubuntu-latest
+    outputs:
+      accounts: ${{ steps.set.outputs.accounts }}
+    steps:
+      - id: set
+        env:
+          EVENT: ${{ github.event_name }}
+          DISPATCH_ACCOUNT: ${{ github.event.client_payload.account }}
+          INPUT_ACCOUNT: ${{ inputs.account }}
+        run: |
+          set -euo pipefail
+          # Edit this list to add accounts to the weekly schedule.
+          DEFAULT='["NAGAI"]'
+          acct=""
+          if [ "$EVENT" = "repository_dispatch" ]; then
+            acct="$DISPATCH_ACCOUNT"
+          elif [ "$EVENT" = "workflow_dispatch" ] && [ -n "${INPUT_ACCOUNT:-}" ]; then
+            acct="$INPUT_ACCOUNT"
+          fi
+          if [ -n "$acct" ]; then
+            if ! printf '%s' "$acct" | grep -qE '^[A-Za-z0-9_-]{1,32}$'; then
+              echo "invalid account: $acct" >&2; exit 1
+            fi
+            echo "accounts=[\"$acct\"]" >> "$GITHUB_OUTPUT"
+          else
+            echo "accounts=$DEFAULT" >> "$GITHUB_OUTPUT"
+          fi
+
   post:
     name: Post approved drafts (${{ matrix.account }})
+    needs: determine
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        account:
-          - NAGAI
+        account: ${{ fromJSON(needs.determine.outputs.accounts) }}
     steps:
-      - name: Skip if manual override targets a different account
-        if: github.event_name == 'workflow_dispatch' && inputs.account != '' && inputs.account != matrix.account
-        run: |
-          echo "Skipping ${{ matrix.account }} (manual run targets ${{ inputs.account }})"
-          exit 0
-
       - uses: actions/checkout@v4
 
       - name: Setup Node
