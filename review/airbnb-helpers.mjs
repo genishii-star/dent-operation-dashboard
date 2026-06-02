@@ -509,17 +509,26 @@ export async function postReply(page, { review_id, draft_text }) {
     return false;
   })();
   if (!enabled) {
-    // Surface the live DOM so the next run is debuggable instead of opaque.
-    const diag = await page.evaluate(() => ({
-      buttons: [...document.querySelectorAll("button")]
-        .filter((b) => b.offsetParent !== null)
-        .map((b) => ({ t: (b.innerText || "").trim().slice(0, 24), d: b.disabled })),
-      taLen: (() => {
-        const t = [...document.querySelectorAll("textarea")].find((x) => x.offsetParent !== null);
-        return t ? t.value.length : -1;
-      })(),
-    }));
-    return { ok: false, error: `Save button never became enabled; diag=${JSON.stringify(diag).slice(0, 400)}` };
+    // Surface the live DOM + a screenshot so the reply UI is debuggable instead
+    // of opaque. The artifact is uploaded by the workflow (review/*.png).
+    const shot = `reply-fail-${review_id}.png`;
+    await page.screenshot({ path: shot, fullPage: true }).catch(() => {});
+    const diag = await page.evaluate(() => {
+      const vis = (el) => el.offsetParent !== null;
+      const panel = [...document.querySelectorAll("h1,h2,h3")]
+        .find((h) => (h.innerText || "").trim() === "Review details")
+        ?.closest("section,div");
+      return {
+        buttons: [...document.querySelectorAll("button")].filter(vis)
+          .map((b) => (b.innerText || b.getAttribute("aria-label") || "·icon").trim().slice(0, 30)),
+        textareas: [...document.querySelectorAll("textarea")].map((t) => ({
+          vis: vis(t), len: t.value.length, ph: (t.placeholder || "").slice(0, 30),
+          al: (t.getAttribute("aria-label") || "").slice(0, 40),
+        })),
+        panelText: panel ? (panel.innerText || "").slice(0, 300) : "(no Review details panel)",
+      };
+    });
+    return { ok: false, error: `Save never enabled; shot=${shot}; diag=${JSON.stringify(diag).slice(0, 900)}` };
   }
 
   // Click Save

@@ -97,3 +97,14 @@ jobs:
             ${{ inputs.dry_run && '--dry-run' || '' }} \
             2>&1 | tee run.log
           exit ${PIPESTATUS[0]}
+
+      - name: Upload debug artifacts (screenshots + log)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reply-debug
+          path: |
+            review/*.png
+            review/run.log
+          if-no-files-found: ignore
+          retention-days: 7
