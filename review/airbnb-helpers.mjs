@@ -483,20 +483,20 @@ export async function postReply(page, { review_id, draft_text }) {
   });
   if (!taFound) return { ok: false, error: "textarea not found after clicking Write a public reply" };
 
-  // Fill via native setter so React/internal state picks it up
-  await page.evaluate((text) => {
-    const ta = [...document.querySelectorAll("textarea")].find((t) => t.offsetParent !== null);
-    if (!ta) return;
-    const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value").set;
-    setter.call(ta, text);
-    ta.dispatchEvent(new Event("input", { bubbles: true }));
-    ta.dispatchEvent(new Event("change", { bubbles: true }));
-  }, draft_text);
-  await page.waitForTimeout(1500);
+  // Fill the reply box with REAL keyboard events. A programmatic value-set
+  // (native setter + synthetic input event) does NOT flip Airbnb's internal
+  // "dirty" flag, so the Save button stays disabled forever. Typing the text
+  // dispatches genuine key events that the reply form's change-tracking sees.
+  const ta = page.locator("textarea:visible").first();
+  await ta.click();
+  await ta.fill("");
+  await ta.pressSequentially(draft_text, { delay: 8 });
+  await ta.blur().catch(() => {});
+  await page.waitForTimeout(800);
 
-  // Wait for Save to become enabled (max 5s)
+  // Wait for Save to become enabled (max 8s)
   const enabled = await (async () => {
-    const deadline = Date.now() + 5000;
+    const deadline = Date.now() + 8000;
     while (Date.now() < deadline) {
       const ok = await page.evaluate(() => {
         const btn = [...document.querySelectorAll("button")]
@@ -508,7 +508,19 @@ export async function postReply(page, { review_id, draft_text }) {
     }
     return false;
   })();
-  if (!enabled) return { ok: false, error: "Save button never became enabled" };
+  if (!enabled) {
+    // Surface the live DOM so the next run is debuggable instead of opaque.
+    const diag = await page.evaluate(() => ({
+      buttons: [...document.querySelectorAll("button")]
+        .filter((b) => b.offsetParent !== null)
+        .map((b) => ({ t: (b.innerText || "").trim().slice(0, 24), d: b.disabled })),
+      taLen: (() => {
+        const t = [...document.querySelectorAll("textarea")].find((x) => x.offsetParent !== null);
+        return t ? t.value.length : -1;
+      })(),
+    }));
+    return { ok: false, error: `Save button never became enabled; diag=${JSON.stringify(diag).slice(0, 400)}` };
+  }
 
   // Click Save
   await page.evaluate(() => {
