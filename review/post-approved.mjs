@@ -22,11 +22,40 @@ import { chromium } from "playwright";
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import Anthropic from "@anthropic-ai/sdk";
 import {
   ensureLoggedIn,
   postReply as postReplyImpl,
   postGuestReview as postGuestReviewImpl,
 } from "./airbnb-helpers.mjs";
+
+// Host→guest review drafts are authored/edited in Japanese (so the owner can
+// review them) and translated to English here, at post time — so the posted
+// English always reflects the owner's latest Japanese edit. Replies are posted
+// in the guest's own language and are never translated.
+const MODEL = "claude-haiku-4-5-20251001";
+const TRANSLATE_SYSTEM = `You translate an Airbnb host-to-guest review from Japanese into natural, warm English suitable for posting publicly on Airbnb. Keep it positive and concise. Output only the English translation — no notes, no quotes, no preamble.`;
+
+function isMostlyJapanese(s) {
+  const jp = (String(s).match(/[぀-ヿ㐀-鿿]/g) || []).length;
+  return jp / Math.max(1, String(s).length) > 0.15;
+}
+
+async function translateJaToEn(text) {
+  if (!process.env.ANTHROPIC_API_KEY) {
+    throw new Error("ANTHROPIC_API_KEY required to translate Japanese review to English");
+  }
+  const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+  const resp = await anthropic.messages.create({
+    model: MODEL,
+    max_tokens: 1024,
+    system: [{ type: "text", text: TRANSLATE_SYSTEM }],
+    messages: [{ role: "user", content: text }],
+  });
+  const out = resp.content.find((b) => b.type === "text")?.text?.trim() ?? "";
+  if (!out) throw new Error("translation returned empty");
+  return out;
+}
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DATA_API = "https://api.dent-inc.com";
@@ -128,10 +157,17 @@ async function postReply(page, draft) {
 
 async function postGuestReview(page, draft) {
   const ctx = draft.context_json ? JSON.parse(draft.context_json) : {};
+  // Owner-facing draft_text is Japanese → translate to English before posting.
+  // (Older drafts already in English pass through unchanged.)
+  let text = draft.draft_text;
+  if (isMostlyJapanese(text)) {
+    text = await translateJaToEn(text);
+    console.log(`[translate ${draft.id}] JA→EN: ${text.slice(0, 80)}...`);
+  }
   return postGuestReviewImpl(page, {
     reservation_id: draft.target_id,
     editHref: ctx.edit_href ?? null,
-    draft_text: draft.draft_text,
+    draft_text: text,
   });
 }
 

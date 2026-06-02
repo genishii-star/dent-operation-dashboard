@@ -251,19 +251,19 @@ const REPLY_SYSTEM = `あなたは民泊運営会社 Dent Inc. のホストと�
 # 出力形式
 返信本文のみを出力。挨拶や説明文は不要。`;
 
-const REVIEW_SYSTEM = `あなたは民泊運営会社 Dent Inc. のホストとして、宿泊が完了したゲストに対するレビューを Airbnb に投稿します。
+const REVIEW_SYSTEM = `あなたは民泊運営会社 Dent Inc. のhost として、宿泊が完了したゲストへのレビュー(評価コメント)を書きます。この本文はオーナーが日本語で確認・編集し、投稿時に英訳して Airbnb に掲載されます。
 
 # 文体ルール
-- 英語で書く (Airbnb の host→guest レビューは多言語ゲスト向けの汎用性のため英語が望ましい)
+- 日本語で書く (オーナーが読んで確認・編集するため)
 - ポジティブで具体的な内容
 - ゲストの良かった点に触れる (清潔さ・コミュニケーション・チェックアウト時刻遵守 など)
 - 物件の固有名詞には深入りしない (将来のゲストにも読まれる前提)
-- 80〜150 words 程度
+- 英語にして 80〜150 words 相当 (日本語で 200〜350字程度)
 - 絵文字は使わない
 - 推薦 (recommend) は基本Yes 前提
 
 # 出力形式
-レビュー本文のみを出力。挨拶や説明文は不要。`;
+レビュー本文(日本語)のみを出力。挨拶や説明文は不要。`;
 
 function facilityContext(f) {
   if (!f) return "(物件マスタにマッチなし)";
@@ -313,7 +313,7 @@ async function generateGuestReviewDraft({ item, facility }) {
     `チェックアウト: ${item.check_out}`,
     `泊数: ${item.nights}`,
     ``,
-    `上記ゲストへのホスト→ゲストレビューを書いてください (英語)。`,
+    `上記ゲストへのホスト→ゲストレビューを書いてください (日本語)。`,
   ].join("\n");
 
   const resp = await anthropic.messages.create({
@@ -425,13 +425,14 @@ async function main() {
       });
       if (exists) { skipped++; continue; }
       const facility = await getFacility(item.property_name, item.room_no);
+      // draft_text is Japanese now (owner-facing). It gets translated to
+      // English at post time (post-approved.mjs), so no separate translation_ja.
       const { text } = await generateGuestReviewDraft({ item, facility });
       if (DRY_RUN) { console.log(`[dry-run review→${item.reservation_id}]`, text); created++; continue; }
-      const translation_ja = await translateToJa(text);
       await createDraft({
         account: ACCOUNT, draft_type: "review_of_guest", target_id: item.reservation_id,
         guest_name: item.guest_name, property_code: facility?.code ?? null,
-        context: { property_name: item.property_name, room_no: item.room_no, check_in: item.check_in, check_out: item.check_out, nights: item.nights, guests: item.guests, guests_label: item.guests_label, total_payout: item.total_payout, confirmation_code: item.confirmation_code, edit_href: item.edit_href, translation_ja },
+        context: { property_name: item.property_name, room_no: item.room_no, check_in: item.check_in, check_out: item.check_out, nights: item.nights, guests: item.guests, guests_label: item.guests_label, total_payout: item.total_payout, confirmation_code: item.confirmation_code, edit_href: item.edit_href },
         draft_text: text,
       });
       created++;
