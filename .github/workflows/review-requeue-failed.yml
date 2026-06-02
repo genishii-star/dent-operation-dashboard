@@ -1,0 +1,99 @@
+name: Requeue failed review drafts & post
+
+# One-off / ops recovery: take drafts stuck in status='failed' (e.g. transient
+# Airbnb DOM flakiness or a temporarily-invalid API key), flip them back to
+# 'approved', then run the normal poster. Runs in CI so it reuses the existing
+# CF Access service token + Airbnb session in Worker KV — no local creds needed.
+
+on:
+  workflow_dispatch:
+    inputs:
+      account:
+        description: 'Airbnb account'
+        required: true
+        type: string
+        default: NAGAI
+      ids:
+        description: 'Comma-separated review_drafts ids to requeue (failed → approved)'
+        required: true
+        type: string
+        default: '9a52b38f-2a2f-485b-bba7-b37d18918bd6,a957006f-530b-49be-a0a3-94c408f538c8,91bc79d1-ed63-487b-8028-5edea14a225b'
+      dry_run:
+        description: 'Requeue + read but do not actually post'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: review-post
+  cancel-in-progress: false
+
+jobs:
+  requeue-and-post:
+    name: Requeue & post (${{ inputs.account }})
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: review/package-lock.json
+
+      - name: Install deps
+        working-directory: review
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Requeue failed drafts → approved
+        env:
+          CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+          ACCOUNT: ${{ inputs.account }}
+          IDS: ${{ inputs.ids }}
+        run: |
+          set -euo pipefail
+          IFS=',' read -ra ARR <<< "$IDS"
+          for id in "${ARR[@]}"; do
+            id="$(printf '%s' "$id" | tr -d '[:space:]')"
+            [ -z "$id" ] && continue
+            if ! printf '%s' "$id" | grep -qE '^[A-Za-z0-9-]{8,64}$'; then
+              echo "invalid id: $id" >&2; exit 1
+            fi
+            echo "::group::requeue $id"
+            code=$(curl -sS -o /tmp/resp.json -w '%{http_code}' -X PATCH \
+              "https://api.dent-inc.com/internal/review-drafts/$id" \
+              -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
+              -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
+              -H "Content-Type: application/json" \
+              -d '{"status":"approved"}')
+            echo "HTTP $code"
+            cat /tmp/resp.json
+            echo
+            if [ "$code" -ge 300 ]; then
+              echo "requeue failed for $id (HTTP $code)" >&2; exit 1
+            fi
+            echo "::endgroup::"
+          done
+          echo "requeued ${#ARR[@]} draft(s) for $ACCOUNT"
+
+      - name: Post approved drafts
+        working-directory: review
+        env:
+          CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+          ACCOUNTS_JSON: ${{ secrets.ACCOUNTS_JSON }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          set -o pipefail
+          node post-approved.mjs \
+            --account=${{ inputs.account }} \
+            ${{ inputs.dry_run && '--dry-run' || '' }} \
+            2>&1 | tee run.log
+          exit ${PIPESTATUS[0]}
