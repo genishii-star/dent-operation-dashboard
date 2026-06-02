@@ -494,13 +494,16 @@ export async function postReply(page, { review_id, draft_text }) {
   await ta.blur().catch(() => {});
   await page.waitForTimeout(800);
 
-  // Wait for Save to become enabled (max 8s)
+  // Wait for the submit button to become enabled (max 8s). Airbnb's reply UI is
+  // now a "Public reply" modal whose submit button is labelled "Post" (with a
+  // sibling "Cancel"), not "Save". Accept either label for resilience.
   const enabled = await (async () => {
     const deadline = Date.now() + 8000;
     while (Date.now() < deadline) {
       const ok = await page.evaluate(() => {
+        const lbl = (b) => (b.innerText || "").trim();
         const btn = [...document.querySelectorAll("button")]
-          .find((b) => (b.innerText || "").trim() === "Save");
+          .find((b) => lbl(b) === "Post" || lbl(b) === "Save");
         return !!btn && !btn.disabled;
       });
       if (ok) return true;
@@ -528,21 +531,39 @@ export async function postReply(page, { review_id, draft_text }) {
         panelText: panel ? (panel.innerText || "").slice(0, 300) : "(no Review details panel)",
       };
     });
-    return { ok: false, error: `Save never enabled; shot=${shot}; diag=${JSON.stringify(diag).slice(0, 900)}` };
+    return { ok: false, error: `submit (Post/Save) never enabled; shot=${shot}; diag=${JSON.stringify(diag).slice(0, 900)}` };
   }
 
-  // Click Save
+  // Click the submit button (Post / Save).
   await page.evaluate(() => {
+    const lbl = (b) => (b.innerText || "").trim();
     const btn = [...document.querySelectorAll("button")]
-      .find((b) => (b.innerText || "").trim() === "Save");
+      .find((b) => lbl(b) === "Post" || lbl(b) === "Save");
     if (btn) btn.click();
   });
-  await page.waitForTimeout(3000);
 
-  // Verify: panel should now show Edit/Delete (replied state)
+  // Success signal: the reply modal closes (its textarea disappears). The modal
+  // stays open on a validation error, so a vanished composer means Airbnb
+  // accepted the reply.
+  const modalClosed = await (async () => {
+    const deadline = Date.now() + 10000;
+    while (Date.now() < deadline) {
+      const stillOpen = await page.evaluate(() =>
+        [...document.querySelectorAll("textarea")].some((t) => t.offsetParent !== null));
+      if (!stillOpen) return true;
+      await page.waitForTimeout(500);
+    }
+    return false;
+  })();
+  if (!modalClosed) {
+    return { ok: false, error: "reply modal stayed open after clicking Post (submission not accepted)" };
+  }
+
+  // The composer should be gone from the panel now (no 'Write a public reply').
+  await page.waitForTimeout(1000);
   const after = await classifyRightPanel(page);
-  if (after.status !== "replied") {
-    return { ok: false, error: `post submitted but panel did not transition to 'replied' (got '${after.status}')` };
+  if (after.status === "unreplied") {
+    return { ok: false, error: "submitted but panel still shows 'Write a public reply'" };
   }
   return { ok: true };
 }
