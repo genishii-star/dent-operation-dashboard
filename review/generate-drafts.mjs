@@ -275,19 +275,34 @@ function facilityContext(f) {
   ].filter(Boolean).join("\n");
 }
 
+// The reply must match the guest's review language. A soft rule in the (all
+// Japanese) system prompt isn't enough — the model drifts into Japanese for
+// English reviews. So detect the language deterministically and force it with
+// a prominent directive at the very end of the user turn (most salient spot).
+function isMostlyJapanese(s) {
+  const jp = (String(s).match(/[぀-ヿ㐀-鿿]/g) || []).length;
+  return jp / Math.max(1, String(s).length) > 0.1;
+}
+
 async function generateReplyDraft({ item, facility }) {
   const ctx = facilityContext(facility);
+  const reviewIsJa = isMostlyJapanese(item.original_text || "");
+  const langDirective = reviewIsJa
+    ? `【出力言語】このレビューは日本語です。返信も必ず日本語で書いてください。`
+    : `【CRITICAL — output language】This guest review is NOT written in Japanese. You MUST write the public reply in the SAME language as the review above (an English review → an English reply). Do NOT reply in Japanese.`;
   const user = [
     `# 物件情報`, ctx, ``,
     `# ゲスト情報`,
     `名前: ${item.guest_name}`,
     `宿泊月: ${item.stay_date ?? "(不明)"}`,
-    `言語: ${item.language ?? "(原文から推測)"}`,
+    `言語: ${item.language ?? (reviewIsJa ? "日本語" : "ゲストのレビュー言語(非日本語)")}`,
     ``,
     `# 受信レビュー本文`,
     item.original_text,
     ``,
     `上記レビューへの公開返信を書いてください。`,
+    ``,
+    langDirective,
   ].join("\n");
 
   const resp = await anthropic.messages.create({
