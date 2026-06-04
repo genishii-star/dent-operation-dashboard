@@ -277,13 +277,9 @@ function facilityContext(f) {
 
 // The reply must match the guest's review language. A soft rule in the (all
 // Japanese) system prompt isn't enough — the model drifts into Japanese for
-// English reviews. So detect the language deterministically and force it with
-// a prominent directive at the very end of the user turn (most salient spot).
-function isMostlyJapanese(s) {
-  const jp = (String(s).match(/[぀-ヿ㐀-鿿]/g) || []).length;
-  return jp / Math.max(1, String(s).length) > 0.1;
-}
-
+// English reviews. So detect the language deterministically (isMostlyJapanese,
+// defined below and hoisted) and force it with a prominent directive at the
+// very end of the user turn (most salient spot).
 async function generateReplyDraft({ item, facility }) {
   const ctx = facilityContext(facility);
   const reviewIsJa = isMostlyJapanese(item.original_text || "");
