@@ -1,0 +1,81 @@
+name: Edit an existing review reply
+
+# Overwrite a public reply already posted to a review — used to correct a reply
+# that went to the wrong review / addressed the wrong guest. Runs in CI so it
+# reuses the Airbnb session in Worker KV + the CF Access service token.
+
+on:
+  workflow_dispatch:
+    inputs:
+      account:
+        description: 'Airbnb account'
+        required: true
+        type: string
+        default: NAGAI
+      review_id:
+        description: 'Numeric review id whose reply to overwrite'
+        required: true
+        type: string
+      reply_text:
+        description: 'New reply text (overwrites the existing reply verbatim)'
+        required: true
+        type: string
+      dry_run:
+        description: 'Log only — do not open Airbnb or edit'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: review-post
+  cancel-in-progress: false
+
+jobs:
+  edit:
+    name: Edit reply (${{ inputs.account }} / ${{ inputs.review_id }})
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: review/package-lock.json
+
+      - name: Install deps
+        working-directory: review
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Edit reply
+        working-directory: review
+        env:
+          CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+          ACCOUNTS_JSON: ${{ secrets.ACCOUNTS_JSON }}
+          REPLY_TEXT: ${{ inputs.reply_text }}
+        run: |
+          set -o pipefail
+          node edit-reply.mjs \
+            --account=${{ inputs.account }} \
+            --review_id=${{ inputs.review_id }} \
+            ${{ inputs.dry_run && '--dry-run' || '' }} \
+            2>&1 | tee run.log
+          exit ${PIPESTATUS[0]}
+
+      - name: Upload debug artifacts (screenshots + log)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: edit-reply-debug
+          path: |
+            review/*.png
+            review/run.log
+          if-no-files-found: ignore
+          retention-days: 7

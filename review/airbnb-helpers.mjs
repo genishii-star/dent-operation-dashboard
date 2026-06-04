@@ -478,20 +478,28 @@ export async function postReply(page, { review_id, draft_text }) {
   });
   if (!taFound) return { ok: false, error: "textarea not found after clicking Write a public reply" };
 
-  // Fill the reply box with REAL keyboard events. A programmatic value-set
-  // (native setter + synthetic input event) does NOT flip Airbnb's internal
-  // "dirty" flag, so the Save button stays disabled forever. Typing the text
-  // dispatches genuine key events that the reply form's change-tracking sees.
+  return submitReplyModal(page, draft_text, review_id);
+}
+
+// Shared "Public reply" modal fill + submit, used by postReply (new reply) and
+// editReply (correct an existing reply). Assumes the modal is already open with
+// a visible textarea. Types with REAL keystrokes — a programmatic value-set does
+// NOT flip Airbnb's internal "dirty" flag, so the submit button would stay
+// disabled forever. Airbnb labels the submit button "Post" (sibling "Cancel"),
+// formerly "Save"; accept either. Success = the modal (textarea) disappears.
+async function submitReplyModal(page, draft_text, review_id) {
+  const taFound = await page.evaluate(() =>
+    [...document.querySelectorAll("textarea")].some((t) => t.offsetParent !== null));
+  if (!taFound) return { ok: false, error: "reply modal textarea not found" };
+
   const ta = page.locator("textarea:visible").first();
   await ta.click();
-  await ta.fill("");
+  await ta.fill(""); // clear any pre-filled text (edit flow prefills the old reply)
   await ta.pressSequentially(draft_text, { delay: 8 });
   await ta.blur().catch(() => {});
   await page.waitForTimeout(800);
 
-  // Wait for the submit button to become enabled (max 8s). Airbnb's reply UI is
-  // now a "Public reply" modal whose submit button is labelled "Post" (with a
-  // sibling "Cancel"), not "Save". Accept either label for resilience.
+  // Wait for the submit button to become enabled (max 8s).
   const enabled = await (async () => {
     const deadline = Date.now() + 8000;
     while (Date.now() < deadline) {
@@ -561,6 +569,41 @@ export async function postReply(page, { review_id, draft_text }) {
     return { ok: false, error: "submitted but panel still shows 'Write a public reply'" };
   }
   return { ok: true };
+}
+
+/**
+ * Edit (overwrite) an existing public reply — used to correct a reply that was
+ * posted to the wrong review / addressed to the wrong guest. Opens the review,
+ * clicks the reply's "Edit", clears the prefilled text, and submits the new one.
+ *
+ * @returns {Promise<{ok: boolean, error?: string}>}
+ */
+export async function editReply(page, { review_id, draft_text }) {
+  if (!review_id) return { ok: false, error: "missing review_id" };
+  if (!draft_text) return { ok: false, error: "missing draft_text" };
+
+  await loadReviewsPage(page, review_id);
+  const panelReady = await waitForReviewDetailsPanel(page, 10000);
+  if (!panelReady) return { ok: false, error: "right panel never rendered" };
+
+  const status = await classifyRightPanel(page);
+  if (status.status !== "replied") {
+    return { ok: false, error: `expected a replied panel to edit, got '${status.status}'; buttons=${JSON.stringify(status.buttons)}` };
+  }
+
+  // Open the edit modal (the reply row exposes Edit / Delete).
+  const clicked = await page.evaluate(() => {
+    const btn = [...document.querySelectorAll("button")]
+      .find((b) => (b.innerText || "").trim() === "Edit");
+    if (!btn) return false;
+    btn.scrollIntoView({ block: "center" });
+    btn.click();
+    return true;
+  });
+  if (!clicked) return { ok: false, error: "could not click 'Edit'" };
+  await page.waitForTimeout(1500);
+
+  return submitReplyModal(page, draft_text, review_id);
 }
 
 /**
