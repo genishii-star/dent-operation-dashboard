@@ -515,6 +515,20 @@ async function submitReplyModal(page, draft_text, review_id) {
     return false;
   })();
   if (!enabled) {
+    // Airbnb disables the submit button when the text matches the already-saved
+    // reply. If we just typed the exact target text and it won't submit, the
+    // reply is already what we want — treat the edit as an idempotent no-op.
+    const current = await page.evaluate(() => {
+      const t = [...document.querySelectorAll("textarea")].find((x) => x.offsetParent !== null);
+      return t ? t.value : null;
+    });
+    if (current != null && current.trim() === draft_text.trim()) {
+      await page.evaluate(() => {
+        const c = [...document.querySelectorAll("button")].find((b) => (b.innerText || "").trim() === "Cancel");
+        if (c) c.click();
+      });
+      return { ok: true, unchanged: true };
+    }
     // Surface the live DOM + a screenshot so the reply UI is debuggable instead
     // of opaque. The artifact is uploaded by the workflow (review/*.png).
     const shot = `reply-fail-${review_id}.png`;
