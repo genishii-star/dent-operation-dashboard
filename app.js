@@ -816,7 +816,7 @@ function buildInsightsHtml(prop, curStats, wdhdStats, paceData) {
   const levelColors = {
     success: { bg: '#34C75912', border: '#34C759', text: '#34C759' },
     warning: { bg: '#FF950012', border: '#FF9500', text: '#FF9500' },
-    info: { bg: '#007AFF12', border: '#007AFF', text: '#007AFF' },
+    info: { bg: '#285FA812', border: '#285FA8', text: '#285FA8' },
   };
 
   const items = insights.map(ins => {
@@ -968,7 +968,7 @@ function buildGroupInsightsHtml(seriesBase, seriesProps, curAgg, months) {
   const levelColors = {
     success: { bg: '#34C75912', border: '#34C759', text: '#34C759' },
     warning: { bg: '#FF950012', border: '#FF9500', text: '#FF9500' },
-    info: { bg: '#007AFF12', border: '#007AFF', text: '#007AFF' },
+    info: { bg: '#285FA812', border: '#285FA8', text: '#285FA8' },
   };
   const items = insights.map(ins => {
     const c = levelColors[ins.level] || levelColors.info;
@@ -1359,7 +1359,7 @@ function percentileBadge(pct) {
   if (pct === null || pct === undefined || isNaN(pct)) return { html: '-', pct: null };
   let color, bg, icon, label;
   if (pct >= 75)      { color = '#34C759'; bg = '#34C75918'; icon = '🔥'; label = '上位25%'; }
-  else if (pct >= 50) { color = '#007AFF'; bg = '#007AFF18'; icon = '🟢'; label = '平均以上'; }
+  else if (pct >= 50) { color = '#285FA8'; bg = '#285FA818'; icon = '🟢'; label = '平均以上'; }
   else if (pct >= 25) { color = '#FF9500'; bg = '#FF950018'; icon = '🟠'; label = '平均以下'; }
   else                { color = '#FF3B30'; bg = '#FF3B3018'; icon = '🔴'; label = '下位25%'; }
   return {
@@ -4094,7 +4094,7 @@ function renderPropertyCalendar(prefix, propertyName, offsetMonth) {
   let html = '<div style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px;font-size:12px;">';
   // 曜日ヘッダー
   dowLabels.forEach((d, i) => {
-    const color = i === 0 ? '#ff3b30' : i === 6 ? '#007aff' : '#666';
+    const color = i === 0 ? '#ff3b30' : i === 6 ? '#285FA8' : '#666';
     html += `<div style="text-align:center;font-weight:600;color:${color};padding:4px 0;">${d}</div>`;
   });
   // 空セル
@@ -4105,7 +4105,7 @@ function renderPropertyCalendar(prefix, propertyName, offsetMonth) {
     const prevAdr = lastYearAdr[day] || 0;
     const dow = (firstDow + day - 1) % 7;
     const holidayName = holidays[`${month}-${day}`] || null;
-    const dayColor = (dow === 0 || holidayName) ? '#ff3b30' : dow === 6 ? '#007aff' : '#333';
+    const dayColor = (dow === 0 || holidayName) ? '#ff3b30' : dow === 6 ? '#285FA8' : '#333';
 
     let diffHtml = '';
     if (thisAdr > 0 && prevAdr > 0) {
@@ -4121,7 +4121,7 @@ function renderPropertyCalendar(prefix, propertyName, offsetMonth) {
     const bgColor = thisAdr > 0 ? 'rgba(74,144,217,0.06)' : '#fafafa';
     html += `<div style="background:${bgColor};border-radius:6px;padding:4px 2px;text-align:center;min-height:60px;">
       <div style="font-weight:600;color:${dayColor};margin-bottom:2px;">${day}${holidayName ? `<span style="font-size:7px;font-weight:400;display:block;line-height:1;">${holidayName}</span>` : ''}</div>
-      ${thisAdr > 0 ? `<div style="font-size:10px;color:#007aff;font-weight:600;">¥${thisAdr.toLocaleString()}</div>` : `<div style="font-size:10px;color:#ccc;">-</div>`}
+      ${thisAdr > 0 ? `<div style="font-size:10px;color:#285FA8;font-weight:600;">¥${thisAdr.toLocaleString()}</div>` : `<div style="font-size:10px;color:#ccc;">-</div>`}
       ${prevAdr > 0 ? `<div style="font-size:9px;color:#ff9500;">¥${prevAdr.toLocaleString()}</div>` : ''}
       ${diffHtml}
     </div>`;
@@ -4302,7 +4302,7 @@ function toggleGroupedDrill(seriesBase, clickedRow, isRefresh) {
     const stats = overall.stats.find(s => s.name === p.name);
     if (!stats) return '';
     return `<tr class="clickable" onclick="openGroupedPropertyDetail('${p.name}', this)">
-      <td style="color:#007aff;text-decoration:underline;cursor:pointer;">${p.name}</td><td>${fmtPct(stats.occ)}</td><td>${fmtYenFull(Math.round(stats.adr))}</td>
+      <td style="color:#285FA8;text-decoration:underline;cursor:pointer;">${p.name}</td><td>${fmtPct(stats.occ)}</td><td>${fmtYenFull(Math.round(stats.adr))}</td>
       <td>${fmtYenFull(Math.round(stats.revpar))}</td><td>${stats.nights}泊</td>
       <td>${fmtYenFull(stats.sales)}</td><td>${fmtYenFull(stats.received)}</td>
     </tr>`;
@@ -6087,7 +6087,7 @@ function initRevenueCharts() {
       const allGreen = [tGrade, g30, g60, g90].every(g => g === 2 || g === -1);
       const noRed = redCount === 0;
       const overall = allGreen ? '◎' : noRed ? '○' : redCount <= 2 ? '△' : '✕';
-      const overallColor = allGreen ? '#34C759' : noRed ? '#007AFF' : redCount <= 2 ? '#FF9500' : '#FF3B30';
+      const overallColor = allGreen ? '#34C759' : noRed ? '#285FA8' : redCount <= 2 ? '#FF9500' : '#FF3B30';
 
       // 市場パーセンタイル（売上・ADR）: 今月のみ選択時は前月で比較（市場データ未公表のため）
       const cmp = resolveMarketCompareMonths(curMonths);
@@ -6177,7 +6177,7 @@ function initRevenueCharts() {
       const clickName = r.propNames.length === 1 ? r.propNames[0] : r.propNames[0];
       const safeName = clickName.replace(/'/g, "\\'");
       scHtml += `<tr style="border-bottom:1px solid #f0f0f0;">
-        <td style="padding:5px 4px;font-weight:600;"><a href="#" style="color:#007aff;text-decoration:none;" onclick="event.preventDefault();toggleScorecardDetail('${safeName}', ${idx})">${r.name}</a></td>
+        <td style="padding:5px 4px;font-weight:600;"><a href="#" style="color:#285FA8;text-decoration:none;" onclick="event.preventDefault();toggleScorecardDetail('${safeName}', ${idx})">${r.name}</a></td>
         <td style="padding:5px 4px;color:#86868b;">${r.area}</td>
         <td style="text-align:right;padding:5px 4px;${r.tGrade >= 0 ? cellStyle(r.tGrade) : ''}border-radius:4px;">${r.targetPct !== null ? Math.round(r.targetPct) + '%' : '-'}</td>
         <td style="text-align:right;padding:5px 4px;">${fmtYen(r.sales)}</td>
@@ -6328,7 +6328,7 @@ function initRevenueCharts() {
     } else {
       const QUADS = [
         { id: 'top',    label: '🔥 上位25%',   sub: 'P75以上',     color: '#34C759', bg: '#34C75912', border: '#34C75930', check: r => r.rank >= 75 },
-        { id: 'high',   label: '🟢 平均以上',  sub: 'P50〜75',     color: '#007AFF', bg: '#007AFF12', border: '#007AFF30', check: r => r.rank >= 50 && r.rank < 75 },
+        { id: 'high',   label: '🟢 平均以上',  sub: 'P50〜75',     color: '#285FA8', bg: '#285FA812', border: '#285FA830', check: r => r.rank >= 50 && r.rank < 75 },
         { id: 'low',    label: '🟠 平均以下',  sub: 'P25〜50',     color: '#FF9500', bg: '#FF950012', border: '#FF950030', check: r => r.rank >= 25 && r.rank < 50 },
         { id: 'bottom', label: '🔴 下位25%',   sub: 'P25未満',     color: '#FF3B30', bg: '#FF3B3012', border: '#FF3B3030', check: r => r.rank < 25 },
       ];
@@ -6365,7 +6365,7 @@ function initRevenueCharts() {
         const [y, m] = selectedMpMonth.split('-');
         return `${y}年${parseInt(m, 10)}月`;
       })();
-      const shiftNote = `<div style="margin-bottom:10px;padding:6px 10px;background:#007AFF10;border-left:3px solid #007AFF;border-radius:4px;font-size:11px;color:#1d1d1f;">比較月: <b>${monthLabel}</b>（自社売上もこの月で集計してAirDNA P25/50/75/90と照合）</div>`;
+      const shiftNote = `<div style="margin-bottom:10px;padding:6px 10px;background:#285FA810;border-left:3px solid #285FA8;border-radius:4px;font-size:11px;color:#1d1d1f;">比較月: <b>${monthLabel}</b>（自社売上もこの月で集計してAirDNA P25/50/75/90と照合）</div>`;
 
       mpEl.innerHTML = shiftNote + `<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">${cardsHtml}</div>`;
     }
@@ -6624,7 +6624,7 @@ function renderReviewApprovals() {
         <textarea class="rv-draft-text" style="width:100%;min-height:120px;font-size:13px;font-family:inherit;padding:10px 12px;border:1px solid #d2d2d7;border-radius:6px;background:white;resize:vertical;margin-bottom:10px;">${_rvEscape(d.draft_text || '')}</textarea>
         <div style="display:flex;gap:8px;flex-wrap:wrap;">
           <button class="refresh-btn rv-btn-approve" style="background:#34c759;color:white;border:none;" onclick="reviewApproveDraft('${_rvEscape(d.id)}')">✅ 承認</button>
-          <button class="refresh-btn rv-btn-save" style="background:#007aff;color:white;border:none;" onclick="reviewSaveDraft('${_rvEscape(d.id)}')">💾 保存</button>
+          <button class="refresh-btn rv-btn-save" style="background:#285FA8;color:white;border:none;" onclick="reviewSaveDraft('${_rvEscape(d.id)}')">💾 保存</button>
           <button class="refresh-btn rv-btn-skip" style="background:#8e8e93;color:white;border:none;" onclick="reviewSkipDraft('${_rvEscape(d.id)}')">⏭ スキップ</button>
           <span class="rv-btn-status" style="font-size:12px;color:#666;align-self:center;"></span>
         </div>
@@ -6998,7 +6998,7 @@ function renderWatchlistTab() {
       badge.style.display = 'none';
     } else {
       badge.style.display = '';
-      badge.innerHTML = `⚠️ 要チェック: <strong>${watchProps.length}件</strong> &nbsp;|&nbsp; 🆕 新着: <strong>${newProps.length}件</strong> &nbsp; <a href="#" onclick="switchTab('watchlist');return false;" style="color:#007aff;text-decoration:none;font-weight:600;">→ タブを開く</a>`;
+      badge.innerHTML = `⚠️ 要チェック: <strong>${watchProps.length}件</strong> &nbsp;|&nbsp; 🆕 新着: <strong>${newProps.length}件</strong> &nbsp; <a href="#" onclick="switchTab('watchlist');return false;" style="color:#285FA8;text-decoration:none;font-weight:600;">→ タブを開く</a>`;
     }
   }
 }
@@ -7335,7 +7335,7 @@ let _pmbmCharts = { monthly: null, rate: null, area: null };
 // マーケットタブ（AirDNA市場データの俯瞰・都市比較・インサイト）
 // ============================================================
 const MKT_CITIES = ['大阪', '京都', '東京'];
-const MKT_CITY_COLORS = { '大阪': '#007AFF', '京都': '#FF9500', '東京': '#34C759' };
+const MKT_CITY_COLORS = { '大阪': '#285FA8', '京都': '#FF9500', '東京': '#34C759' };
 
 function setMarketPeriod(el) {
   el.parentElement.querySelectorAll('.pill').forEach(p => p.classList.remove('active'));
@@ -7980,7 +7980,7 @@ function renderMarketTopInsights() {
   const levelColors = {
     success: { bg: '#34C75912', border: '#34C759', text: '#34C759' },
     warning: { bg: '#FF950012', border: '#FF9500', text: '#FF9500' },
-    info: { bg: '#007AFF12', border: '#007AFF', text: '#007AFF' },
+    info: { bg: '#285FA812', border: '#285FA8', text: '#285FA8' },
   };
   el.innerHTML = insights.map(ins => {
     const c = levelColors[ins.level] || levelColors.info;
@@ -8082,7 +8082,7 @@ function buildMarketInsights(cityKpis, focusCity, wardStats, selYms) {
   const levelColors = {
     success: { bg: '#34C75912', border: '#34C759', text: '#34C759' },
     warning: { bg: '#FF950012', border: '#FF9500', text: '#FF9500' },
-    info: { bg: '#007AFF12', border: '#007AFF', text: '#007AFF' },
+    info: { bg: '#285FA812', border: '#285FA8', text: '#285FA8' },
   };
   return list.map(ins => {
     const c = levelColors[ins.level] || levelColors.info;
@@ -8206,7 +8206,7 @@ function initMarketTopCharts() {
     _mktCharts.topCountry = new Chart(ctxCountry, {
       type: 'bar',
       data: { labels, datasets: [
-        { label: '訪日構成比（e-Stat・外国人のみ）', data: estatPcts, backgroundColor: '#007AFFCC' },
+        { label: '訪日構成比（e-Stat・外国人のみ）', data: estatPcts, backgroundColor: '#285FA8CC' },
         { label: '自社外国人ゲスト構成比', data: selfPcts, backgroundColor: '#FF9500CC' },
       ]},
       options: {
@@ -8238,7 +8238,7 @@ function initMarketTopCharts() {
     _mktCharts.topPrice = new Chart(ctxPrice, {
       type: 'line',
       data: { labels, datasets: [
-        { label: '宿泊料CPI（e-Stat, 指数）', data: norm(cpiData), borderColor: '#007AFF', backgroundColor: 'transparent', tension: 0.3, spanGaps: true, pointRadius: 0 },
+        { label: '宿泊料CPI（e-Stat, 指数）', data: norm(cpiData), borderColor: '#285FA8', backgroundColor: 'transparent', tension: 0.3, spanGaps: true, pointRadius: 0 },
         { label: '自社ADR（指数化）', data: norm(selfData), borderColor: '#34C759', backgroundColor: 'transparent', tension: 0.3, spanGaps: true, pointRadius: 2 },
       ]},
       options: {
@@ -8260,7 +8260,7 @@ function initMarketTopCharts() {
     _mktCharts.topInDom = new Chart(ctxInDom, {
       type: 'line',
       data: { labels, datasets: [
-        { label: '訪日客数（e-Stat）', data: yms.map(ym => v.total[ym] || null), borderColor: '#007AFF', backgroundColor: '#007AFF22', fill: true, tension: 0.3, yAxisID: 'y', spanGaps: true, pointRadius: 0 },
+        { label: '訪日客数（e-Stat）', data: yms.map(ym => v.total[ym] || null), borderColor: '#285FA8', backgroundColor: '#285FA822', fill: true, tension: 0.3, yAxisID: 'y', spanGaps: true, pointRadius: 0 },
         { label: '日本人延べ旅行者数（e-Stat）', data: yms.map(ym => dom.travelers[ym] || null), borderColor: '#FF9500', backgroundColor: 'transparent', tension: 0.3, yAxisID: 'y1', spanGaps: true, pointRadius: 0, borderDash: [4, 3] },
       ]},
       options: {
@@ -8385,7 +8385,7 @@ function initMarketMacroCharts() {
     _mktCharts.macroVT = new Chart(ctxVT, {
       type: 'bar',
       data: { labels, datasets: [
-        { type: 'bar', label: '訪日客数', data: totals, backgroundColor: '#007AFFCC', yAxisID: 'y' },
+        { type: 'bar', label: '訪日客数', data: totals, backgroundColor: '#285FA8CC', yAxisID: 'y' },
         { type: 'line', label: 'YoY (%)', data: yoys, borderColor: '#FF3B30', backgroundColor: 'transparent', tension: 0.3, yAxisID: 'y1', spanGaps: true, pointRadius: 3 },
       ]},
       options: {
@@ -8445,7 +8445,7 @@ function initMarketMacroCharts() {
       });
       return { label: r, data, backgroundColor: null, stack: 'region' };
     });
-    const palette = ['#007AFFCC', '#FF9500CC', '#34C759CC', '#AF52DECC', '#86868bCC'];
+    const palette = ['#285FA8CC', '#FF9500CC', '#34C759CC', '#AF52DECC', '#86868bCC'];
     datasets.forEach((d, i) => d.backgroundColor = palette[i]);
     _mktCharts.macroRegion = new Chart(ctxRegion, {
       type: 'bar', data: { labels, datasets },
@@ -8481,7 +8481,7 @@ function initMarketMacroCharts() {
     const prefYms = pref.yms.slice(-12);
     const prefLabels = prefYms.map(ym => ym.slice(2).replace('-', '/'));
     const targets = ['大阪府', '京都府', '東京都'];
-    const colors = ['#007AFF', '#FF9500', '#34C759'];
+    const colors = ['#285FA8', '#FF9500', '#34C759'];
     const datasets = targets.map((p, i) => {
       const data = prefYms.map(ym => pref.byPref[p] ? pref.byPref[p][ym] || null : null);
       return { label: p, data, borderColor: colors[i], backgroundColor: colors[i] + '22', tension: 0.3, pointRadius: 2, spanGaps: true };
@@ -8499,7 +8499,7 @@ function initMarketMacroCharts() {
     const frYms = fr.yms.slice(-12);
     const frLabels = frYms.map(ym => ym.slice(2).replace('-', '/'));
     const targets = ['大阪府', '京都府', '東京都'];
-    const colors = ['#007AFF', '#FF9500', '#34C759'];
+    const colors = ['#285FA8', '#FF9500', '#34C759'];
     const datasets = targets.map((p, i) => {
       const data = frYms.map(ym => {
         const r = fr.byPref[p] && fr.byPref[p][ym];
@@ -8959,7 +8959,7 @@ function renderReviewTab() {
     const starColor = r.avg >= 4.7 ? 'positive' : r.avg < 4.3 ? 'negative' : '';
     const ab = airbnbByCode[r.prop.code] || {};
     const link = ab.listingId
-      ? ` <a href="https://www.airbnb.com/rooms/${ab.listingId}" target="_blank" style="font-size:11px;color:#007aff;text-decoration:none;">↗</a>`
+      ? ` <a href="https://www.airbnb.com/rooms/${ab.listingId}" target="_blank" style="font-size:11px;color:#285FA8;text-decoration:none;">↗</a>`
       : '';
     const acctBadge = ab.account ? ` <span class="badge-blue">${ab.account}</span>` : '';
     const roomStr = r.prop.room ? ` #${r.prop.room}` : '';
@@ -9145,7 +9145,7 @@ function initReviewCharts() {
         datasets: [{
           label: '平均★',
           data: trendData,
-          borderColor: '#007aff',
+          borderColor: '#285FA8',
           backgroundColor: 'rgba(0,122,255,0.1)',
           tension: 0.3, fill: true
         }]
@@ -9203,9 +9203,9 @@ function initReviewCharts() {
         datasets: [{
           label: '平均★',
           data: catAvg,
-          borderColor: '#007aff',
+          borderColor: '#285FA8',
           backgroundColor: 'rgba(0,122,255,0.2)',
-          pointBackgroundColor: '#007aff'
+          pointBackgroundColor: '#285FA8'
         }]
       },
       options: {
