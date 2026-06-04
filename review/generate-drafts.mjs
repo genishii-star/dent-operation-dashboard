@@ -418,7 +418,10 @@ async function main() {
       if (exists) { skipped++; continue; }
       const facility = await getFacility(item.property_name, item.room_no);
       const { text } = await generateReplyDraft({ item, facility });
-      if (DRY_RUN) { console.log(`[dry-run reply→${item.review_id}]`, text); created++; continue; }
+      if (DRY_RUN) {
+        console.log(`[dry-run reply→${item.review_id}] guest="${item.guest_name}" review="${(item.original_text || "").slice(0, 60)}"\n  reply: ${text.slice(0, 120)}`);
+        created++; continue;
+      }
       const translation_ja = await translateToJa(text);
       await createDraft({
         account: ACCOUNT, draft_type: "reply", target_id: item.review_id,

@@ -91,78 +91,73 @@ async function classifyRightPanel(page) {
 export async function scrapeUnrepliedReviews(page) {
   await loadReviewsPage(page);
 
-  // Snapshot all card-level info from the left list (guest, date, property, rating)
-  // before we start clicking, so we don't lose data when the panel updates.
-  const cards = await page.evaluate(() => {
-    const results = [];
-    const seen = new Set();
-    const viewBtns = [...document.querySelectorAll("button, a, span")]
-      .filter((el) => (el.innerText || "").trim() === "View details");
-    for (const btn of viewBtns) {
-      // Walk up to find the card container
-      let card = btn;
-      for (let i = 0; i < 10; i++) {
-        card = card.parentElement;
-        if (!card) break;
-        const text = (card.innerText || "");
+  // How many "View details" entry points the list shows.
+  const btnCount = await page.evaluate(() =>
+    [...document.querySelectorAll("button, a, span")]
+      .filter((el) => (el.innerText || "").trim() === "View details").length);
+
+  // CRITICAL: read each card's guest/body AND open it in the SAME pass, so the
+  // scraped name+text stay bound to the review_id we actually open. (The old
+  // code snapshotted a separate, de-duplicated `cards` array and paired it to
+  // the click index — any skipped card shifted the indices and attached the
+  // wrong guest name to a review. That produced replies addressed to the wrong
+  // person.) Dedup by the real review_id, not by card text.
+  const out = [];
+  const seen = new Set();
+  for (let i = 0; i < btnCount; i++) {
+    const card = await page.evaluate((idx) => {
+      const els = [...document.querySelectorAll("button, a, span")]
+        .filter((el) => (el.innerText || "").trim() === "View details");
+      const btn = els[idx];
+      if (!btn) return null;
+      // Walk up to the smallest card-shaped container for THIS button.
+      let el = btn, cardText = "";
+      for (let k = 0; k < 10; k++) {
+        el = el.parentElement;
+        if (!el) break;
+        const text = el.innerText || "";
         if (text.length > 80 && text.length < 4000 && text.includes("View details")) {
-          // Stop at the smallest card-shaped container
-          if (text.includes("Overall quality") || text.match(/Rating\s+\d/)) {
-            const key = text.substring(0, 100);
-            if (seen.has(key)) break;
-            seen.add(key);
-            const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
-            // Line 0: guest name. Line 1: "<dates> • <property name>". Body follows.
-            const guest = lines[0] || "";
-            const dateLine = lines[1] || "";
-            const dateMatch = dateLine.match(/^([A-Za-z]+\s+\d+\s*[-–]\s*\d+,?\s*\d{4})/) ||
-                              dateLine.match(/^(\d{1,2}月\d+日\s*[-–]\s*\d+日)/);
-            const date = dateMatch ? dateMatch[1] : "";
-            const propMatch = dateLine.match(/[•·]\s*(.+)$/);
-            const property_name = propMatch ? propMatch[1].trim() : "";
-            // Body: lines after the rating/star line, before "View details"
-            const bodyStart = lines.findIndex((l) => /^\d+$/.test(l)) + 1;
-            const bodyEnd = lines.indexOf("View details");
-            const body = bodyStart > 0 && bodyEnd > bodyStart
-              ? lines.slice(bodyStart, bodyEnd).join(" ").substring(0, 2000)
-              : "";
-            results.push({ guest, date, property_name, body });
-          }
+          if (text.includes("Overall quality") || text.match(/Rating\s+\d/)) cardText = text;
           break;
         }
       }
-    }
-    return results;
-  });
-
-  // Click each View details one-by-one, harvest review_id from URL + status from panel
-  const out = [];
-  const N = cards.length;
-  for (let i = 0; i < N; i++) {
-    const clicked = await page.evaluate((idx) => {
-      const els = [...document.querySelectorAll("button, a, span")]
-        .filter((el) => (el.innerText || "").trim() === "View details");
-      if (!els[idx]) return false;
-      els[idx].scrollIntoView({ block: "center" });
-      els[idx].click();
-      return true;
+      btn.scrollIntoView({ block: "center" });
+      btn.click();
+      if (!cardText) return { guest: "", date: "", property_name: "", body: "" };
+      const lines = cardText.split("\n").map((l) => l.trim()).filter(Boolean);
+      // Line 0: guest name. Line 1: "<dates> • <property name>". Body follows.
+      const guest = lines[0] || "";
+      const dateLine = lines[1] || "";
+      const dateMatch = dateLine.match(/^([A-Za-z]+\s+\d+\s*[-–]\s*\d+,?\s*\d{4})/) ||
+                        dateLine.match(/^(\d{1,2}月\d+日\s*[-–]\s*\d+日)/);
+      const date = dateMatch ? dateMatch[1] : "";
+      const propMatch = dateLine.match(/[•·]\s*(.+)$/);
+      const property_name = propMatch ? propMatch[1].trim() : "";
+      const bodyStart = lines.findIndex((l) => /^\d+$/.test(l)) + 1;
+      const bodyEnd = lines.indexOf("View details");
+      const body = bodyStart > 0 && bodyEnd > bodyStart
+        ? lines.slice(bodyStart, bodyEnd).join(" ").substring(0, 2000)
+        : "";
+      return { guest, date, property_name, body };
     }, i);
-    if (!clicked) continue;
+    if (!card) continue;
     await page.waitForTimeout(1500);
     await waitForReviewDetailsPanel(page);
     const url = page.url();
     const m = url.match(/\/review\/(\d+)/);
     if (!m) continue;
     const review_id = m[1];
+    if (seen.has(review_id)) continue;
+    seen.add(review_id);
     const status = await classifyRightPanel(page);
+    console.log(`[scrape:diag] i=${i}/${btnCount} review_id=${review_id} status=${status.status} guest="${card.guest}" body="${(card.body || "").slice(0, 40)}"`);
     if (status.status === "unreplied") {
-      const c = cards[i] || {};
       out.push({
         review_id,
-        guest_name: c.guest || "",
-        date: c.date || "",
-        property_name: c.property_name || "",
-        original_text: c.body || "",
+        guest_name: card.guest || "",
+        date: card.date || "",
+        property_name: card.property_name || "",
+        original_text: card.body || "",
       });
     }
   }
