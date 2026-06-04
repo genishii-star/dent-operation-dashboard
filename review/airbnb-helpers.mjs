@@ -603,7 +603,13 @@ export async function editReply(page, { review_id, draft_text }) {
   if (!clicked) return { ok: false, error: "could not click 'Edit'" };
   await page.waitForTimeout(1500);
 
-  return submitReplyModal(page, draft_text, review_id);
+  const res = await submitReplyModal(page, draft_text, review_id);
+  if (res.ok) {
+    // Capture the resulting panel so the live edit is visually verifiable.
+    await page.waitForTimeout(800);
+    await page.screenshot({ path: `edited-${review_id}.png`, fullPage: true }).catch(() => {});
+  }
+  return res;
 }
 
 /**
