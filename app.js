@@ -374,7 +374,7 @@ function facilityYamlToMasterRows(f) {
   const region = (f.region || '').toLowerCase();
   const kpiExclude = f.kpi_exclude === true || f.kpi_excluded === true;
   // 物件コードは uppercase に統一 (日次/予約データの propName と照合するため)
-  const codeUpper = (f.code || '').toUpperCase();
+  const codeUpper = String(f.code ?? '').toUpperCase();
   const base = {
     '物件名': f.name || codeUpper,
     'オーナーID': f.owner_ref || '',
@@ -417,7 +417,7 @@ function facilityYamlToMasterRows(f) {
     const t = targetsMap[room] || {};
     return {
       ...base,
-      '物件コード': room,
+      '物件コード': String(room ?? '').toUpperCase(),
       '閑散期目標': parseTargetValue(t.low) ?? parentLow,
       '通常期目標': parseTargetValue(t.normal) ?? parentNormal,
       '繁忙期目標': parseTargetValue(t.high) ?? parentHigh,
@@ -1424,7 +1424,7 @@ function processData() {
   propertyMaster = propertyMaster.filter(pm => (pm['ステータス'] || '稼働中') === '稼働中');
   const _activePropIds = new Set();
   propertyMaster.forEach(pm => {
-    const c = (pm['物件コード'] || '').trim();
+    const c = String(pm['物件コード'] ?? '').trim();
     const n = pm['物件名'] || '';
     if (c) _activePropIds.add(c);
     if (n) _activePropIds.add(n);
@@ -3841,7 +3841,7 @@ async function savePropertySpecEdits() {
 
 // 編集結果をローカル state に反映（propertyMaster / properties / findPropByName キャッシュ）
 function applyPropertySpecToState(propCode, stateUpdates, rawUpdates) {
-  const pm = (propertyMaster || []).find(p => (p['物件コード'] || '').trim() === propCode);
+  const pm = (propertyMaster || []).find(p => String(p['物件コード'] ?? '').trim() === propCode);
   if (pm) {
     Object.keys(rawUpdates).forEach(k => { pm[k] = rawUpdates[k]; });
   }
@@ -3855,7 +3855,7 @@ function applyPropertySpecToState(propCode, stateUpdates, rawUpdates) {
     if (raw) {
       const cache = JSON.parse(raw);
       if (cache.data && cache.data.propMaster) {
-        const cachedPm = cache.data.propMaster.find(p => (p['物件コード'] || '').trim() === propCode);
+        const cachedPm = cache.data.propMaster.find(p => String(p['物件コード'] ?? '').trim() === propCode);
         if (cachedPm) Object.keys(rawUpdates).forEach(k => { cachedPm[k] = rawUpdates[k]; });
         localStorage.setItem(CACHE_KEY, JSON.stringify(cache));
       }
