@@ -685,7 +685,7 @@ buildCountryChart('countryPrvChart', p.byCountry);
     return EXTRA.jntoCountries.feb2025; // fallback; we'll use jan2025 if added later
   })();
   const major = ['韓国','中国','台湾','香港','タイ','シンガポール','マレーシア','フィリピン','インドネシア','ベトナム','インド','オーストラリア','アメリカ','カナダ','メキシコ','イギリス','フランス','ドイツ'];
-  major.forEach(c => {
+  major.slice().sort((a, b) => (cur[b] || 0) - (cur[a] || 0)).forEach(c => {
     const cv = cur[c];
     const pv = EXTRA.jntoCountries.jan2025?.[c];
     if (cv == null) return;
