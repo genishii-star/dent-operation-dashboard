@@ -86,7 +86,8 @@ function getJapaneseHolidays(year) {
 }
 
 // Phase 1.14: 物件/オーナーマスタは YAML in dent-platform repo が source of truth。
-// Sheets API は予約データ・日次データ・シーズンマスタ・設定・市場データの取得のみに使用。
+// Phase 2: 予約データ・日次データは D1 (dent-data-api /internal/*.json) から取得。
+// Sheets API はシーズンマスタ・設定・市場データの取得のみに使用。
 const SHEET_ID = '1C7EiYSz-3ohjTy3Ul5zdgqL8cDk24jPj3ySTsAcOPhA';
 const API_KEY = 'AIzaSyD_16gkzGw68S4socdFAr5HtIieisPA3uk';
 
@@ -540,8 +541,8 @@ async function fetchAndUpdate() {
   if (detail) detail.textContent = '最新データを取得中...';
 
   const [resv, daily, propMaster, ownMaster, seasMaster, settingsRaw, marketRaw, estatRaw, reviewsRaw] = await Promise.all([
-    fetchSheet('予約データ'),
-    fetchSheet('日次データ'),
+    fetchDataApi('/internal/reservations.json').then(d => d.rows || []),
+    fetchDataApi('/internal/daily.json').then(d => d.rows || []),
     fetchPropertyMasterApi(),
     fetchOwnerMasterApi(),
     fetchSheet('シーズンマスタ'),
