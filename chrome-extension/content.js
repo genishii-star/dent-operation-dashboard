@@ -28,7 +28,7 @@
       </div>
       <div class="dent-body" id="dent-body">
         <button class="dent-btn" id="dent-sync-btn">🔄 ワンクリック同期</button>
-        <div class="dent-info">日次(過去1年) + 予約(過去1年+未来6ヶ月)</div>
+        <div class="dent-info">日次(過去90日) + 予約(過去90日+未来365日)</div>
         <div class="dent-log" id="dent-log"></div>
       </div>
     `;
@@ -219,22 +219,26 @@
     logPanel.style.display = 'block';
 
     const today = new Date();
-    const oneYearAgo = new Date(today);
-    oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
-    oneYearAgo.setDate(1);
-    const sixMonthsLater = new Date(today);
-    sixMonthsLater.setMonth(sixMonthsLater.getMonth() + 6);
+    // 取得ウィンドウ: 過去90日 + 未来365日。
+    // 確定済みの過去予約は不変なので、それより前は取得しない（毎日の取得負荷削減）。
+    // 全履歴はD1 (dent-data-api) がupsertで永続蓄積するため、Sheetsは直近窓のバッファでよい。
+    // 過去90日は alert-anomaly.gs のADRベースライン(BASELINE_WINDOW_DAYS=90)が
+    // Sheetsを読むための下限。Sheets読みconsumerをD1移行すれば更に縮められる。
+    const windowStart = new Date(today);
+    windowStart.setDate(windowStart.getDate() - 90);
+    const oneYearLater = new Date(today);
+    oneYearLater.setFullYear(oneYearLater.getFullYear() + 1);
 
     try {
-      // ---- 日次データ（過去1年） ----
-      log('📅 日次データ取得開始（過去1年）');
-      const dailyRows = await fetchAllChunks('daily', oneYearAgo, today);
+      // ---- 日次データ（過去90日） ----
+      log('📅 日次データ取得開始（過去90日）');
+      const dailyRows = await fetchAllChunks('daily', windowStart, today);
       log(`日次データ合計: ${dailyRows.length}行`);
 
-      // ---- 予約データ（過去1年+未来6ヶ月） ----
-      log('📋 予約データ取得開始（過去1年+未来6ヶ月）- 35秒待機...');
+      // ---- 予約データ（過去90日+未来365日） ----
+      log('📋 予約データ取得開始（過去90日+未来365日）- 35秒待機...');
       await new Promise(r => setTimeout(r, 35000));
-      const resRows = await fetchAllChunks('reservation', oneYearAgo, sixMonthsLater);
+      const resRows = await fetchAllChunks('reservation', windowStart, oneYearLater);
       log(`予約データ合計: ${resRows.length}行`);
 
       // ---- Google Sheets に書き込み ----
