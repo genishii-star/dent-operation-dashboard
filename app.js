@@ -461,6 +461,7 @@ function facilityYamlToMasterRows(f) {
 function ownerYamlToMaster(o) {
   return {
     'オーナーID': o.key || '',
+    'オーナー名': o.name || '',
     'ロイヤリティ': o.royalty || '',
     '計算用ロイヤリティ': o.royalty_calc || '',
   };
@@ -1540,7 +1541,7 @@ function processData() {
     else if (!fallbackParseFailed) pct = fallbackPct;
     ownerMap[id] = {
       id: id,
-      name: id,
+      name: om['オーナー名'] || id,
       royalty: royaltyText,
       royaltyOverride: overrideText,
       royaltyPct: pct,
