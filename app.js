@@ -414,7 +414,11 @@ function facilityYamlToMasterRows(f) {
   if (Array.isArray(f.targets)) {
     f.targets.forEach(t => { if (t && t.room) targetsMap[t.room] = t; });
   }
-  return rooms.map(room => {
+  return rooms.map(roomEntry => {
+    // rooms entries は文字列(例: "7104F") またはオブジェクト(例: {id:"DIS207", key_box:"2423"})
+    const room = (roomEntry && typeof roomEntry === 'object')
+      ? (roomEntry.id ?? roomEntry.room ?? roomEntry.code ?? '')
+      : roomEntry;
     const t = targetsMap[room] || {};
     return {
       ...base,
