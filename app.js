@@ -368,6 +368,36 @@ function parseTargetValue(v) {
   return isNaN(n) ? null : n;
 }
 
+// rooms 配列の各要素から部屋コードを取り出す。
+// 文字列(例: "7104F") とオブジェクト(例: {id:"DIS207", key_box:"2423"}) の両形式に対応。
+// 抽出できない場合は '' を返す（呼び出し側でスキーマ警告として検知）。
+function extractRoomCode(roomEntry) {
+  if (roomEntry && typeof roomEntry === 'object') {
+    return String(roomEntry.id ?? roomEntry.room ?? roomEntry.code ?? '');
+  }
+  return roomEntry == null ? '' : String(roomEntry);
+}
+
+// YAML スキーマのドリフト検知: rooms エントリから部屋コードを取り出せない物件を集める。
+// wiki 側が rooms の構造を変えても、ここで壊れた物件を即座にバナー表示し
+// [OBJECT OBJECT]・ゼロ表示として静かに死ぬのを防ぐ。
+let masterSchemaWarnings = [];
+function collectMasterSchemaWarnings(facilities) {
+  masterSchemaWarnings = [];
+  (facilities || []).forEach(f => {
+    if (!Array.isArray(f.rooms)) return;
+    f.rooms.forEach((roomEntry, i) => {
+      if (!extractRoomCode(roomEntry).trim()) {
+        masterSchemaWarnings.push({
+          code: f.code || '(コード不明)',
+          name: f.name || '',
+          detail: `rooms[${i}] から部屋コードを取得できません`,
+        });
+      }
+    });
+  });
+}
+
 // Multi-room facility (rooms array) → expand to per-room master rows.
 // Single facility → 1 row (code as 物件コード).
 // Mirrors the spreadsheet's per-room row structure that 日次データ matches against.
@@ -415,10 +445,7 @@ function facilityYamlToMasterRows(f) {
     f.targets.forEach(t => { if (t && t.room) targetsMap[t.room] = t; });
   }
   return rooms.map(roomEntry => {
-    // rooms entries は文字列(例: "7104F") またはオブジェクト(例: {id:"DIS207", key_box:"2423"})
-    const room = (roomEntry && typeof roomEntry === 'object')
-      ? (roomEntry.id ?? roomEntry.room ?? roomEntry.code ?? '')
-      : roomEntry;
+    const room = extractRoomCode(roomEntry);
     const t = targetsMap[room] || {};
     return {
       ...base,
@@ -442,6 +469,7 @@ function ownerYamlToMaster(o) {
 async function fetchPropertyMasterApi() {
   const data = await fetchDataApi('/internal/facilities.json');
   const arr = (data && data.facilities) || [];
+  collectMasterSchemaWarnings(arr);
   return arr.flatMap(facilityYamlToMasterRows);
 }
 
@@ -1724,15 +1752,27 @@ function renderOrphanAlert(containerId) {
   const el = document.getElementById(containerId);
   if (!el) return;
   const orphans = findOrphanProperties();
-  if (orphans.length === 0) {
-    el.innerHTML = '';
-    return;
+  let html = '';
+  // スキーマ破損（rooms から部屋コードを取得できない物件）を最優先で警告。
+  // YAML を直接開いて直せるようリンクを添える。
+  if (masterSchemaWarnings.length > 0) {
+    const items = masterSchemaWarnings.map(w =>
+      `<li><code>${w.code}</code>${w.name ? ` (${w.name})` : ''} <span style="color:#999;">${w.detail}</span></li>`
+    ).join('');
+    html += `<div class="alert-orphan">
+      <div class="alert-title">⚠ 物件マスタYAMLのスキーマ破損が ${masterSchemaWarnings.length} 件あります（rooms の書式を確認してください）</div>
+      <ul>${items}</ul>
+      <div style="margin-top:6px;"><a href="${FACILITIES_REPO_URL}" target="_blank" rel="noopener" style="color:#ff3b30;font-weight:600;text-decoration:underline;">facilities/ の YAML を確認 ↗</a></div>
+    </div>`;
   }
-  const items = orphans.map(o => `<li>${o.name} <span style="color:#999;">(${o.sources.join('/')}データ・${o.count}件)</span></li>`).join('');
-  el.innerHTML = `<div class="alert-orphan">
-    <div class="alert-title">⚠ マスタ未登録の物件が ${orphans.length} 件あります</div>
-    <ul>${items}</ul>
-  </div>`;
+  if (orphans.length > 0) {
+    const items = orphans.map(o => `<li>${o.name} <span style="color:#999;">(${o.sources.join('/')}データ・${o.count}件)</span></li>`).join('');
+    html += `<div class="alert-orphan">
+      <div class="alert-title">⚠ マスタ未登録の物件が ${orphans.length} 件あります</div>
+      <ul>${items}</ul>
+    </div>`;
+  }
+  el.innerHTML = html;
 }
 
 function getTargetForProperty(prop, monthNum) {
