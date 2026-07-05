@@ -306,6 +306,11 @@
         shinpouNotifyStatus: shinpouNotifyStatus,
       });
 
+      // 最新シートで朝の運営サマリーを発火（イベント駆動）。
+      // 固定9:00トリガーの代わりに、同期完了時＝データが最新の瞬間に投稿させる。
+      // GAS側の冪等ガードで、同日に複数回同期しても本編は1回だけ投稿される。
+      await triggerMorningReport();
+
     } catch (err) {
       log(`❌ エラー: ${err.message}`);
       console.error('[Dent Sync]', err);
@@ -468,6 +473,38 @@
       .map(p => `${p.code}：${nightsByCode[p.code]}/${p.limit}`)
       .join('\n');
     return lines;
+  }
+
+  // ======== 朝の運営サマリー発火 ========
+
+  // GAS morning-report.gs の MORNING_REPORT_CONFIG.TRIGGER_TOKEN と一致させること
+  const MORNING_REPORT_TOKEN = 'dent_morning_2026';
+
+  async function triggerMorningReport() {
+    try {
+      const stored = await chrome.storage.local.get(['morningReportUrl']);
+      const baseUrl = stored.morningReportUrl;
+      if (!baseUrl) {
+        log('  朝レポート発火: URL未設定（設定画面から設定してください）');
+        return;
+      }
+      const url = baseUrl +
+        (baseUrl.indexOf('?') >= 0 ? '&' : '?') +
+        'action=morningReport&token=' + encodeURIComponent(MORNING_REPORT_TOKEN);
+      const result = await sendToBackground('getUrl', { url });
+      if (result.success && result.data && result.data.ok) {
+        const r = result.data.result || {};
+        if (r.posted) log('  朝レポート発火: ✅ 投稿完了');
+        else if (r.skipped === 'already-posted') log('  朝レポート発火: ⏭ 本日投稿済み');
+        else if (r.skipped === 'not-synced') log('  朝レポート発火: ⏭ 同期未完了扱い');
+        else log('  朝レポート発火: 完了');
+      } else {
+        const msg = (result.data && result.data.error) || result.error || result.raw || '不明なエラー';
+        log('  朝レポート発火: ❌ ' + msg);
+      }
+    } catch (e) {
+      log('  朝レポート発火: ❌ ' + e.message);
+    }
   }
 
   // ======== Slack通知 ========

@@ -25,6 +25,21 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       .catch(err => sendResponse({ success: false, error: err.message }));
     return true;
   }
+  if (msg.action === 'getUrl') {
+    // GAS Web App など任意のエンドポイントを GET で叩く (302リダイレクト追従)。
+    // POSTだとGASの302でボディが失われるため、トリガー系はGET+クエリで叩く。
+    fetch(msg.url, { method: 'GET' })
+      .then(async res => {
+        const text = await res.text();
+        try {
+          sendResponse({ success: true, status: res.status, data: JSON.parse(text) });
+        } catch (e) {
+          sendResponse({ success: res.ok, status: res.status, raw: text.slice(0, 2000) });
+        }
+      })
+      .catch(err => sendResponse({ success: false, error: err.message }));
+    return true;
+  }
   if (msg.action === 'postJson') {
     // GAS Web App など任意のエンドポイントにJSONをPOSTしてJSONで返す
     fetch(msg.url, { method: 'POST', body: JSON.stringify(msg.body) })
