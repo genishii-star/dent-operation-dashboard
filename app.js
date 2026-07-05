@@ -5513,11 +5513,18 @@ function initReservationCharts() {
   destroyChart('checkinMonthBD');
   const monthMap = {};
   const monthSalesMap = {};
+  const monthNetSalesMap = {};
+  const monthNightsMap = {};
   filtered.forEach(r => {
     const ym = getYearMonth(r.checkin);
     if (!ym) return;
     monthMap[ym] = (monthMap[ym] || 0) + 1;
     monthSalesMap[ym] = (monthSalesMap[ym] || 0) + (r.sales || 0);
+    // ADR用: 清掃費を除いた売上と泊数を月別に集計
+    if (r.nights > 0) {
+      monthNetSalesMap[ym] = (monthNetSalesMap[ym] || 0) + ((r.sales || 0) - (r.cleaningFee || 0));
+      monthNightsMap[ym] = (monthNightsMap[ym] || 0) + r.nights;
+    }
   });
   const ctxM = document.getElementById('chartCheckinMonthBreakdown');
   if (ctxM) {
@@ -5528,6 +5535,10 @@ function initReservationCharts() {
     });
     const mData = sortedMonths.map(ym => monthMap[ym]);
     const mSales = sortedMonths.map(ym => monthSalesMap[ym] || 0);
+    const mADR = sortedMonths.map(ym => {
+      const n = monthNightsMap[ym] || 0;
+      return n > 0 ? Math.round((monthNetSalesMap[ym] || 0) / n) : 0;
+    });
     const mTotal = mData.reduce((s, v) => s + v, 0);
     allCharts['checkinMonthBD'] = new Chart(ctxM, {
       type: 'bar',
@@ -5554,6 +5565,18 @@ function initReservationCharts() {
             order: 1,
             pointBackgroundColor: CHART_COLORS.orange,
           },
+          {
+            type: 'line',
+            label: 'ADR',
+            data: mADR,
+            borderColor: CHART_COLORS.green,
+            backgroundColor: 'rgba(52,199,89,0.08)',
+            borderDash: [5, 4],
+            tension: 0.4,
+            yAxisID: 'y2',
+            order: 0,
+            pointBackgroundColor: CHART_COLORS.green,
+          },
         ]
       },
       options: {
@@ -5570,6 +5593,9 @@ function initReservationCharts() {
                   const pct = mTotal > 0 ? ((v / mTotal) * 100).toFixed(1) : '0.0';
                   return `予約数: ${v}件 (${pct}%)`;
                 }
+                if (ctx.dataset.label === 'ADR') {
+                  return `ADR: ${fmtYenFull(ctx.parsed.y)}`;
+                }
                 return `GMV: ${fmtYenFull(ctx.parsed.y)}`;
               }
             }
@@ -5578,7 +5604,8 @@ function initReservationCharts() {
         scales: {
           x: { grid: { display: false } },
           y: { position: 'left', beginAtZero: true, title: { display: true, text: '予約数', font: { size: 11 } }, ticks: { precision: 0 } },
-          y1: { position: 'right', beginAtZero: true, grid: { drawOnChartArea: false }, title: { display: true, text: 'GMV (¥)', font: { size: 11 } }, ticks: { callback: v => '¥' + (v / 10000).toFixed(0) + '万' } }
+          y1: { position: 'right', beginAtZero: true, grid: { drawOnChartArea: false }, title: { display: true, text: 'GMV (¥)', font: { size: 11 } }, ticks: { callback: v => '¥' + (v / 10000).toFixed(0) + '万' } },
+          y2: { position: 'right', beginAtZero: true, grid: { drawOnChartArea: false }, title: { display: true, text: 'ADR (¥)', font: { size: 11 } }, ticks: { callback: v => '¥' + (v / 10000).toFixed(1) + '万' } }
         }
       }
     });
