@@ -4754,6 +4754,10 @@ function getReservationPeriodInfo() {
       const start = new Date(today); start.setDate(start.getDate() - days);
       return { start, end: new Date(today), label };
     };
+    if (period === 'today') {
+      const end = new Date(today); end.setDate(end.getDate() + 1);
+      return { start: new Date(today), end, label: '対前日' };
+    }
     if (period === 'yesterday') return dayRange(1, '対前日');
     if (period === 'last3Days') return dayRange(3, '対前3日');
     if (period === 'last7Days') return dayRange(7, '対前7日');
