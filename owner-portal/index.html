@@ -123,6 +123,20 @@
       font-size: 12px;
       color: #555;
     }
+    .deadline {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      border-radius: 8px;
+      padding: 8px 12px;
+      margin-bottom: 12px;
+      font-size: 13px;
+      font-weight: 700;
+    }
+    .deadline .days { font-weight: 600; font-size: 12px; opacity: .9; }
+    .deadline.ok      { background: #eef5ff; color: #1e4d8b; border: 1px solid #cfe1ff; }
+    .deadline.soon    { background: #fff8e1; color: #8a5a00; border: 1px solid #ffd54f; }
+    .deadline.expired { background: #fef0f0; color: #b00020; border: 1px solid #ffd0d0; }
     .prop {
       font-weight: 600;
       font-size: 14px;
@@ -295,6 +309,30 @@
       list.innerHTML = drafts.map(renderCard).join('');
     }
 
+    // Airbnb のホスト→ゲスト レビューは「チェックアウトから14日」で締切。
+    // review_of_guest の締切と残り日数を算出（reply には締切がないので null）。
+    function reviewDeadline(ctx) {
+      if (!ctx || !ctx.check_out) return null;
+      const co = new Date(ctx.check_out + 'T00:00:00');
+      if (isNaN(co.getTime())) return null;
+      const dl = new Date(co.getTime() + 14 * 86400000);
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const days = Math.round((dl.getTime() - today.getTime()) / 86400000);
+      return { month: dl.getMonth() + 1, day: dl.getDate(), days };
+    }
+
+    function deadlineBadge(dd) {
+      if (!dd) return '';
+      const date = `${dd.month}/${dd.day}`;
+      if (dd.days < 0) {
+        return `<div class="deadline expired">⏰ 投稿期限切れ（${date}）<span class="days">— 投稿してもAirbnbに反映されません</span></div>`;
+      }
+      const cls = dd.days <= 3 ? 'soon' : 'ok';
+      const remain = dd.days === 0 ? '今日まで' : `あと${dd.days}日`;
+      return `<div class="deadline ${cls}">⏰ 投稿期限: ${date}<span class="days">（${remain}）</span></div>`;
+    }
+
     function renderCard(d) {
       let ctx = {};
       try { ctx = d.context_json ? JSON.parse(d.context_json) : {}; } catch { ctx = {}; }
@@ -339,9 +377,12 @@
         ? `<div class="note">※ この日本語を承認すると、英訳して Airbnb に投稿します（掲載は英語）。文章はそのまま編集できます。</div>`
         : '';
 
+      const deadlineHtml = isReply ? '' : deadlineBadge(reviewDeadline(ctx));
+
       return `
         <div class="card" data-id="${esc(d.id)}">
           ${typeBanner}
+          ${deadlineHtml}
           <div class="meta">
             <span class="prop">${esc(propName)}</span>
             <span>${esc(guest)}</span>
