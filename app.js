@@ -4925,6 +4925,8 @@ function renderReservationTab() {
 
   if (viewMode === 'grouped') {
     // シリーズ集計テーブル
+    // 物件別分析タブと状態を共有する activeGroupedDrill をリセット（タブ跨ぎの開閉ズレ防止）
+    activeGroupedDrill = null;
     const agg = {};
     validResv.forEach(r => {
       const code = r.propCode || r.property || '';
@@ -4942,7 +4944,8 @@ function renderReservationTab() {
       const adr = s.nights > 0 ? Math.round(s.sales / s.nights) : 0;
       const avgNights = s.count > 0 ? (s.nights / s.count).toFixed(1) : '-';
       const avgGuests = s.count > 0 ? (s.guests / s.count).toFixed(1) : '-';
-      return `<tr><td style="font-weight:600;">${base}</td><td>${s.count}件</td><td>${fmtYenFull(s.sales)}</td><td>${fmtYenFull(adr)}</td><td>${avgNights}泊</td><td>${avgGuests}名</td><td>${fmtYenFull(s.received)}</td></tr>`;
+      // 行クリックで「まとめ（シリーズ）の詳細」を展開（物件別分析のまとめdrillを流用）
+      return `<tr class="clickable" onclick="toggleGroupedDrill('${base}', this)"><td style="font-weight:600;">${base}</td><td>${s.count}件</td><td>${fmtYenFull(s.sales)}</td><td>${fmtYenFull(adr)}</td><td>${avgNights}泊</td><td>${avgGuests}名</td><td>${fmtYenFull(s.received)}</td></tr>`;
     }).join('');
     return;
   }
@@ -4989,11 +4992,50 @@ function renderReservationTab() {
       }
     }
 
-    return `<tr>
-      <td>${(r.date || '').slice(0, 10)}</td><td>${r.property}${propMarks}</td><td>${fmtYenFull(r.sales)}</td><td>${adrStr}</td><td>${mktRatioStr}</td><td>${r.checkin}</td><td>${r.nights}泊</td><td>${r.guestCount}名</td><td>${r.checkout}</td><td>${r.channel}</td><td>${r.guest}</td><td>${r.nationality}</td><td><span class="${statusBadge}">${r.status}</span></td><td>${fmtYenFull(r.received)}</td><td>${r.paid}</td><td>${r.id}</td>
+    // 物件コードに部屋番号を併記（部屋番号があり、物件コードと重複しない場合のみ）
+    const roomNo = (r.roomNum && r.roomNum !== 'ALL' && r.roomNum !== r.property) ? r.roomNum : '';
+    const propDisplay = r.property + roomNo;
+    // 行クリックで売上詳細（物件別分析と同じ）。マスタと突合できた物件のみクリック可
+    const clickAttr = prop ? ` class="clickable" onclick="toggleResvDrill('${prop.name}', this)"` : '';
+
+    return `<tr${clickAttr}>
+      <td>${(r.date || '').slice(0, 10)}</td><td>${propDisplay}${propMarks}</td><td>${fmtYenFull(r.sales)}</td><td>${adrStr}</td><td>${mktRatioStr}</td><td>${r.checkin}</td><td>${r.nights}泊</td><td>${r.guestCount}名</td><td>${r.checkout}</td><td>${r.channel}</td><td>${r.guest}</td><td>${r.nationality}</td><td><span class="${statusBadge}">${r.status}</span></td><td>${fmtYenFull(r.received)}</td><td>${r.paid}</td><td>${r.id}</td>
     </tr>`;
   }).join('');
   setTimeout(initSortableHeaders, 50);
+}
+
+// 予約一覧（個別モード）の行クリック → 物件詳細をその場に展開（物件別分析と同一描画を流用）
+let activeResvDrill = null;
+function toggleResvDrill(propertyName, clickedRow) {
+  const existing = document.getElementById('resv-drill-row');
+  if (existing) {
+    destroyDrillCharts('resv');
+    existing.remove();
+  }
+  // 同じ物件を再クリック → 閉じるだけ
+  if (activeResvDrill === propertyName) {
+    activeResvDrill = null;
+    return;
+  }
+  activeResvDrill = propertyName;
+
+  const drillRow = document.createElement('tr');
+  drillRow.id = 'resv-drill-row';
+  const drillCell = document.createElement('td');
+  drillCell.colSpan = clickedRow ? clickedRow.cells.length : 16;
+  drillCell.style.padding = '0';
+  drillRow.appendChild(drillCell);
+
+  if (clickedRow) {
+    clickedRow.insertAdjacentElement('afterend', drillRow);
+  } else {
+    document.getElementById('reservation-table').appendChild(drillRow);
+  }
+
+  renderPropertyDetail(drillCell, propertyName, 'resv');
+  setTimeout(initSortableHeaders, 50);
+  drillRow.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
 // ============================================================
