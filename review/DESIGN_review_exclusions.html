@@ -1,0 +1,559 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>レビュー依頼の抑制 — 設計図解</title>
+<style>
+  :root{
+    --navy:#001558; --blue:#285FA8; --blue-300:#769CD2;
+    --sky:#C9DEFF; --sky-bg:#EFF4FA;
+    --gold:#FFDB4D; --gold-deep:#C2A840;
+    --ink:#1F2733; --gray-500:#6B7280; --gray-400:#9CA3AF;
+    --line:#E3E7EE; --bg:#FFFFFF; --bg-soft:#FAFBFD;
+    --good:#34C759; --danger:#FF3B30; --warn:#FF9500;
+    --radius:12px; --radius-sm:8px;
+    --font:-apple-system,BlinkMacSystemFont,'Hiragino Sans','Hiragino Kaku Gothic ProN',sans-serif;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{
+    font-family:var(--font); background:var(--bg-soft); color:var(--ink);
+    margin:0; padding:0 0 96px; line-height:1.8; letter-spacing:.01em;
+  }
+  .wrap{max-width:1140px; margin:0 auto; padding:0 24px}
+
+  /* ---- header ---- */
+  header{background:var(--navy); color:#fff; padding:48px 0 40px; margin-bottom:48px}
+  header .wrap{max-width:920px}
+  .eyebrow{
+    font-size:.8rem; font-weight:700; letter-spacing:.14em; text-transform:uppercase;
+    color:var(--gold); margin:0 0 12px;
+  }
+  header h1{font-size:1.9rem; font-weight:700; line-height:1.4; margin:0 0 12px; color:#fff}
+  header p{margin:0; color:rgba(255,255,255,.82); font-size:.95rem; line-height:1.8}
+  .status-row{display:flex; flex-wrap:wrap; gap:8px; margin-top:24px}
+  .chip{
+    display:inline-block; padding:4px 12px; border-radius:999px; font-size:.78rem; font-weight:700;
+    background:rgba(255,255,255,.10); border:1px solid rgba(255,255,255,.18); color:#fff;
+  }
+  .chip.draft{background:var(--gold); color:var(--navy); border-color:transparent}
+
+  /* ---- section ---- */
+  section{margin-bottom:64px}
+  .sec-head{margin-bottom:24px}
+  .sec-num{
+    font-size:.78rem; font-weight:700; letter-spacing:.12em; color:var(--blue);
+    text-transform:uppercase; margin:0 0 6px;
+  }
+  h2{
+    font-size:1.5rem; font-weight:700; color:var(--navy); margin:0 0 8px; line-height:1.5;
+    padding-bottom:10px; border-bottom:2px solid var(--blue);
+  }
+  .sec-lead{margin:12px 0 0; color:var(--gray-500); font-size:.92rem}
+  h3{font-size:1.05rem; font-weight:700; color:var(--navy); margin:0 0 12px; line-height:1.6}
+
+  /* ---- card ---- */
+  .card{
+    background:var(--bg); border:1px solid var(--line); border-radius:var(--radius);
+    padding:24px; box-shadow:0 6px 22px -14px rgba(0,21,88,.18);
+  }
+  .grid2{display:grid; grid-template-columns:1fr 1fr; gap:24px}
+  .grid3{display:grid; grid-template-columns:repeat(3,1fr); gap:16px}
+  /* grid/flex の子は min-width:auto が既定。中の pre がトラックを押し広げるので明示的に潰す */
+  .grid2>*,.grid3>*,.join>*{min-width:0}
+  @media(max-width:860px){ .grid2,.grid3{grid-template-columns:1fr} }
+
+  code,.mono{font-family:var(--mono); font-size:.85em}
+  .code-inline{background:var(--sky-bg); border:1px solid var(--line); border-radius:4px; padding:1px 6px; color:var(--navy)}
+
+  /* ---- flow (pipeline) ---- */
+  .flow{display:flex; align-items:stretch; gap:0; flex-wrap:wrap}
+  .node{
+    flex:1 1 0; min-width:120px; background:var(--bg); border:1px solid var(--line);
+    border-radius:var(--radius); padding:14px 12px; text-align:center;
+  }
+  .node .nlabel{font-size:.86rem; font-weight:700; color:var(--navy); line-height:1.5}
+  .node .nsub{font-size:.72rem; color:var(--gray-500); margin-top:4px; line-height:1.5}
+  .node.gate{border:2px solid var(--gold-deep); background:#FFFDF2}
+  .node.gate .nlabel{color:var(--gold-deep)}
+  .node.sink{background:var(--navy); border-color:var(--navy)}
+  .node.sink .nlabel{color:#fff}
+  .node.sink .nsub{color:rgba(255,255,255,.7)}
+  .arrow{
+    flex:0 0 28px; display:flex; align-items:center; justify-content:center;
+    color:var(--blue-300); font-size:1.1rem; font-weight:700;
+  }
+  @media(max-width:860px){
+    .flow{flex-direction:column}
+    .arrow{flex:0 0 24px; transform:rotate(90deg)}
+  }
+
+  /* ---- join diagram ---- */
+  .join{display:grid; grid-template-columns:1fr 100px 1fr; align-items:center; gap:0}
+  @media(max-width:860px){ .join{grid-template-columns:1fr; gap:12px} }
+  .id-box{
+    border:1px solid var(--line); border-radius:var(--radius); padding:16px; background:var(--bg);
+  }
+  .id-box .src{font-size:.72rem; color:var(--gray-500); margin-bottom:6px}
+  .id-box .val{font-family:var(--mono); font-size:.82rem; color:var(--navy); font-weight:700; word-break:break-all}
+  .id-box .fn{font-size:.7rem; color:var(--gray-400); margin-top:6px; font-family:var(--mono)}
+  .link-mid{text-align:center; padding:0 8px}
+  .link-mid .lbl{font-size:.72rem; font-weight:700; line-height:1.5}
+  .link-line{height:2px; margin:8px 0}
+  .bad .link-line{background:repeating-linear-gradient(90deg,var(--danger) 0 5px,transparent 5px 10px)}
+  .bad .lbl{color:var(--danger)}
+  .good .link-line{background:var(--good)}
+  .good .lbl{color:var(--good)}
+
+  /* ---- callout ---- */
+  .callout{
+    border-left:3px solid var(--blue); background:var(--sky-bg);
+    border-radius:0 var(--radius-sm) var(--radius-sm) 0; padding:16px 20px; margin:16px 0 0;
+  }
+  .callout.danger{border-left-color:var(--danger); background:#FFF4F3}
+  .callout.warn{border-left-color:var(--warn); background:#FFF8EF}
+  .callout.good{border-left-color:var(--good); background:#F1FBF3}
+  .callout p{margin:0; font-size:.88rem; line-height:1.8}
+  .callout p+p{margin-top:8px}
+  .callout .ttl{font-weight:700; color:var(--navy)}
+
+  /* ---- table ---- */
+  .tbl-scroll{overflow-x:auto}
+  table{width:100%; border-collapse:collapse; font-size:.86rem; min-width:520px}
+  th,td{text-align:left; padding:11px 12px; border-bottom:1px solid var(--line); vertical-align:top}
+  th{background:var(--sky-bg); color:var(--navy); font-weight:700; font-size:.8rem; white-space:nowrap}
+  td .mark-ok{color:var(--good); font-weight:700}
+  td .mark-ng{color:var(--danger); font-weight:700}
+
+  /* ---- code block ---- */
+  pre{
+    background:var(--navy); color:#E8EEF9; border-radius:var(--radius-sm);
+    padding:16px 18px; overflow-x:auto; font-family:var(--mono); font-size:.8rem; line-height:1.7;
+    margin:12px 0 0; max-width:100%;
+  }
+  pre .c{color:var(--blue-300)}
+  pre .k{color:var(--gold)}
+
+  /* ---- risk tier ---- */
+  .tier{border:1px solid var(--line); border-radius:var(--radius); padding:18px; background:var(--bg)}
+  .tier .th{display:flex; align-items:center; gap:8px; margin-bottom:10px}
+  .tier .dot{width:10px; height:10px; border-radius:999px; flex:0 0 auto}
+  .tier .tname{font-family:var(--mono); font-size:.82rem; font-weight:700; color:var(--navy)}
+  .tier .where{font-size:.75rem; color:var(--gray-500); margin-bottom:10px}
+  .tier .verdict{font-size:.86rem; font-weight:700; margin-top:10px}
+  .tier .body{font-size:.82rem; color:var(--gray-500); line-height:1.75}
+  .dot.lo{background:var(--good)} .dot.mid{background:var(--warn)} .dot.hi{background:var(--danger)}
+  .verdict.lo{color:var(--good)} .verdict.mid{color:var(--warn)} .verdict.hi{color:var(--danger)}
+
+  /* ---- phases ---- */
+  /* 段階は0始まり。<ol start="0"> はCSSカウンタ使用時に効かないので初期値を-1にする */
+  ol.phases{list-style:none; counter-reset:p -1; margin:0; padding:0}
+  ol.phases li{
+    counter-increment:p; position:relative; padding:14px 16px 14px 52px; border:1px solid var(--line);
+    border-radius:var(--radius); background:var(--bg); margin-bottom:10px; font-size:.88rem;
+  }
+  ol.phases li::before{
+    content:counter(p); position:absolute; left:16px; top:14px;
+    width:24px; height:24px; border-radius:999px; background:var(--blue); color:#fff;
+    font-size:.75rem; font-weight:700; display:flex; align-items:center; justify-content:center;
+  }
+  ol.phases li.now{border-color:var(--gold-deep); background:#FFFDF2}
+  ol.phases li.now::before{background:var(--gold); color:var(--navy)}
+  ol.phases .pt{font-weight:700; color:var(--navy)}
+  ol.phases .pd{color:var(--gray-500); font-size:.82rem}
+
+  footer{border-top:1px solid var(--line); margin-top:64px; padding-top:24px; color:var(--gray-400); font-size:.78rem}
+  footer a{color:var(--blue); text-decoration:none}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap">
+    <p class="eyebrow">Review Automation / Design</p>
+    <h1>レビュー依頼の抑制</h1>
+    <p>レビューパイプラインを完全自動化（オーナー承認の撤廃）するにあたり、「レビュー依頼を送りたくないゲスト」をDent側で持つための設計。判断はDentにしか無く、Airhostからフラグとして取得できない。</p>
+    <div class="status-row">
+      <span class="chip draft">設計のみ / 未実装</span>
+      <span class="chip">2026-07-16</span>
+      <span class="chip">正本: DESIGN_review_exclusions.md</span>
+    </div>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <!-- ============ 1 ============ -->
+  <section>
+    <div class="sec-head">
+      <p class="sec-num">01 — Problem</p>
+      <h2>なぜ投稿してはいけないゲストがいるのか</h2>
+      <p class="sec-lead">ホストがゲスト評価を投稿すると、Airbnbがゲストに通知を出してリスティングへのレビューを促す。トラブルのあったゲストを突けば、悪いレビューを自ら呼び込むことになる。</p>
+    </div>
+
+    <div class="card">
+      <div class="flow">
+        <div class="node">
+          <div class="nlabel">ゲスト評価を投稿</div>
+          <div class="nsub">review_of_guest</div>
+        </div>
+        <div class="arrow">→</div>
+        <div class="node">
+          <div class="nlabel">Airbnbがゲストに通知</div>
+          <div class="nsub">「ホストがあなたを評価しました」</div>
+        </div>
+        <div class="arrow">→</div>
+        <div class="node">
+          <div class="nlabel">ゲストがレビューを書く</div>
+          <div class="nsub">リスティングに公開</div>
+        </div>
+        <div class="arrow">→</div>
+        <div class="node sink">
+          <div class="nlabel">良いゲスト → 得</div>
+          <div class="nsub">トラブルゲスト → 損</div>
+        </div>
+      </div>
+
+      <div class="callout warn">
+        <p><span class="ttl">前提の検証が要る。</span>Airbnbのレビュー公開仕様（双方投稿 or 14日で公開、ホスト投稿が通知トリガーになる）は<strong>実挙動を確認していない</strong>。この図はその仕様を前提にしている。また「レビュー依頼 = <span class="code-inline">review_of_guest</span> の投稿」という解釈自体、別経路（Airhostメッセージ等）を指すなら設計をやり直す。</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 2 ============ -->
+  <section>
+    <div class="sec-head">
+      <p class="sec-num">02 — Prerequisite</p>
+      <h2>先に直すべき: 識別子の結合が名前頼み</h2>
+      <p class="sec-lead">抑制リストの鍵は確認コード。しかし今その確認コードは<strong>ゲスト名のあいまい一致</strong>で引いている。この土台のまま抑制を載せると、取り違えが致命傷になる。</p>
+    </div>
+
+    <div class="grid2">
+      <div class="card">
+        <h3>現状 — 名前で照合</h3>
+        <div class="join bad">
+          <div class="id-box">
+            <div class="src">レビュー側</div>
+            <div class="val">1728066477997763781</div>
+            <div class="fn">scrapePendingGuestReviews()</div>
+          </div>
+          <div class="link-mid">
+            <div class="lbl">ゲスト名</div>
+            <div class="link-line"></div>
+            <div class="lbl">先勝ち</div>
+          </div>
+          <div class="id-box">
+            <div class="src">予約一覧テーブル</div>
+            <div class="val">HMH4YNJ9MN</div>
+            <div class="fn">scrapeReservationsIndex()</div>
+          </div>
+        </div>
+        <pre><span class="c">// generate-drafts.mjs:172  matchReservation()</span>
+n === g || n.includes(g) || g.includes(<span class="k">n.split(/\s+/)[0]</span>)</pre>
+        <div class="callout danger">
+          <p><span class="ttl">同名衝突で別人を掴む。</span>最後の条件は「レビュー側の名前が、テーブル側氏名の<strong>第1トークン</strong>を含む」という緩さ。さらに <span class="code-inline">.find()</span> なので<strong>先に見つかった行が勝つ</strong>。</p>
+          <p>これを鍵に抑制判定すると、<strong>除外したゲストに投稿し、無関係のゲストを除外する</strong>という最悪の取り違えになる。</p>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>あるべき — 同じ行から確定結合</h3>
+        <div class="join good">
+          <div class="id-box">
+            <div class="src">予約一覧テーブルの行内リンク</div>
+            <div class="val">/hosting/reviews/<br>1728066477997763781/edit</div>
+            <div class="fn">a[href*="/hosting/reviews/"]</div>
+          </div>
+          <div class="link-mid">
+            <div class="lbl">同一行</div>
+            <div class="link-line"></div>
+            <div class="lbl">完全一致</div>
+          </div>
+          <div class="id-box">
+            <div class="src">同じ行の Confirmation Code 列</div>
+            <div class="val">HMH4YNJ9MN</div>
+            <div class="fn">cells[ix.code]</div>
+          </div>
+        </div>
+        <pre><span class="c">// 2026-07-16 プローブ実測 (KUZE)</span>
+{"status":"Review guest",
+ "name":"更紗 辻井", "code":"HMH4YNJ9MN",
+ "reservation_id":"1728066477997763781"}
+{"status":"Review guest - <span class="k">Expires soon</span>",
+ "name":"石田 帆未", "code":"HMQYXEYQEH",
+ "reservation_id":"1722969035971353057"}</pre>
+        <div class="callout good">
+          <p><span class="ttl">名前を介す必要がなかった。</span>予約一覧の同じ行に <span class="code-inline">/hosting/reviews/{id}/edit</span> が埋まっており、レビュー側の <span class="code-inline">reservation_id</span> と一致する。</p>
+          <p><span class="ttl">副産物。</span>Airbnbが <span class="code-inline">Expires soon</span> を自前で出している。自前の <span class="code-inline">check_out + 14日</span> 計算より確かな一次情報。</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 3 ============ -->
+  <section>
+    <div class="sec-head">
+      <p class="sec-num">03 — Mechanism</p>
+      <h2>抑制の仕組み</h2>
+      <p class="sec-lead">CSビューからフラグを受け、生成前と投稿直前の二重で判定する。承認を撤廃する以上、投稿直前のゲートが最後の砦になる。</p>
+    </div>
+
+    <div class="card">
+      <h3>パイプラインとゲート</h3>
+      <div class="flow" style="margin-bottom:8px">
+        <div class="node">
+          <div class="nlabel">CSビュー</div>
+          <div class="nsub">対応した人が立てる</div>
+        </div>
+        <div class="arrow">→</div>
+        <div class="node gate">
+          <div class="nlabel">照合して弾く</div>
+          <div class="nsub">未知のコードは 400</div>
+        </div>
+        <div class="arrow">→</div>
+        <div class="node sink">
+          <div class="nlabel">D1 review_exclusions</div>
+          <div class="nsub">confirmation_code が鍵</div>
+        </div>
+      </div>
+      <div class="flow">
+        <div class="node">
+          <div class="nlabel">Airbnb スクレイプ</div>
+          <div class="nsub">週次</div>
+        </div>
+        <div class="arrow">→</div>
+        <div class="node gate">
+          <div class="nlabel">Gate 1 生成前</div>
+          <div class="nsub">ドラフトを作らない</div>
+        </div>
+        <div class="arrow">→</div>
+        <div class="node">
+          <div class="nlabel">D1 review_drafts</div>
+          <div class="nsub">Claudeで生成</div>
+        </div>
+        <div class="arrow">→</div>
+        <div class="node gate">
+          <div class="nlabel">Gate 2 投稿直前</div>
+          <div class="nsub">最後の砦</div>
+        </div>
+        <div class="arrow">→</div>
+        <div class="node sink">
+          <div class="nlabel">Airbnbへ投稿</div>
+          <div class="nsub">取り消し不可</div>
+        </div>
+      </div>
+
+      <div class="callout">
+        <p><span class="ttl">なぜ二重か。</span>状態が途中で変わるから。<strong>生成後・投稿前にクレームが入る</strong>ケースを Gate 1 は捕まえられない。Gate 1 はドラフト自体を存在させない（＝誤投稿される文面が無い、トークンも節約）ための最適化で、安全性を担保するのは Gate 2。</p>
+      </div>
+
+      <div class="callout danger">
+        <p><span class="ttl">fail-closed。</span><span class="code-inline">review_of_guest</span> で <span class="code-inline">confirmation_code</span> が null なら<strong>投稿しない</strong>（保留＋通知）。</p>
+        <p>損失が非対称だから。レビュー1件の取り逃しは軽微だが、悪いレビューは公開されると恒久的に残る。身元を特定できない予約について「抑制リストに載っていないこと」を証明できない以上、投稿してはいけない。§02の確定結合を入れれば null はほぼ出ない。</p>
+      </div>
+    </div>
+
+    <div class="grid2" style="margin-top:24px">
+      <div class="card">
+        <h3>テーブル</h3>
+        <pre><span class="k">CREATE TABLE</span> review_exclusions (
+  confirmation_code TEXT <span class="k">PRIMARY KEY</span>,  <span class="c">-- HM...</span>
+  scope       TEXT <span class="k">NOT NULL</span>
+              <span class="k">DEFAULT</span> 'review_of_guest',
+  reason      TEXT,
+  created_by  TEXT <span class="k">NOT NULL</span>,
+  source      TEXT <span class="k">NOT NULL</span>,  <span class="c">-- cs-view | dashboard</span>
+  created_at  TEXT <span class="k">NOT NULL</span>,
+  released_at TEXT,          <span class="c">-- 物理削除しない</span>
+  released_by TEXT
+);</pre>
+        <div class="callout">
+          <p><span class="ttl">返信は抑制しない。</span><span class="code-inline">reply</span> は既に公開されたレビューへの応答で、ゲストを新たに突く効果がない。抑制すべきは「まだレビューを書いていないゲストを起こす」<span class="code-inline">review_of_guest</span> だけ。全接触を断ちたい例外用に <span class="code-inline">scope='all'</span> を残す。</p>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>なぜ reservations に列を足さないか</h3>
+        <div class="flow" style="margin-bottom:16px">
+          <div class="node">
+            <div class="nlabel">Airhost</div>
+            <div class="nsub">毎朝</div>
+          </div>
+          <div class="arrow">→</div>
+          <div class="node">
+            <div class="nlabel">d1SyncDaily</div>
+            <div class="nsub">INSERT OR REPLACE</div>
+          </div>
+          <div class="arrow">→</div>
+          <div class="node sink">
+            <div class="nlabel">D1 reservations</div>
+            <div class="nsub">洗い替え</div>
+          </div>
+        </div>
+        <div class="callout danger">
+          <p><span class="ttl">列を足すと毎朝消える。</span><span class="code-inline">d1SyncDaily</span> がAirhostから予約を洗い替えるため。</p>
+        </div>
+        <div class="callout good">
+          <p><span class="ttl">別テーブルなら同期と独立に生きる。</span>予約データは「Airhostのミラー」、抑制フラグは「Dent固有の判断」。<strong>ライフサイクルが違うものを混ぜない。</strong></p>
+        </div>
+
+        <h3 style="margin-top:24px">鍵の選定</h3>
+        <div class="tbl-scroll">
+        <table>
+          <thead><tr><th>候補</th><th>可否</th></tr></thead>
+          <tbody>
+            <tr>
+              <td><strong>confirmation_code</strong><br><span class="mono" style="color:var(--gray-500)">HM...</span></td>
+              <td><span class="mark-ok">✓</span> Airhost <span class="code-inline">チャンネル予約ID</span> と一致 / CSが画面で見られる / 他OTAにも同概念があり将来拡張できる</td>
+            </tr>
+            <tr>
+              <td>Airbnb reservation_id<br><span class="mono" style="color:var(--gray-500)">19桁</span></td>
+              <td><span class="mark-ng">✗</span> Airbnb内部IDで、CSが見る画面のどこにも出ない。<strong>フラグを立てる人が指定できない</strong></td>
+            </tr>
+            <tr>
+              <td>ゲスト名 + チェックアウト日</td>
+              <td><span class="mark-ng">✗</span> 同名衝突。§02で潰した問題を鍵の側に持ち込む</td>
+            </tr>
+          </tbody>
+        </table>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 4 ============ -->
+  <section>
+    <div class="sec-head">
+      <p class="sec-num">04 — Contract</p>
+      <h2>CSビュー連携 — 照合しないと機能しない</h2>
+      <p class="sec-lead">Dent側は受け口の契約だけ決め、上流の実装には踏み込まない。ただし1点だけ譲れない要件がある。</p>
+    </div>
+
+    <div class="card">
+      <pre><span class="k">POST</span> /internal/review-exclusions
+  { confirmation_code, scope?, reason?, created_by }
+  → <span class="k">201</span> { ok: true }
+  → <span class="k">400</span> { error: "unknown confirmation_code" }   <span class="c">← 譲れない</span>
+
+<span class="k">DELETE</span> /internal/review-exclusions/:code   <span class="c">-- 解除 (released_at を打つ)</span>
+<span class="k">GET</span>    /internal/review-exclusions        <span class="c">-- 一覧</span></pre>
+
+      <div class="callout danger">
+        <p><span class="ttl">書き込み時に D1 reservations と照合し、存在しなければ 400 で落とす。成功扱いにしてはいけない。</span></p>
+        <p>抑制リストは承認撤廃後の<strong>唯一のゲート</strong>であり、キーが1文字ずれれば黙って無効になる。<strong>「フラグを立てたつもりで、実は誰も守られていない」はフラグ立て忘れより悪い</strong> — CSは対処済みだと信じてしまうから。</p>
+        <p>これは机上の懸念ではない。既存のCSツール <span class="code-inline">cs-form.html</span> では <strong>予約番号が手入力のフリーテキスト</strong>（<span class="code-inline">cs-form.html:195</span>）で、予約マスタとの照合が一切ない。同じ設計を持ち込むと確実に踏む。</p>
+      </div>
+
+      <div class="callout warn">
+        <p><span class="ttl">立て忘れは設計で消えない。</span>CSがフラグを立てなければ漏れる。ここは仕組みで完全には潰せない。緩和策は「遅延投稿（3状態モデル）」で既定を <span class="code-inline">hold</span> にすること（忘れても被害が減る）だが、§01の仕様検証が前提。</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 5 ============ -->
+  <section>
+    <div class="sec-head">
+      <p class="sec-num">05 — Gap</p>
+      <h2>承認撤廃で開くもう一つの穴</h2>
+      <p class="sec-lead">抑制リストが解くのは「<strong>誰に</strong>送らないか」だけ。「<strong>何を</strong>公開するか」は誰も見なくなる。この2つは別のリスクで、別の draft_type に効く。</p>
+    </div>
+
+    <div class="grid3">
+      <div class="tier">
+        <div class="th"><span class="dot lo"></span><span class="tname">review_of_guest</span></div>
+        <div class="where">掲載先: ゲストのプロフィール</div>
+        <div class="body">文面は定型の称賛で事故りにくい。真のリスクは投稿が nudge を起こすこと。</div>
+        <div class="verdict lo">全自動 — 抑制リスト＋fail-closed が担当</div>
+      </div>
+      <div class="tier">
+        <div class="th"><span class="dot mid"></span><span class="tname">reply (高評価)</span></div>
+        <div class="where">掲載先: 自社リスティング</div>
+        <div class="body">定型の礼状。公開されても事故りにくい。件数は多い。</div>
+        <div class="verdict mid">全自動でよい</div>
+      </div>
+      <div class="tier">
+        <div class="th"><span class="dot hi"></span><span class="tname">reply (低評価)</span></div>
+        <div class="where">掲載先: 自社リスティング</div>
+        <div class="body">クレームへの的外れな返信が、将来のゲストが読む場所に恒久的に残る。件数は少ない。</div>
+        <div class="verdict hi">人を残す</div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:24px">
+      <div class="callout danger">
+        <p><span class="ttl">抑制リストは reply の文面リスクを一切カバーしない。</span>そして承認キューの元々の名前は<strong>「★低評価返信 — 承認待ちキュー」</strong>で、まさに低評価への返信を人が見るための仕組みだった。それを外すなら代わりの防御が要る。</p>
+      </div>
+      <div class="callout warn">
+        <p><span class="ttl">ただし現状これは実装できない。</span><span class="code-inline">scrapeUnrepliedReviews()</span> が返すのは <span class="code-inline">{review_id, guest_name, date, property_name, original_text}</span> だけで、<strong>★評価を捨てている</strong>（<span class="code-inline">airbnb-helpers.mjs:155-161</span>）。カードのDOMには <span class="code-inline">Overall quality</span> / <span class="code-inline">Rating N</span> があり、本文開始位置の判定に数字行を使っているのに拾っていない。リスク階層化には <strong>rating の取得が前提</strong>。</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 6 ============ -->
+  <section>
+    <div class="sec-head">
+      <p class="sec-num">06 — Rollout</p>
+      <h2>段階導入</h2>
+      <p class="sec-lead">段階0は抑制リストと無関係に今すぐ入れるべき。名前一致の取り違えリスクは、抑制の有無に関わらず今そこにある。</p>
+    </div>
+
+    <ol class="phases" start="0">
+      <li class="now">
+        <span class="pt">確定結合への修正 ＋ 締切を Expires soon 準拠に</span><br>
+        <span class="pd">依存なし。単独で価値がある。抑制リストの土台でもある</span>
+      </li>
+      <li>
+        <span class="pt">review_exclusions テーブル ＋ Worker API（照合付き）＋ Gate 2</span><br>
+        <span class="pd">依存: 段階0</span>
+      </li>
+      <li>
+        <span class="pt">CSビュー連携 ＋ ダッシュボードに抑制状態を表示</span><br>
+        <span class="pd">依存: 段階1</span>
+      </li>
+      <li>
+        <span class="pt">Gate 1（生成前スキップ）＋ 抑制件数の通知</span><br>
+        <span class="pd">依存: 段階1。抑制は黙って効かせない — 全件抑制されているのに「順調」と誤認する事故を防ぐ</span>
+      </li>
+      <li>
+        <span class="pt">rating 取得 → reply のリスク階層化</span><br>
+        <span class="pd">依存なし（並行可）</span>
+      </li>
+      <li>
+        <span class="pt">承認撤廃</span><br>
+        <span class="pd">依存: 段階1〜4が安定してから</span>
+      </li>
+    </ol>
+  </section>
+
+  <!-- ============ 7 ============ -->
+  <section>
+    <div class="sec-head">
+      <p class="sec-num">07 — Open</p>
+      <h2>未決事項</h2>
+    </div>
+    <div class="card">
+      <div class="tbl-scroll">
+      <table>
+        <thead><tr><th>#</th><th>論点</th><th>効く先</th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td><strong>「レビュー依頼」の定義</strong> — <span class="code-inline">review_of_guest</span> の投稿でよいか。別経路なら設計やり直し</td><td>全体</td></tr>
+          <tr><td>2</td><td><strong>Airbnbのレビュー公開/通知仕様の検証</strong></td><td>§01 / 遅延投稿案</td></tr>
+          <tr><td>3</td><td><strong>reply の文面を誰が見るか</strong> — 承認撤廃で無防備になる</td><td>§05</td></tr>
+          <tr><td>4</td><td><strong>CSビュー側の予約番号が選択式か手入力か</strong> — 手入力なら照合が生命線</td><td>§04</td></tr>
+          <tr><td>5</td><td><strong>過去分のシード</strong> — 既存の問題ゲストを遡って登録するか。ソースが無く手入力になる</td><td>§03</td></tr>
+          <tr><td>6</td><td><strong>ゲストが既にレビュー済みかを判定できるか</strong> — できれば「突くリスクが無い」ケースを自動除外でき、抑制対象が減る。<span class="code-inline">review_id</span> と <span class="code-inline">reservation_id</span> が同じ番号空間かは未調査</td><td>§03</td></tr>
+        </tbody>
+      </table>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <p>正本: <a href="./DESIGN_review_exclusions.md">DESIGN_review_exclusions.md</a> / 関連: <span class="mono">generate-drafts.mjs</span>, <span class="mono">post-approved.mjs</span>, <span class="mono">airbnb-helpers.mjs</span><br>
+    デザイン: <span class="mono">design-system/DESIGN.md</span> v0.2 — Product コンテキスト（Dent Blue #285FA8 ／ Navy #001558 ／ システムフォント）</p>
+  </footer>
+
+</div>
+</body>
+</html>
