@@ -283,15 +283,18 @@ function facilityContext(f) {
 async function generateReplyDraft({ item, facility }) {
   const ctx = facilityContext(facility);
   const reviewIsJa = isMostlyJapanese(item.original_text || "");
+  const reviewIsZh = isMostlyChinese(item.original_text || "");
   const langDirective = reviewIsJa
     ? `【出力言語】このレビューは日本語です。返信も必ず日本語で書いてください。`
-    : `【CRITICAL — output language】This guest review is NOT written in Japanese. You MUST write the public reply in the SAME language as the review above (an English review → an English reply). Do NOT reply in Japanese.`;
+    : reviewIsZh
+      ? `【CRITICAL — output language】This guest review is written in Chinese. You MUST write the public reply in Chinese, matching the review's script (Traditional review → Traditional reply, Simplified → Simplified). Do NOT reply in Japanese or English.`
+      : `【CRITICAL — output language】This guest review is NOT written in Japanese. You MUST write the public reply in the SAME language as the review above (an English review → an English reply). Do NOT reply in Japanese.`;
   const user = [
     `# 物件情報`, ctx, ``,
     `# ゲスト情報`,
     `名前: ${item.guest_name}`,
     `宿泊月: ${item.stay_date ?? "(不明)"}`,
-    `言語: ${item.language ?? (reviewIsJa ? "日本語" : "ゲストのレビュー言語(非日本語)")}`,
+    `言語: ${item.language ?? (reviewIsJa ? "日本語" : reviewIsZh ? "中国語" : "ゲストのレビュー言語(非日本語)")}`,
     ``,
     `# 受信レビュー本文`,
     item.original_text,
@@ -340,16 +343,35 @@ async function generateGuestReviewDraft({ item, facility }) {
   return { text, usage: resp.usage };
 }
 
+// ---------- language detection ----------
+//
+// Kana is the discriminator: Japanese prose effectively always contains it,
+// Chinese never does. Counting CJK ideographs alone scores a Chinese review as
+// Japanese, which replies to a Chinese guest in Japanese and suppresses the
+// 参考訳 they need.
+function hasKana(s) {
+  return /[぀-ゟ゠-ヿ]/.test(String(s));
+}
+
+function isMostlyJapanese(s) {
+  if (!hasKana(s)) return false;
+  const jp = (String(s).match(/[぀-ヿ㐀-鿿]/g) || []).length;
+  return jp / Math.max(1, String(s).length) > 0.15;
+}
+
+// Han characters with no kana anywhere → Chinese.
+function isMostlyChinese(s) {
+  if (hasKana(s)) return false;
+  const han = (String(s).match(/[㐀-鿿]/g) || []).length;
+  return han / Math.max(1, String(s).length) > 0.15;
+}
+
 // ---------- Japanese gloss for owner approval ----------
 //
 // The owner portal shows this as a 参考訳 so owners who don't read English can
 // understand what they're approving. It is NOT posted to Airbnb — the English
 // draft_text is what gets posted. Skip when the draft is already Japanese
 // (e.g. a reply to a Japanese review).
-function isMostlyJapanese(s) {
-  const jp = (String(s).match(/[぀-ヿ㐀-鿿]/g) || []).length;
-  return jp / Math.max(1, String(s).length) > 0.15;
-}
 
 const TRANSLATE_SYSTEM = `あなたは翻訳者です。与えられた Airbnb のレビュー/返信文を自然で読みやすい日本語に訳してください。訳文のみを出力し、説明・注釈・原文の再掲は不要です。`;
 
