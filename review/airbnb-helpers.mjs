@@ -201,8 +201,16 @@ export async function scrapePendingGuestReviews(page) {
  * to the host. Used to enrich guest-review drafts so the owner can see the
  * stay context when approving.
  *
- * Returns [{ name, guests_label, guests, check_in, check_out,
- *            confirmation_code, total_payout }].
+ * Returns [{ reservation_id, status, name, guests_label, guests, check_in,
+ *            check_out, confirmation_code, total_payout }].
+ *   - reservation_id : "1728066477997763781" — from the row's own
+ *                      /hosting/reviews/{id}/edit link. Present ONLY on rows
+ *                      still awaiting a host→guest review; null otherwise.
+ *                      This is the SAME id scrapePendingGuestReviews() returns,
+ *                      so the two join exactly — no guest-name matching needed.
+ *   - status         : "Review guest" / "Review guest - Expires soon" / "Past guest".
+ *                      Airbnb's own deadline signal; more trustworthy than
+ *                      computing check_out + 14 days ourselves.
  *   - name           : full guest name as shown ("太晴 渡邊", "Daigo Ogasawara")
  *   - guests_label   : raw party string ("5 adults", "2 adults, 1 infant")
  *   - guests         : numeric total persons parsed from guests_label
@@ -225,6 +233,7 @@ export async function scrapeReservationsIndex(page) {
     );
     const col = (name) => headers.findIndex((h) => h === name.toLowerCase());
     const ix = {
+      status: col("Status"),
       guests: col("Guests"),
       checkin: col("Check-in"),
       checkout: col("Checkout"),
@@ -233,7 +242,12 @@ export async function scrapeReservationsIndex(page) {
     };
     return [...t.querySelectorAll("tbody tr")].map((tr) => {
       const cells = [...tr.querySelectorAll("td,th")].map((td) => td.innerText.trim());
+      // The row links to its own review form, which carries the reservation_id.
+      const href = tr.querySelector('a[href*="/hosting/reviews/"]')?.getAttribute("href") ?? "";
+      const m = href.match(/\/hosting\/reviews\/(\d+)/);
       return {
+        reservation_id: m ? m[1] : null,
+        status: cells[ix.status] ?? "",
         guests_cell: cells[ix.guests] ?? "",
         check_in: cells[ix.checkin] ?? "",
         check_out: cells[ix.checkout] ?? "",
@@ -249,6 +263,8 @@ export async function scrapeReservationsIndex(page) {
     const guests_label = lines.slice(1).join(", "); // "5 adults" / "2 adults, 1 infant"
     const guests = (guests_label.match(/\d+/g) ?? []).reduce((a, n) => a + Number(n), 0) || null;
     return {
+      reservation_id: r.reservation_id,
+      status: r.status,
       name,
       guests_label,
       guests,

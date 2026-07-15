@@ -129,8 +129,8 @@ async function scrapeWorkItems(page) {
   const replies = await scrapeUnrepliedReviews(page);
   const guest_reviews = await scrapePendingGuestReviews(page);
   // Completed-reservations table: per-stay details (dates, party size,
-  // confirmation code, payout) that the review pages don't expose. Matched
-  // to each guest review by guest name below.
+  // confirmation code, payout) that the review pages don't expose. Joined to
+  // each guest review by reservation_id below.
   const reservations = await scrapeReservationsIndex(page);
   console.log(`[scrape] reservations index: ${reservations.length} rows`);
 
@@ -146,7 +146,13 @@ async function scrapeWorkItems(page) {
       stay_date: r.date,
     })),
     guest_reviews: guest_reviews.map((r) => {
-      const resv = matchReservation(reservations, r.guest_name);
+      const resv = matchReservation(reservations, r.reservation_id);
+      if (!resv) {
+        // Unidentified stay: no confirmation_code, so nothing downstream can
+        // check it against the exclusion list. Surface it rather than letting
+        // it look like an ordinary draft.
+        console.warn(`[scrape:warn] reservation_id=${r.reservation_id} guest="${r.guest_name}" は予約一覧に無い → 確認コード無しで生成`);
+      }
       return {
         reservation_id: r.reservation_id,
         guest_name: r.guest_name,
@@ -158,25 +164,31 @@ async function scrapeWorkItems(page) {
         guests: resv?.guests ?? null,
         guests_label: resv?.guests_label ?? null,
         total_payout: resv?.total_payout ?? null,
-        confirmation_code: resv?.confirmation_code ?? null, // for future 国籍 join
+        confirmation_code: resv?.confirmation_code ?? null, // join key to Airhost / exclusion list
+        airbnb_status: resv?.airbnb_status ?? null,
+        expires_soon: resv?.expires_soon ?? false,
         edit_href: r.href, // stored in context_json so post-approved can re-use
       };
     }),
   };
 }
 
-// Match a review's guest name to a row in the reservations index. Airbnb's
-// review pages give only a (often first-name) guest label, while the table has
-// the full name — so we match by containment, case-insensitively. Returns the
-// enriched row (with parsed ISO dates + nights) or null.
-function matchReservation(reservations, guestName) {
-  const norm = (s) => String(s ?? "").trim().toLowerCase();
-  const g = norm(guestName);
-  if (!g) return null;
-  const hit = reservations.find((r) => {
-    const n = norm(r.name);
-    return n === g || n.includes(g) || g.includes(n.split(/\s+/)[0]);
-  });
+// Join a pending guest review to its row in the reservations index by
+// reservation_id — the row links to its own /hosting/reviews/{id}/edit, which
+// is the same id scrapePendingGuestReviews() returns.
+//
+// This used to match on guest name (containment, case-insensitive) because the
+// review pages show only a first name. That was unsafe: two guests sharing a
+// first name resolved to whichever row .find() hit first, silently attaching
+// another guest's confirmation_code. The code is the join key to Airhost and
+// (per DESIGN_review_exclusions.md) the key an exclusion list would hang off,
+// so a wrong code means acting on the wrong reservation. Never match by name.
+//
+// Returns the enriched row (parsed ISO dates + nights) or null when the stay
+// isn't in the table — callers must treat null as "unidentified", not "fine".
+function matchReservation(reservations, reservationId) {
+  if (!reservationId) return null;
+  const hit = reservations.find((r) => r.reservation_id === reservationId);
   if (!hit) return null;
   const ci = parseAirbnbDate(hit.check_in);
   const co = parseAirbnbDate(hit.check_out);
@@ -189,6 +201,9 @@ function matchReservation(reservations, guestName) {
     guests_label: hit.guests_label || null,
     total_payout: hit.total_payout || null,
     confirmation_code: hit.confirmation_code || null,
+    // Airbnb's own deadline signal ("Review guest - Expires soon"), kept verbatim.
+    airbnb_status: hit.status || null,
+    expires_soon: /expires soon/i.test(hit.status || ""),
   };
 }
 
@@ -468,7 +483,7 @@ async function main() {
       await createDraft({
         account: ACCOUNT, draft_type: "review_of_guest", target_id: item.reservation_id,
         guest_name: item.guest_name, property_code: facility?.code ?? null,
-        context: { property_name: item.property_name, room_no: item.room_no, check_in: item.check_in, check_out: item.check_out, nights: item.nights, guests: item.guests, guests_label: item.guests_label, total_payout: item.total_payout, confirmation_code: item.confirmation_code, edit_href: item.edit_href },
+        context: { property_name: item.property_name, room_no: item.room_no, check_in: item.check_in, check_out: item.check_out, nights: item.nights, guests: item.guests, guests_label: item.guests_label, total_payout: item.total_payout, confirmation_code: item.confirmation_code, airbnb_status: item.airbnb_status, expires_soon: item.expires_soon, edit_href: item.edit_href },
         draft_text: text,
       });
       created++;
