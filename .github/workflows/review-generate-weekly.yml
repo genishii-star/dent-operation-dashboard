@@ -43,6 +43,8 @@ jobs:
           # Edit this list to add/remove accounts. Manual-dispatch with a
           # single account name overrides the matrix via the if: below.
           - NAGAI
+          - KUZE   # BRIDGE VIEW VILLA (facility code: bvv)
+          - MIM    # MIMO home
     steps:
       - name: Skip if manual override targets a different account
         if: github.event_name == 'workflow_dispatch' && inputs.account != '' && inputs.account != matrix.account

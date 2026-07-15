@@ -52,7 +52,7 @@ jobs:
         run: |
           set -euo pipefail
           # Edit this list to add accounts to the weekly schedule.
-          DEFAULT='["NAGAI"]'
+          DEFAULT='["NAGAI","KUZE","MIM"]'
           acct=""
           if [ "$EVENT" = "repository_dispatch" ]; then
             acct="$DISPATCH_ACCOUNT"
