@@ -108,6 +108,52 @@ async function workerPatch(path, body) {
   return r.json();
 }
 
+// ---------- 抑制ゲート (Gate 2) ----------
+//
+// 設計: operation/review/DESIGN_review_exclusions.md
+//
+// 承認済みでも投稿直前に必ず再判定する。承認から投稿までの間にクレームが入り、
+// CSが抑制を立てるケースがあるため — 生成時のGate 1では捕まえられない。
+// 承認を撤廃すると、ここが投稿を止められる最後の場所になる。
+async function loadExclusions() {
+  const { exclusions } = await workerGet(`/internal/review-exclusions?limit=1000`);
+  const byCode = new Map();
+  for (const e of exclusions ?? []) byCode.set(String(e.confirmation_code).toUpperCase(), e);
+  console.log(`[exclusions] ${byCode.size}件 の有効な抑制を読み込み`);
+  return byCode;
+}
+
+/**
+ * 投稿してよいかを判定する。
+ * @returns {{ post: true } | { post: false, reason: string }}
+ */
+function checkExclusion(draft, exclusions) {
+  const ctx = draft.context_json ? JSON.parse(draft.context_json) : {};
+  const code = ctx.confirmation_code ? String(ctx.confirmation_code).toUpperCase() : null;
+
+  if (draft.draft_type !== "review_of_guest") {
+    // 返信は既に公開されたレビューへの応答でゲストを新たに突く効果がない。
+    // 止めるのは全接触を断つ scope='all' の時だけ。
+    const hit = code ? exclusions.get(code) : null;
+    return hit?.scope === "all"
+      ? { post: false, reason: `抑制リストにより投稿せず (scope=all${hit.reason ? `: ${hit.reason}` : ""})` }
+      : { post: true };
+  }
+
+  // fail-closed: 確認コードが無い = 身元を特定できない = 抑制リストに載っていない
+  // ことを証明できない。損失が非対称 (レビュー1件の取り逃しは軽微だが、悪いレビューは
+  // 公開されると恒久的に残る) なので、identify できないものは投稿しない。
+  if (!code) {
+    return { post: false, reason: "確認コード不明のため投稿を保留 (抑制リストと照合できない)" };
+  }
+
+  const hit = exclusions.get(code);
+  if (hit) {
+    return { post: false, reason: `抑制リストにより投稿せず (${hit.scope}${hit.reason ? `: ${hit.reason}` : ""})` };
+  }
+  return { post: true };
+}
+
 async function loadSession() {
   const { session } = await workerGet(`/internal/session/${ACCOUNT}`);
   const dir = join(__dirname, "sessions");
@@ -173,10 +219,37 @@ async function postGuestReview(page, draft) {
 
 // ----- main -----
 async function main() {
-  const { drafts } = await workerGet(`/internal/review-drafts?account=${encodeURIComponent(ACCOUNT)}&status=approved&limit=200`);
-  console.log(`[approved] ${drafts.length} drafts to post for ${ACCOUNT}`);
+  const { drafts: approved } = await workerGet(`/internal/review-drafts?account=${encodeURIComponent(ACCOUNT)}&status=approved&limit=200`);
+  console.log(`[approved] ${approved.length} drafts to post for ${ACCOUNT}`);
+  if (approved.length === 0) {
+    console.log(JSON.stringify({ account: ACCOUNT, posted: 0, failed: 0, excluded: 0 }));
+    return;
+  }
+
+  // 抑制ゲート。ブラウザを起動する前に落とす — 投稿してはいけないものを
+  // 投稿経路に入れない。
+  const exclusions = await loadExclusions();
+  const drafts = [];
+  let excluded = 0;
+  for (const d of approved) {
+    const verdict = checkExclusion(d, exclusions);
+    if (verdict.post) { drafts.push(d); continue; }
+    excluded++;
+    console.log(`[excluded ${d.id}] ${d.draft_type} ${d.guest_name ?? ""} — ${verdict.reason}`);
+    if (!DRY_RUN) {
+      // 'failed' ではなく 'rejected'。抑制は意図した決定であってエラーではないので、
+      // 障害シグナルを濁らせない。
+      await workerPatch(`/internal/review-drafts/${d.id}`, {
+        status: "rejected",
+        decided_by: "system:exclusion",
+        error_message: verdict.reason,
+      });
+    }
+  }
+  // 黙って抑制しない。全件抑制されているのに「順調」と誤認する事故を防ぐ。
+  if (excluded) console.log(`[exclusions] ${excluded}件を抑制、残り ${drafts.length}件を投稿対象とする`);
   if (drafts.length === 0) {
-    console.log(JSON.stringify({ account: ACCOUNT, posted: 0, failed: 0 }));
+    console.log(JSON.stringify({ account: ACCOUNT, posted: 0, failed: 0, excluded }));
     return;
   }
 
@@ -234,7 +307,7 @@ async function main() {
   await saveSession(sessionPath);
   await browser.close();
 
-  console.log(JSON.stringify({ account: ACCOUNT, posted, failed }));
+  console.log(JSON.stringify({ account: ACCOUNT, posted, failed, excluded }));
 }
 
 main().catch((e) => { console.error(e); process.exit(1); });

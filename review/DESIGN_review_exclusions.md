@@ -2,9 +2,22 @@
 
 | | |
 |---|---|
-| 状態 | **設計のみ / 未実装** |
+| 状態 | **段階0・1 実装済 (2026-07-16)** / 段階2以降 未着手 |
 | 作成 | 2026-07-16 |
-| 関連 | `generate-drafts.mjs`, `post-approved.mjs`, `airbnb-helpers.mjs`, D1 `review_drafts` |
+| 関連 | `generate-drafts.mjs`, `post-approved.mjs`, `airbnb-helpers.mjs`, D1 `review_drafts` / `review_exclusions` |
+
+## 実装状況
+
+| 段階 | 状態 |
+|---|---|
+| 0. 確定結合 + `Expires soon` | ✅ 済。KUZE実データで旧結合と同一コードを返すことを確認 (2/2) |
+| 1. `review_exclusions` + API + Gate 2 | ✅ 済。migration `0005`、`src/review-exclusions.ts`、`post-approved.mjs` の `checkExclusion()` |
+| 2. CSビュー連携 + ダッシュボード表示 | ⬜ 未 (上流待ち) |
+| 3. Gate 1 (生成前スキップ) + 抑制件数の通知 | ⬜ 未 |
+| 4. rating 取得 → reply のリスク階層化 | ⬜ 未 |
+| 5. 承認撤廃 | ⬜ 未 |
+
+**抑制された時のステータスは `rejected`** (`decided_by='system:exclusion'`、理由は `error_message`)。`failed` にすると本物の障害シグナルを濁らせるため。`approved → rejected` の遷移を `ALLOWED_TRANSITIONS` に追加してある。
 
 ## 1. 解きたい問題
 
