@@ -1,4 +1,4 @@
-# 業務委託 指示書: Buddy「レビュー依頼しない」タグ ⇄ Dent API 連携
+# 業務委託 指示書: Buddy ⇄ Dent API 連携（レビュー抑制タグ / データ参照）
 
 | 項目 | 内容 |
 |---|---|
@@ -6,7 +6,7 @@
 | 受注先 | mybrain.tv（三口 聡之介 様） |
 | 対象 | buddy AIワーカー / Buddy Web UI |
 | 作成日 | 2026-07-16 |
-| 状態 | **仕様提示・着手前**。実装可否とご意見をいただいた上で確定します |
+| 状態 | **仕様確定・Dent側実装済**。Buddy側の実装可否とご意見をお待ちしています |
 
 ---
 
@@ -64,29 +64,31 @@ Buddy側の状態に関係なく投稿判定が動きます。**Buddyを常時�
 
 ### 3.1 エンドポイント
 
+Buddy専用の入口 `/cs/*` をご用意しました（理由は §4）。**このパスで確定です。**
+
 | 操作 | メソッド・パス |
 |---|---|
-| タグON（抑制を登録） | `POST https://api.dent-inc.com/internal/review-exclusions` |
-| タグOFF（抑制を解除） | `DELETE https://api.dent-inc.com/internal/review-exclusions/{予約番号}` |
-| 現在の一覧（確認用・任意） | `GET https://api.dent-inc.com/internal/review-exclusions` |
+| タグON（抑制を登録） | `POST https://api.dent-inc.com/cs/review-exclusions` |
+| タグOFF（抑制を解除） | `DELETE https://api.dent-inc.com/cs/review-exclusions/{予約番号}` |
+| 現在の一覧（確認用・任意） | `GET https://api.dent-inc.com/cs/review-exclusions` |
 
-> ⚠️ パスは**変更予定**です。Buddy専用の入口（`/cs/*` 等）を別途用意し、
-> そちらをご案内します。理由は §4 を参照。**確定したパスをお伝えするまで
-> 実装をお待ちください。**リクエスト/レスポンスの形は変わりません。
+`DELETE` が使いにくい場合は `POST /cs/review-exclusions/{予約番号}/release` でも同じです。
 
 ### 3.2 認証
 
-Cloudflare Access の Service Token をお渡しします。HTTPヘッダに2つ付けてください。
+**Bearer トークン**をお渡しします。HTTPヘッダに付けてください。
 
 ```
-CF-Access-Client-Id:     <お渡しします>
-CF-Access-Client-Secret: <お渡しします>
-Content-Type:            application/json
+Authorization: Bearer <お渡しします>
+Content-Type:  application/json
 ```
 
-**Service Token は Buddy のサーバー側（Mac mini）から呼ぶ前提でお渡しします。**
-ブラウザのJavaScriptから直接呼ぶとシークレットが利用者に露出するため、
-その構成の場合は事前にお知らせください。別方式（トークンURL等）をご用意します。
+**Buddy のサーバー側（Mac mini）から呼ぶ前提**でお渡しします。ブラウザの
+JavaScriptから直接呼ぶとトークンが利用者に露出するため、その構成の場合は
+事前にお知らせください。別方式をご用意します。
+
+このトークンで叩けるのは上記3つだけです。他のAPIには到達しません（§4）。
+漏洩が疑われる場合はご連絡ください。即時失効し、新しいものを発行します。
 
 ### 3.3 リクエスト（タグON）
 
@@ -199,6 +201,57 @@ Service Token をお渡しすると、**タグ機能に必要な権限を大き�
 
 ---
 
+## 4.5 データ参照API（読み取り）
+
+Buddy から Dent のデータを参照できるようにしました。**同じ Bearer トークン**で使えます。
+
+| 用途 | パス |
+|---|---|
+| 予約の参照 | `GET /cs/reservations.json` |
+| 物件マスタの参照 | `GET /cs/facilities.json` |
+
+### 予約 `GET /cs/reservations.json`
+
+クエリで絞り込めます（すべて任意・組み合わせ可）。
+
+| パラメータ | 例 | 内容 |
+|---|---|---|
+| `confirmation_code` | `HMQYXEYQEH` | 確認コード（チャンネル予約ID）で1件引き |
+| `airhost_reservation_id` | `20248543` | Airhost予約IDで1件引き |
+| `property_code` | `MIM` | 物件コードで絞り込み |
+| `since` / `until` | `2026-07-01` | チェックイン日の範囲 |
+| `channel` | `Airbnb` | 予約サイト |
+| `limit` | `500` | 既定500・最大5000 |
+
+返却は `reservations` 配列。物件・日程・人数・国籍・ステータス・金額
+（`gross_sales` / `net_received` / `cleaning_fee` 等）を含みます。
+
+**ゲストの氏名・電話・メールは含まれません。**Dent側で設計上保存していないためです。
+必要な場合はAirhost側をご参照ください。
+
+### 物件マスタ `GET /cs/facilities.json`
+
+`?code=mim` で1件引き。アメニティ・Wi-Fi・チェックイン方法・ゴミ出し等、
+ゲストの質問に答えるための情報が入っています。
+
+### ⚠️ 予約の「書き戻し」について
+
+**Dent側に予約を書き込むAPIは用意していません。意図的です。**
+
+Dent の予約データは **Airhost のミラー**で、毎朝Airhostから全件洗い替えています。
+そのためDent側に書き込んでも **翌朝の同期で消えます**。エラーも出ずに消えるため、
+一番発見しにくい壊れ方をします。
+
+**予約内容を変更する場合はAirhost側を直接更新してください。** 翌朝の同期で
+Dent側にも反映されます。dev-list の「D. AirHost予約情報の直接更新運用」と
+同じ考え方です。
+
+Dent側に記録が必要なのは「**Airhostに置き場がなく、Dent固有の判断であるもの**」
+だけで、現状それはレビュー抑制フラグのみです。他に出てきた場合は専用のAPIを
+追加しますので、ご相談ください。
+
+---
+
 ## 5. Dent側の実装状況
 
 | 項目 | 状態 |
@@ -207,7 +260,8 @@ Service Token をお渡しすると、**タグ機能に必要な権限を大き�
 | 登録/解除/一覧 API | ✅ 稼働中 |
 | 予約実在チェック（誤った予約番号を400で弾く） | ✅ 稼働中 |
 | 投稿直前の抑制判定 | ✅ 稼働中 |
-| Buddy専用パス + 専用トークン | ⬜ 未（§4） |
+| Buddy専用パス `/cs/*` + 専用トークン | ✅ 稼働中 |
+| 予約・物件マスタの参照API | ✅ 稼働中（§4.5） |
 
 **Buddyから送っていただければ、その時点で投稿が止まる状態まで出来ています。**
 
