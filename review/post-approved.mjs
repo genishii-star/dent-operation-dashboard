@@ -29,21 +29,25 @@ import {
   postGuestReview as postGuestReviewImpl,
 } from "./airbnb-helpers.mjs";
 
-// Host→guest review drafts are authored/edited in Japanese (so the owner can
-// review them) and translated to English here, at post time — so the posted
-// English always reflects the owner's latest Japanese edit. Replies are posted
-// in the guest's own language and are never translated.
+// Host→guest review drafts are authored/edited in the OWNER's language (so the
+// owner can actually read what they're approving — not every owner reads
+// Japanese; MIM's owner reads Traditional Chinese) and translated to English
+// here, at post time — so the posted English always reflects the owner's latest
+// edit. Replies are posted in the guest's own language and are never translated.
 const MODEL = "claude-haiku-4-5-20251001";
-const TRANSLATE_SYSTEM = `You translate an Airbnb host-to-guest review from Japanese into natural, warm English suitable for posting publicly on Airbnb. Keep it positive and concise. Output only the English translation — no notes, no quotes, no preamble.`;
+const TRANSLATE_SYSTEM = `You translate an Airbnb host-to-guest review into natural, warm English suitable for posting publicly on Airbnb. The source may be in any language. Keep it positive and concise. Output only the English translation — no notes, no quotes, no preamble.`;
 
-function isMostlyJapanese(s) {
-  const jp = (String(s).match(/[぀-ヿ㐀-鿿]/g) || []).length;
-  return jp / Math.max(1, String(s).length) > 0.15;
+// Any CJK content means the draft isn't English yet and must be translated
+// before posting. Testing for "is it Japanese" would miss Chinese drafts and
+// post 繁體中文 straight to Airbnb.
+function needsEnglishTranslation(s) {
+  const cjk = (String(s).match(/[぀-ヿ㐀-鿿가-힣]/g) || []).length;
+  return cjk / Math.max(1, String(s).length) > 0.15;
 }
 
-async function translateJaToEn(text) {
+async function translateToEn(text) {
   if (!process.env.ANTHROPIC_API_KEY) {
-    throw new Error("ANTHROPIC_API_KEY required to translate Japanese review to English");
+    throw new Error("ANTHROPIC_API_KEY required to translate the review to English");
   }
   const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
   const resp = await anthropic.messages.create({
@@ -206,9 +210,9 @@ async function postGuestReview(page, draft) {
   // Owner-facing draft_text is Japanese → translate to English before posting.
   // (Older drafts already in English pass through unchanged.)
   let text = draft.draft_text;
-  if (isMostlyJapanese(text)) {
-    text = await translateJaToEn(text);
-    console.log(`[translate ${draft.id}] JA→EN: ${text.slice(0, 80)}...`);
+  if (needsEnglishTranslation(text)) {
+    text = await translateToEn(text);
+    console.log(`[translate ${draft.id}] →EN: ${text.slice(0, 80)}...`);
   }
   return postGuestReviewImpl(page, {
     reservation_id: draft.target_id,

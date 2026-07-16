@@ -266,19 +266,45 @@ const REPLY_SYSTEM = `あなたは民泊運営会社 Dent Inc. のホストと�
 # 出力形式
 返信本文のみを出力。挨拶や説明文は不要。`;
 
-const REVIEW_SYSTEM = `あなたは民泊運営会社 Dent Inc. のhost として、宿泊が完了したゲストへのレビュー(評価コメント)を書きます。この本文はオーナーが日本語で確認・編集し、投稿時に英訳して Airbnb に掲載されます。
+// ---------- オーナー言語 ----------
+//
+// ドラフトは「オーナーが読んで確認・編集する言語」で書く。オーナーは日本語話者
+// とは限らない (例: MIM = 楊 世祥さん)。ポータルのUI文言だけ訳しても、承認する
+// 本文が読めなければ意味がないので、生成側もこの設定を見る。
+// 投稿直前に post-approved.mjs が英訳するので、掲載は言語によらず英語。
+const OWNER_LANG_LABEL = {
+  "ja": { name: "日本語", volume: "日本語で 200〜350字程度" },
+  "zh-Hant": { name: "繁體中文 (台灣・香港で使われる正體字)", volume: "繁體中文で 150〜250字程度" },
+};
+
+function reviewSystemPrompt(ownerLang) {
+  const L = OWNER_LANG_LABEL[ownerLang] ?? OWNER_LANG_LABEL["ja"];
+  return `あなたは民泊運営会社 Dent Inc. のhost として、宿泊が完了したゲストへのレビュー(評価コメント)を書きます。この本文はオーナーが${L.name}で確認・編集し、投稿時に英訳して Airbnb に掲載されます。
 
 # 文体ルール
-- 日本語で書く (オーナーが読んで確認・編集するため)
+- **${L.name}で書く** (オーナーが読んで確認・編集するため)
 - ポジティブで具体的な内容
 - ゲストの良かった点に触れる (清潔さ・コミュニケーション・チェックアウト時刻遵守 など)
 - 物件の固有名詞には深入りしない (将来のゲストにも読まれる前提)
-- 英語にして 80〜150 words 相当 (日本語で 200〜350字程度)
+- 英語にして 80〜150 words 相当 (${L.volume})
 - 絵文字は使わない
 - 推薦 (recommend) は基本Yes 前提
 
 # 出力形式
-レビュー本文(日本語)のみを出力。挨拶や説明文は不要。`;
+レビュー本文(${L.name})のみを出力。挨拶や説明文は不要。`;
+}
+
+// アカウント単位の表示言語。取得できなければ既定の ja に倒す
+// (言語不明で生成を止めるより、従来どおり日本語で出す方が安全)。
+async function loadOwnerLang() {
+  try {
+    const { lang } = await workerGet(`/internal/owner-lang/${ACCOUNT}`);
+    return OWNER_LANG_LABEL[lang] ? lang : "ja";
+  } catch (e) {
+    console.warn(`[owner-lang] 取得失敗 (${e.message}) → ja で続行`);
+    return "ja";
+  }
+}
 
 function facilityContext(f) {
   if (!f) return "(物件マスタにマッチなし)";
@@ -332,8 +358,9 @@ async function generateReplyDraft({ item, facility }) {
   return { text, usage: resp.usage };
 }
 
-async function generateGuestReviewDraft({ item, facility }) {
+async function generateGuestReviewDraft({ item, facility, ownerLang }) {
   const ctx = facilityContext(facility);
+  const L = OWNER_LANG_LABEL[ownerLang] ?? OWNER_LANG_LABEL["ja"];
   const user = [
     `# 物件情報`, ctx, ``,
     `# 宿泊情報`,
@@ -342,14 +369,14 @@ async function generateGuestReviewDraft({ item, facility }) {
     `チェックアウト: ${item.check_out}`,
     `泊数: ${item.nights}`,
     ``,
-    `上記ゲストへのホスト→ゲストレビューを書いてください (日本語)。`,
+    `上記ゲストへのホスト→ゲストレビューを書いてください (${L.name})。`,
   ].join("\n");
 
   const resp = await anthropic.messages.create({
     model: MODEL,
     max_tokens: 1024,
     system: [
-      { type: "text", text: REVIEW_SYSTEM, cache_control: { type: "ephemeral" } },
+      { type: "text", text: reviewSystemPrompt(ownerLang), cache_control: { type: "ephemeral" } },
     ],
     messages: [{ role: "user", content: user }],
   });
@@ -388,15 +415,29 @@ function isMostlyChinese(s) {
 // draft_text is what gets posted. Skip when the draft is already Japanese
 // (e.g. a reply to a Japanese review).
 
-const TRANSLATE_SYSTEM = `あなたは翻訳者です。与えられた Airbnb のレビュー/返信文を自然で読みやすい日本語に訳してください。訳文のみを出力し、説明・注釈・原文の再掲は不要です。`;
+// 参考訳はオーナーが読む言語で出す。日本語固定だと非日本語話者のオーナー
+// (例: MIM = 楊 世祥さん) には返信内容が読めず、承認の判断ができない。
+const TRANSLATE_SYSTEM = {
+  "ja": `あなたは翻訳者です。与えられた Airbnb のレビュー/返信文を自然で読みやすい日本語に訳してください。訳文のみを出力し、説明・注釈・原文の再掲は不要です。`,
+  "zh-Hant": `你是翻譯者。請將提供的 Airbnb 評價／回覆翻譯成自然流暢的繁體中文（正體字，台灣用語）。只輸出譯文，不要加說明、註解或重複原文。`,
+};
 
-async function translateToJa(text) {
-  if (!text || isMostlyJapanese(text)) return null;
+// 既にオーナーの言語で書かれていれば訳す必要がない。
+function alreadyInOwnerLang(text, ownerLang) {
+  return ownerLang === "zh-Hant" ? isMostlyChinese(text) : isMostlyJapanese(text);
+}
+
+async function translateForOwner(text, ownerLang) {
+  if (!text || alreadyInOwnerLang(text, ownerLang)) return null;
   try {
     const resp = await anthropic.messages.create({
       model: MODEL,
       max_tokens: 1024,
-      system: [{ type: "text", text: TRANSLATE_SYSTEM, cache_control: { type: "ephemeral" } }],
+      system: [{
+        type: "text",
+        text: TRANSLATE_SYSTEM[ownerLang] ?? TRANSLATE_SYSTEM["ja"],
+        cache_control: { type: "ephemeral" },
+      }],
       messages: [{ role: "user", content: text }],
     });
     return resp.content.find((b) => b.type === "text")?.text?.trim() ?? null;
@@ -427,6 +468,10 @@ async function createDraft({ account, draft_type, target_id, guest_name, propert
 
 // ---------- main ----------
 async function main() {
+  // ドラフトを書く言語 = オーナーがポータルで読む言語。生成前に確定させる。
+  const ownerLang = await loadOwnerLang();
+  console.log(`[owner-lang] ${ACCOUNT} → ${ownerLang}`);
+
   const sessionPath = await loadSession();
 
   const browser = await chromium.launch({ headless: !GUI });
@@ -455,11 +500,11 @@ async function main() {
         console.log(`[dry-run reply→${item.review_id}] guest="${item.guest_name}" review="${(item.original_text || "").slice(0, 60)}"\n  reply: ${text.slice(0, 120)}`);
         created++; continue;
       }
-      const translation_ja = await translateToJa(text);
+      const translation = await translateForOwner(text, ownerLang);
       await createDraft({
         account: ACCOUNT, draft_type: "reply", target_id: item.review_id,
         guest_name: item.guest_name, property_code: facility?.code ?? null,
-        context: { property_name: item.property_name, room_no: item.room_no, original_text: item.original_text, language: item.language, translation_ja },
+        context: { property_name: item.property_name, room_no: item.room_no, original_text: item.original_text, language: item.language, translation, owner_lang: ownerLang },
         draft_text: text,
       });
       created++;
@@ -478,12 +523,12 @@ async function main() {
       const facility = await getFacility(item.property_name, item.room_no);
       // draft_text is Japanese now (owner-facing). It gets translated to
       // English at post time (post-approved.mjs), so no separate translation_ja.
-      const { text } = await generateGuestReviewDraft({ item, facility });
+      const { text } = await generateGuestReviewDraft({ item, facility, ownerLang });
       if (DRY_RUN) { console.log(`[dry-run review→${item.reservation_id}]`, text); created++; continue; }
       await createDraft({
         account: ACCOUNT, draft_type: "review_of_guest", target_id: item.reservation_id,
         guest_name: item.guest_name, property_code: facility?.code ?? null,
-        context: { property_name: item.property_name, room_no: item.room_no, check_in: item.check_in, check_out: item.check_out, nights: item.nights, guests: item.guests, guests_label: item.guests_label, total_payout: item.total_payout, confirmation_code: item.confirmation_code, airbnb_status: item.airbnb_status, expires_soon: item.expires_soon, edit_href: item.edit_href },
+        context: { owner_lang: ownerLang, property_name: item.property_name, room_no: item.room_no, check_in: item.check_in, check_out: item.check_out, nights: item.nights, guests: item.guests, guests_label: item.guests_label, total_payout: item.total_payout, confirmation_code: item.confirmation_code, airbnb_status: item.airbnb_status, expires_soon: item.expires_soon, edit_href: item.edit_href },
         draft_text: text,
       });
       created++;

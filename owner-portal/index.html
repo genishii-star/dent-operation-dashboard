@@ -238,24 +238,125 @@
 </head>
 <body>
   <header>
-    <h1>レビュー返信 承認</h1>
+    <h1 id="h1">レビュー返信 承認</h1>
     <div class="sub" id="account-label">読み込み中…</div>
   </header>
   <main>
     <div id="banner-area"></div>
     <div class="count-row" id="count-row" style="display:none;">
       <span id="count-label"></span>
-      <button class="reload" onclick="load()">↻ 再読み込み</button>
+      <button class="reload" id="reload-btn" onclick="load()">↻ 再読み込み</button>
     </div>
     <div id="list"></div>
   </main>
-  <footer>
+  <footer id="footer-note">
     Dent Inc. — このページのURLは外部に共有しないでください
   </footer>
 
   <script>
     const API_BASE = 'https://api.dent-inc.com';
     const token = new URLSearchParams(location.search).get('token') || '';
+
+    // ---- i18n ----
+    //
+    // 表示言語はアカウント単位の設定 (KV owner-lang:<account>) で決まり、
+    // /owner/review-drafts が `lang` を返す。オーナーは日本語話者とは限らない
+    // (例: MIM = 楊 世祥さん)。
+    //
+    // 注意: ここが訳すのは UI文言だけ。オーナーが実際に承認する **ドラフト本文**
+    // の言語は generate-drafts.mjs が生成時に確定させている。UIだけ訳しても
+    // 本文が読めなければ意味がないので、両方が同じ owner-lang を見る。
+    const I18N = {
+      'ja': {
+        html_lang: 'ja',
+        title: 'レビュー返信 承認 / Dent',
+        h1: 'レビュー返信 承認',
+        loading: '読み込み中…',
+        reload: '↻ 再読み込み',
+        footer: 'Dent Inc. — このページのURLは外部に共有しないでください',
+        no_token: 'URLにトークンが含まれていません。担当者から共有された正しいURLを開いてください。',
+        bad_token: 'トークンが無効か期限切れです。担当者にお問い合わせください。',
+        net_err: (m) => `通信エラー: ${m}`,
+        account: (a) => `アカウント: ${a}`,
+        pending_count: (n) => `承認待ち: ${n} 件`,
+        empty: '承認待ちの返信はありません。',
+        expired: (d) => `⏰ 投稿期限切れ（${d}）`,
+        expired_note: '— 投稿してもAirbnbに反映されません',
+        deadline: (d) => `⏰ 投稿期限: ${d}`,
+        remain_today: '今日まで',
+        remain_days: (n) => `あと${n}日`,
+        reply_title: '💬 お客様の口コミへ返信',
+        reply_dir: 'お客様 → Dent',
+        reply_desc: 'お客様が書いた口コミに公開で返信します',
+        review_title: '📝 ゲストへの評価を投稿',
+        review_dir: 'Dent → お客様',
+        review_desc: 'お客様を評価してこちらから新規投稿します',
+        no_prop: '(物件未マッチ)',
+        no_guest: '(ゲスト不明)',
+        orig_label: (l) => `元のレビュー (${l})`,
+        stay_label: '予約情報',
+        check_in: 'チェックイン', check_out: 'チェックアウト',
+        nights: '滞在日数', nights_unit: (n) => `${n}泊`,
+        guests: '人数', guests_unit: (n) => `${n}名`,
+        total: '総額',
+        trans_label: '日本語訳（参考・投稿されません）',
+        post_note: '※ この文章を承認すると、英訳して Airbnb に投稿します（掲載は英語）。文章はそのまま編集できます。',
+        approve: '✅ 承認', save: '💾 保存', skip: '⏭ スキップ',
+        empty_text: '本文が空です',
+        act_err: (m) => `エラー: ${m}`,
+        approving: '承認中…', skipping: 'スキップ中…', saving: '保存中…',
+      },
+      'zh-Hant': {
+        html_lang: 'zh-Hant',
+        title: '評價回覆審核 / Dent',
+        h1: '評價回覆審核',
+        loading: '載入中…',
+        reload: '↻ 重新載入',
+        footer: 'Dent Inc. — 請勿將此頁面網址分享給他人',
+        no_token: '網址中缺少權杖（token）。請開啟由負責人提供的正確網址。',
+        bad_token: '權杖無效或已失效，請聯絡負責人。',
+        net_err: (m) => `連線錯誤：${m}`,
+        account: (a) => `帳號：${a}`,
+        pending_count: (n) => `待審核：${n} 則`,
+        empty: '目前沒有待審核的項目。',
+        expired: (d) => `⏰ 已超過張貼期限（${d}）`,
+        expired_note: '— 即使送出也不會顯示在 Airbnb 上',
+        deadline: (d) => `⏰ 張貼期限：${d}`,
+        remain_today: '今天截止',
+        remain_days: (n) => `剩餘 ${n} 天`,
+        reply_title: '💬 回覆房客的評價',
+        reply_dir: '房客 → Dent',
+        reply_desc: '公開回覆房客所留下的評價',
+        review_title: '📝 張貼對房客的評價',
+        review_dir: 'Dent → 房客',
+        review_desc: '由我們主動張貼對這位房客的評價',
+        no_prop: '（未對應到房源）',
+        no_guest: '（房客不明）',
+        orig_label: (l) => `原始評價（${l}）`,
+        stay_label: '訂房資訊',
+        check_in: '入住', check_out: '退房',
+        nights: '住宿天數', nights_unit: (n) => `${n} 晚`,
+        guests: '人數', guests_unit: (n) => `${n} 人`,
+        total: '總金額',
+        trans_label: '中文翻譯（僅供參考，不會被張貼）',
+        post_note: '※ 通過審核後，這段文字會翻譯成英文張貼到 Airbnb（實際刊登為英文）。可直接編輯內容。',
+        approve: '✅ 通過', save: '💾 儲存', skip: '⏭ 略過',
+        empty_text: '內容不可為空',
+        act_err: (m) => `錯誤：${m}`,
+        approving: '審核中…', skipping: '略過中…', saving: '儲存中…',
+      },
+    };
+    // 言語が判明するまでは既定 (ja)。不明な lang が来ても壊さず ja に倒す。
+    let T = I18N['ja'];
+
+    function applyLang(lang) {
+      T = I18N[lang] || I18N['ja'];
+      document.documentElement.lang = T.html_lang;
+      document.title = T.title;
+      document.getElementById('h1').textContent = T.h1;
+      document.getElementById('reload-btn').textContent = T.reload;
+      document.getElementById('footer-note').textContent = T.footer;
+    }
 
     function esc(s) {
       return String(s ?? '').replace(/[&<>"']/g, (c) => (
@@ -271,10 +372,10 @@
     async function load() {
       if (!token) {
         document.getElementById('account-label').textContent = '';
-        setBanner('URLにトークンが含まれていません。担当者から共有された正しいURLを開いてください。', 'err');
+        setBanner(T.no_token, 'err');
         return;
       }
-      setBanner('読み込み中…', 'empty');
+      setBanner(T.loading, 'empty');
       document.getElementById('count-row').style.display = 'none';
       document.getElementById('list').innerHTML = '';
 
@@ -282,28 +383,31 @@
       try {
         const resp = await fetch(`${API_BASE}/owner/review-drafts?token=${encodeURIComponent(token)}`);
         if (resp.status === 401) {
-          setBanner('トークンが無効か期限切れです。担当者にお問い合わせください。', 'err');
+          setBanner(T.bad_token, 'err');
           return;
         }
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         data = await resp.json();
       } catch (e) {
-        setBanner(`通信エラー: ${esc(e.message)}`, 'err');
+        setBanner(T.net_err(esc(e.message)), 'err');
         return;
       }
 
-      document.getElementById('account-label').textContent = `アカウント: ${data.account}`;
+      // 言語はサーバが決める (アカウント単位)。描画より先に適用する。
+      applyLang(data.lang);
+
+      document.getElementById('account-label').textContent = T.account(data.account);
       setBanner('', '');
 
       const drafts = data.drafts || [];
       const row = document.getElementById('count-row');
       const label = document.getElementById('count-label');
       row.style.display = '';
-      label.textContent = `承認待ち: ${drafts.length} 件`;
+      label.textContent = T.pending_count(drafts.length);
 
       const list = document.getElementById('list');
       if (drafts.length === 0) {
-        setBanner('承認待ちの返信はありません。', 'empty');
+        setBanner(T.empty, 'empty');
         return;
       }
       list.innerHTML = drafts.map(renderCard).join('');
@@ -326,11 +430,11 @@
       if (!dd) return '';
       const date = `${dd.month}/${dd.day}`;
       if (dd.days < 0) {
-        return `<div class="deadline expired">⏰ 投稿期限切れ（${date}）<span class="days">— 投稿してもAirbnbに反映されません</span></div>`;
+        return `<div class="deadline expired">${esc(T.expired(date))}<span class="days">${esc(T.expired_note)}</span></div>`;
       }
       const cls = dd.days <= 3 ? 'soon' : 'ok';
-      const remain = dd.days === 0 ? '今日まで' : `あと${dd.days}日`;
-      return `<div class="deadline ${cls}">⏰ 投稿期限: ${date}<span class="days">（${remain}）</span></div>`;
+      const remain = dd.days === 0 ? T.remain_today : T.remain_days(dd.days);
+      return `<div class="deadline ${cls}">${esc(T.deadline(date))}<span class="days">（${esc(remain)}）</span></div>`;
     }
 
     function renderCard(d) {
@@ -340,41 +444,46 @@
       const isReply = d.draft_type === 'reply';
       const typeBanner = isReply
         ? `<div class="type-banner reply">
-             <div class="type-title">💬 お客様の口コミへ返信</div>
-             <div class="type-dir">お客様 → Dent</div>
-             <div class="type-desc">お客様が書いた口コミに公開で返信します</div>
+             <div class="type-title">${esc(T.reply_title)}</div>
+             <div class="type-dir">${esc(T.reply_dir)}</div>
+             <div class="type-desc">${esc(T.reply_desc)}</div>
            </div>`
         : `<div class="type-banner review">
-             <div class="type-title">📝 ゲストへの評価を投稿</div>
-             <div class="type-dir">Dent → お客様</div>
-             <div class="type-desc">お客様を評価してこちらから新規投稿します</div>
+             <div class="type-title">${esc(T.review_title)}</div>
+             <div class="type-dir">${esc(T.review_dir)}</div>
+             <div class="type-desc">${esc(T.review_desc)}</div>
            </div>`;
-      const propName = ctx.property_name || d.property_code || '(物件未マッチ)';
+      const propName = ctx.property_name || d.property_code || T.no_prop;
       const genDate = (d.generated_at || '').slice(0, 10);
-      const guest = d.guest_name || '(ゲスト不明)';
+      const guest = d.guest_name || T.no_guest;
 
       const origBlock = isReply && ctx.original_text
-        ? `<div class="orig"><span class="label">元のレビュー (${esc(ctx.language || '')})</span>${esc(ctx.original_text)}</div>`
+        ? `<div class="orig"><span class="label">${esc(T.orig_label(ctx.language || ''))}</span>${esc(ctx.original_text)}</div>`
         : '';
       const stayRows = [];
       if (!isReply) {
-        if (ctx.check_in)  stayRows.push(['チェックイン', esc(ctx.check_in)]);
-        if (ctx.check_out) stayRows.push(['チェックアウト', esc(ctx.check_out)]);
-        if (ctx.nights)    stayRows.push(['滞在日数', esc(String(ctx.nights)) + '泊']);
-        if (ctx.guests_label || ctx.guests) stayRows.push(['人数', esc(ctx.guests_label || (ctx.guests + '名'))]);
-        if (ctx.total_payout) stayRows.push(['総額', esc(ctx.total_payout)]);
+        if (ctx.check_in)  stayRows.push([T.check_in, esc(ctx.check_in)]);
+        if (ctx.check_out) stayRows.push([T.check_out, esc(ctx.check_out)]);
+        if (ctx.nights)    stayRows.push([T.nights, esc(T.nights_unit(ctx.nights))]);
+        if (ctx.guests_label || ctx.guests) stayRows.push([T.guests, esc(ctx.guests_label || T.guests_unit(ctx.guests))]);
+        if (ctx.total_payout) stayRows.push([T.total, esc(ctx.total_payout)]);
       }
       const stayBlock = stayRows.length
-        ? `<div class="orig stay"><span class="label">予約情報</span><div class="kv">${stayRows.map(([k,v]) => `<div><span>${k}</span><b>${v}</b></div>`).join('')}</div></div>`
+        ? `<div class="orig stay"><span class="label">${esc(T.stay_label)}</span><div class="kv">${stayRows.map(([k,v]) => `<div><span>${esc(k)}</span><b>${v}</b></div>`).join('')}</div></div>`
         : '';
-      // Replies are posted in the guest's language; show the JP gloss as a
-      // read-only reference. Guest reviews are edited in Japanese (the textarea)
-      // and translated to English at post time — no separate gloss.
-      const transBlock = (isReply && ctx.translation_ja)
-        ? `<div class="orig trans"><span class="label">日本語訳（参考・投稿されません）</span>${esc(ctx.translation_ja)}</div>`
+      // Replies are posted in the guest's language; show a gloss in the owner's
+      // language as a read-only reference.
+      //
+      // `translation` is the owner-language gloss. `translation_ja` is the
+      // pre-i18n field and is ALWAYS Japanese — only fall back to it for a
+      // Japanese owner. Showing it to a zh-Hant owner would put Japanese text
+      // under a 「中文翻譯」 label, i.e. mislabel content they can't read.
+      const gloss = ctx.translation ?? (T.html_lang === 'ja' ? ctx.translation_ja : null);
+      const transBlock = (isReply && gloss)
+        ? `<div class="orig trans"><span class="label">${esc(T.trans_label)}</span>${esc(gloss)}</div>`
         : '';
       const postNote = !isReply
-        ? `<div class="note">※ この日本語を承認すると、英訳して Airbnb に投稿します（掲載は英語）。文章はそのまま編集できます。</div>`
+        ? `<div class="note">${esc(T.post_note)}</div>`
         : '';
 
       const deadlineHtml = isReply ? '' : deadlineBadge(reviewDeadline(ctx));
@@ -394,9 +503,9 @@
           ${postNote}
           ${transBlock}
           <div class="btn-row">
-            <button class="act approve" onclick="act('${esc(d.id)}', 'approve')">✅ 承認</button>
-            <button class="act save"    onclick="act('${esc(d.id)}', 'save')">💾 保存</button>
-            <button class="act skip"    onclick="act('${esc(d.id)}', 'skip')">⏭ スキップ</button>
+            <button class="act approve" onclick="act('${esc(d.id)}', 'approve')">${esc(T.approve)}</button>
+            <button class="act save"    onclick="act('${esc(d.id)}', 'save')">${esc(T.save)}</button>
+            <button class="act skip"    onclick="act('${esc(d.id)}', 'skip')">${esc(T.skip)}</button>
             <span class="status-msg"></span>
           </div>
         </div>
@@ -412,19 +521,19 @@
 
       let body, label;
       // Send the current textarea content on approve too, so an edit the owner
-      // made but didn't explicitly 保存 still gets captured before posting.
+      // made but didn't explicitly save still gets captured before posting.
       if (kind === 'approve') {
         body = { status: 'approved' };
         const edited = ta.value.trim();
         if (edited) body.draft_text = edited;
-        label = '承認中…';
+        label = T.approving;
       }
-      else if (kind === 'skip') { body = { status: 'rejected' }; label = 'スキップ中…'; }
+      else if (kind === 'skip') { body = { status: 'rejected' }; label = T.skipping; }
       else if (kind === 'save') {
         const text = ta.value.trim();
-        if (!text) { status.textContent = '本文が空です'; status.classList.add('err'); return; }
+        if (!text) { status.textContent = T.empty_text; status.classList.add('err'); return; }
         body = { draft_text: text };
-        label = '保存中…';
+        label = T.saving;
       } else return;
 
       buttons.forEach(b => b.disabled = true);
@@ -445,7 +554,7 @@
         // success → reload entire list (card may have disappeared on approve/skip)
         await load();
       } catch (e) {
-        status.textContent = `エラー: ${e.message}`;
+        status.textContent = T.act_err(e.message);
         status.classList.add('err');
         buttons.forEach(b => b.disabled = false);
       }
