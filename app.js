@@ -2565,7 +2565,8 @@ function computeDailyMetrics(months, area) {
 
   // チェックイン月ベース予約
   const monthResvs = reservations.filter(r => {
-    if (r.status === 'システムキャンセル' || r.status === 'キャンセル') return false;
+    // 純キャンセル（販売額0）のみ除外。非返金キャンセル（販売額>0=請求対象）は売上に計上。
+    if (isCancelStatus(r.status) && !(r.sales > 0)) return false;
     if (!monthSet.has(getYearMonth(r.checkin))) return false;
     if (area !== '全体') {
       const prop = findPropByReservation(r);
@@ -2573,10 +2574,12 @@ function computeDailyMetrics(months, area) {
     }
     return true;
   });
+  // 売上・受取は非返金キャンセルを含む monthResvs。予約数・泊数（稼働量）は確定のみ。
+  const monthConfirmed = monthResvs.filter(r => !isCancelStatus(r.status));
   const sales = monthResvs.reduce((s, r) => s + (r.sales || 0), 0);
   const received = monthResvs.reduce((s, r) => s + (r.received || 0), 0);
   const avgDailySales = totalDays > 0 ? sales / totalDays : 0;
-  const avgNights = monthResvs.length > 0 ? monthResvs.reduce((s, r) => s + r.nights, 0) / monthResvs.length : 0;
+  const avgNights = monthConfirmed.length > 0 ? monthConfirmed.reduce((s, r) => s + r.nights, 0) / monthConfirmed.length : 0;
 
   // PM売上: (販売 - OTA手数料 - 清掃費) × オーナーロイヤリティ%
   let pmSales = 0;
@@ -4877,11 +4880,14 @@ function renderReservationTab() {
     const cancel = arr.filter(r => r.status === 'システムキャンセル').length;
     const confirmed = arr.filter(r => r.status !== 'システムキャンセル');
     const nights = confirmed.reduce((s, r) => s + r.nights, 0);
-    const sales = confirmed.reduce((s, r) => s + (r.sales || 0), 0);
+    const salesConfirmed = confirmed.reduce((s, r) => s + (r.sales || 0), 0);
+    // 売上は非返金キャンセル（システムキャンセルだが販売額あり=請求対象）も計上。ADR/稼働は確定のみ。
+    const nonRefundCancelSales = arr.filter(r => r.status === 'システムキャンセル' && r.sales > 0).reduce((s, r) => s + (r.sales || 0), 0);
+    const sales = salesConfirmed + nonRefundCancelSales;
     const cancelSales = arr.filter(r => r.status === 'システムキャンセル').reduce((s, r) => s + (r.sales || 0), 0);
     const avgNights = confirmed.length > 0 ? nights / confirmed.length : 0;
     const avgGuests = confirmed.length > 0 ? confirmed.reduce((s, r) => s + r.guestCount, 0) / confirmed.length : 0;
-    const adr = nights > 0 ? sales / nights : 0;
+    const adr = nights > 0 ? salesConfirmed / nights : 0;
     const validW = confirmed.filter(r => r.date && r.checkin);
     const window = validW.length > 0 ? Math.round(validW.reduce((s, r) => s + Math.max(0, Math.floor((new Date(r.checkin) - new Date(r.date)) / 86400000)), 0) / validW.length) : null;
     return { count, cancel, cancelSales, sales, adr, avgNights, avgGuests, window };
@@ -4937,21 +4943,27 @@ function renderReservationTab() {
     // シリーズ集計テーブル
     // 物件別分析タブと状態を共有する activeGroupedDrill をリセット（タブ跨ぎの開閉ズレ防止）
     activeGroupedDrill = null;
+    // GMV/受取は非返金キャンセル（販売額>0）も計上。予約数/泊数/ADR/平均値は確定のみ。
+    // 一覧表示(displayResv)はキャンセル除外のまま維持したいので validResv ではなく filtered から集計。
     const agg = {};
-    validResv.forEach(r => {
+    filtered.forEach(r => {
+      if (isCancelStatus(r.status) && !(r.sales > 0)) return; // 純キャンセル除外
       const code = r.propCode || r.property || '';
       const base = code ? getSeriesBase(code) : (r.property || 'その他');
-      if (!agg[base]) agg[base] = { count: 0, sales: 0, nights: 0, guests: 0, received: 0 };
-      agg[base].count++;
-      agg[base].sales += r.sales || 0;
-      agg[base].nights += r.nights || 0;
-      agg[base].guests += r.guestCount || 0;
-      agg[base].received += r.received || 0;
+      if (!agg[base]) agg[base] = { count: 0, sales: 0, salesConfirmed: 0, nights: 0, guests: 0, received: 0 };
+      agg[base].sales += r.sales || 0;       // GMV（非返金キャンセル込み）
+      agg[base].received += r.received || 0;  // 総受取金（同上）
+      if (!isCancelStatus(r.status)) {        // 稼働量・ADRは確定のみ
+        agg[base].count++;
+        agg[base].salesConfirmed += r.sales || 0;
+        agg[base].nights += r.nights || 0;
+        agg[base].guests += r.guestCount || 0;
+      }
     });
     const rows = Object.entries(agg).sort((a, b) => b[1].count - a[1].count);
     if (thead) thead.innerHTML = `<tr><th>シリーズ</th><th>予約数</th><th>GMV</th><th>ADR</th><th>平均泊数</th><th>平均ゲスト数</th><th>総受取金</th></tr>`;
     tbody.innerHTML = rows.map(([base, s]) => {
-      const adr = s.nights > 0 ? Math.round(s.sales / s.nights) : 0;
+      const adr = s.nights > 0 ? Math.round(s.salesConfirmed / s.nights) : 0;
       const avgNights = s.count > 0 ? (s.nights / s.count).toFixed(1) : '-';
       const avgGuests = s.count > 0 ? (s.guests / s.count).toFixed(1) : '-';
       // 行クリックで「まとめ（シリーズ）の詳細」を展開（物件別分析のまとめdrillを流用）
