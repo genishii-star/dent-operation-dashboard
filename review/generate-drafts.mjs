@@ -500,11 +500,17 @@ async function main() {
         console.log(`[dry-run reply→${item.review_id}] guest="${item.guest_name}" review="${(item.original_text || "").slice(0, 60)}"\n  reply: ${text.slice(0, 120)}`);
         created++; continue;
       }
-      const translation = await translateForOwner(text, ownerLang);
+      // 返信文の訳と、ゲストが書いた元レビューの訳。両方オーナーの言語で出す。
+      // 元レビューが読めないと「何に対する返信なのか」を判断できないので、
+      // 承認の可否を決めるにはこちらの訳が要る。
+      const [translation, original_translation] = await Promise.all([
+        translateForOwner(text, ownerLang),
+        translateForOwner(item.original_text, ownerLang),
+      ]);
       await createDraft({
         account: ACCOUNT, draft_type: "reply", target_id: item.review_id,
         guest_name: item.guest_name, property_code: facility?.code ?? null,
-        context: { property_name: item.property_name, room_no: item.room_no, original_text: item.original_text, language: item.language, translation, owner_lang: ownerLang },
+        context: { property_name: item.property_name, room_no: item.room_no, original_text: item.original_text, language: item.language, translation, original_translation, owner_lang: ownerLang },
         draft_text: text,
       });
       created++;
