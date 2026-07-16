@@ -630,6 +630,12 @@ function getYearMonth(dateStr) {
   return '';
 }
 
+// 状態がキャンセル系か。売上集計では「純キャンセル(販売額0)」のみ除外し、
+// 非返金キャンセル(販売額>0=請求対象)は計上したいので、判定を一箇所に集約する。
+function isCancelStatus(status) {
+  return status === 'キャンセル' || status === 'システムキャンセル';
+}
+
 function deriveArea(address) {
   if (!address) return 'その他';
   if (address.includes('東京')) return '東京';
@@ -1435,6 +1441,10 @@ function processData() {
   const PROPERTY_NAME_MERGE = {
     'HGK(旧)': 'HGK',
     'HGK旧': 'HGK',
+    // 愉庵: AirHostの物件名が 'Yuan'（大小混在）だが、マスタは code:yuan を
+    // 大文字化して 'YUAN' で保持するため名寄せに失敗し予約が丸ごと落ちていた。
+    // ここで物件コードに正規化して解決させる。
+    'Yuan': 'YUAN',
   };
   rawReservations.forEach(r => {
     if (PROPERTY_NAME_MERGE[r['物件名']]) r['物件名'] = PROPERTY_NAME_MERGE[r['物件名']];
@@ -5134,7 +5144,9 @@ function initDailyCharts() {
   chartMonths.forEach(ym => { monthChannelSales[ym] = {}; });
 
   reservations.forEach(r => {
-    if (r.status === 'システムキャンセル' || r.status === 'キャンセル') return;
+    // 非返金キャンセル（状態はキャンセルだが販売額が残る=請求対象）は売上に計上する。
+    // 純キャンセル（販売額なし）のみ除外。請求集計シートのG列と基準を揃える。
+    if (isCancelStatus(r.status) && !(r.sales > 0)) return;
     const ciYm = getYearMonth(r.checkin);
     if (!monthChannelSales[ciYm]) return;
     if (area !== '全体') {
