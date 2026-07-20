@@ -3266,6 +3266,7 @@ function togglePropertyDrill(propertyName, clickedRow) {
   }
 
   renderPropertyDetail(drillCell, propertyName, 'prop');
+  pinDrillCellToViewport(drillCell);
   setTimeout(initSortableHeaders, 50);
   drillRow.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
@@ -5027,6 +5028,24 @@ function renderReservationTab() {
   setTimeout(initSortableHeaders, 50);
 }
 
+// テーブルセル内に描画した物件詳細を、表示領域（.table-wrap）の幅に固定する。
+// ドリル行の <td colSpan> は横に広いテーブル幅いっぱいに広がるため、そのままだと
+// 物件詳細がビューポートを大きくはみ出す。可視幅に固定し、横スクロールしても
+// 左端に貼り付く（sticky）ようにして「幅が大きすぎる」問題を解消する。
+function pinDrillCellToViewport(drillCell) {
+  const wrap = drillCell.closest('.table-wrap');
+  const inner = drillCell.querySelector('.drill-down');
+  if (!wrap || !inner) return;
+  const apply = () => {
+    inner.style.position = 'sticky';
+    inner.style.left = '0';
+    inner.style.width = wrap.clientWidth + 'px';
+  };
+  apply();
+  // フォント読込やチャート挿入でレイアウトが変わるため一度だけ再計算
+  setTimeout(apply, 80);
+}
+
 // 予約一覧（個別モード）の行クリック → 物件詳細をその場に展開（物件別分析と同一描画を流用）
 let activeResvDrill = null;
 function toggleResvDrill(propertyName, clickedRow) {
@@ -5056,6 +5075,7 @@ function toggleResvDrill(propertyName, clickedRow) {
   }
 
   renderPropertyDetail(drillCell, propertyName, 'resv');
+  pinDrillCellToViewport(drillCell);
   setTimeout(initSortableHeaders, 50);
   drillRow.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
