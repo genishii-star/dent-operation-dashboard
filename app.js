@@ -636,6 +636,14 @@ function isCancelStatus(status) {
   return status === 'キャンセル' || status === 'システムキャンセル';
 }
 
+// AirHost のカレンダーブロック（オーナー利用・工事・長期止め等）。予約ではないので
+// 売上・稼働どちらの集計にも入れてはいけない。販売額0で泊数だけが数年単位（1000泊超）
+// の行が混ざるため、除外を忘れると平均宿泊日数・予約組数が静かに壊れる。
+// 日次ベースの集計（computePropertyStats 等）は元から除外済みなのでOCC/ADRは無傷。
+function isBlockedStatus(status) {
+  return status === 'ブロックされた';
+}
+
 function deriveArea(address) {
   if (!address) return 'その他';
   if (address.includes('東京')) return '東京';
@@ -2565,6 +2573,7 @@ function computeDailyMetrics(months, area) {
 
   // チェックイン月ベース予約
   const monthResvs = reservations.filter(r => {
+    if (isBlockedStatus(r.status)) return false;   // カレンダーブロックは予約ではない
     // 純キャンセル（販売額0）のみ除外。非返金キャンセル（販売額>0=請求対象）は売上に計上。
     if (isCancelStatus(r.status) && !(r.sales > 0)) return false;
     if (!monthSet.has(getYearMonth(r.checkin))) return false;
@@ -2595,6 +2604,7 @@ function computeDailyMetrics(months, area) {
   // BM売上: 対象月チェックアウト予約の清掃費合計
   let bmSales = 0;
   reservations.forEach(r => {
+    if (isBlockedStatus(r.status)) return;
     if (r.status === 'システムキャンセル' || r.status === 'キャンセル') return;
     if (!monthSet.has(getYearMonth(r.checkout))) return;
     if (area !== '全体') {
@@ -2647,6 +2657,7 @@ function countNewBookings(area, daysBack, endDateStr) {
   const startStr = localDateStr(start);
   let count = 0;
   reservations.forEach(r => {
+    if (isBlockedStatus(r.status)) return;
     if (r.status === 'システムキャンセル' || r.status === 'キャンセル') return;
     if (!r.date || r.date < startStr || r.date > endDateStr) return;
     if (area !== '全体') {
@@ -3129,7 +3140,7 @@ function renderOwnerDetailCharts(ownerProps, ownerResvAll, prefix) {
     // Nationality breakdown (aggregated)
     const natAgg = {};
     ownerResvAll.forEach(r => {
-      if (r.status === 'システムキャンセル') return;
+      if (isBlockedStatus(r.status) || r.status === 'システムキャンセル') return;
       const nat = r.nationality || '不明';
       if (!natAgg[nat]) natAgg[nat] = { count: 0, sales: 0 };
       natAgg[nat].count++;
@@ -3672,7 +3683,7 @@ function renderPropertyDetail(container, propertyName, prefix) {
     // Nationality breakdown
     const natAgg = {};
     propResvAll.forEach(r => {
-      if (r.status === 'システムキャンセル') return;
+      if (isBlockedStatus(r.status) || r.status === 'システムキャンセル') return;
       const nat = r.nationality || '不明';
       if (!natAgg[nat]) natAgg[nat] = { count: 0, sales: 0 };
       natAgg[nat].count++;
@@ -4227,7 +4238,7 @@ function renderPropertyTab() {
   const latestResvMap = {};
   const todayStr = new Date().toISOString().split('T')[0];
   reservations.forEach(r => {
-    if (r.status === 'システムキャンセル') return;
+    if (isBlockedStatus(r.status) || r.status === 'システムキャンセル') return;
     if (!r.date || r.date > todayStr) return; // 未来の予約日は除外
     const key = r.propCode || r.property;
     if (!key) return;
@@ -4569,7 +4580,7 @@ function toggleGroupedDrill(seriesBase, clickedRow, isRefresh) {
     seriesProps.forEach(p => {
       const propObj = findPropByName(p.name);
       reservations.filter(r => {
-        if (r.status === 'システムキャンセル') return false;
+        if (isBlockedStatus(r.status) || r.status === 'システムキャンセル') return false;
         return r.propCode === p.name || r.property === p.name;
       }).forEach(r => {
         const nat = r.nationality || '不明';
@@ -4876,7 +4887,8 @@ function renderReservationTab() {
   const dodFiltered = base.filter(buildDodFilter());
 
   // KPI計算ヘルパー
-  const calcKpis = (arr) => {
+  const calcKpis = (rawArr) => {
+    const arr = rawArr.filter(r => !isBlockedStatus(r.status)); // カレンダーブロックは予約ではない
     const count = arr.length;
     const cancel = arr.filter(r => r.status === 'システムキャンセル').length;
     const confirmed = arr.filter(r => r.status !== 'システムキャンセル');
@@ -4948,6 +4960,7 @@ function renderReservationTab() {
     // 一覧表示(displayResv)はキャンセル除外のまま維持したいので validResv ではなく filtered から集計。
     const agg = {};
     filtered.forEach(r => {
+      if (isBlockedStatus(r.status)) return;                  // カレンダーブロック除外
       if (isCancelStatus(r.status) && !(r.sales > 0)) return; // 純キャンセル除外
       const code = r.propCode || r.property || '';
       const base = code ? getSeriesBase(code) : (r.property || 'その他');
@@ -5176,6 +5189,8 @@ function initDailyCharts() {
   chartMonths.forEach(ym => { monthChannelSales[ym] = {}; });
 
   reservations.forEach(r => {
+    // カレンダーブロックは売上0のまま凡例にチャネルだけ増やすので除外。
+    if (isBlockedStatus(r.status)) return;
     // 非返金キャンセル（状態はキャンセルだが販売額が残る=請求対象）は売上に計上する。
     // 純キャンセル（販売額なし）のみ除外。請求集計シートのG列と基準を揃える。
     if (isCancelStatus(r.status) && !(r.sales > 0)) return;
@@ -7012,6 +7027,7 @@ function getRecent14DayBookingCount(prop) {
   const cutoffStr = localDateStr(cutoff);
   let count = 0;
   reservations.forEach(r => {
+    if (isBlockedStatus(r.status)) return;
     if (r.status === 'システムキャンセル' || r.status === 'キャンセル') return;
     if (!r.date || r.date < cutoffStr) return;
     if (r.propCode !== prop.name && r.property !== prop.name && r.property !== prop.propName) return;
@@ -7105,6 +7121,7 @@ function renderWatchlistTab() {
         const months = getMonthsSinceStart(p);
         let bkCount = 0;
         reservations.forEach(r => {
+          if (isBlockedStatus(r.status)) return;
           if (r.status === 'システムキャンセル' || r.status === 'キャンセル') return;
           if (r.propCode !== p.name && r.property !== p.name && r.property !== p.propName) return;
           if (r.date && r.date >= d7agoStr && r.date <= todayStr) bkCount++;
@@ -7300,6 +7317,7 @@ function computePmBmDetail(months, area) {
 
   // PM (and total sales): checkin-month basis
   reservations.forEach(r => {
+    if (isBlockedStatus(r.status)) return;
     if (r.status === 'システムキャンセル' || r.status === 'キャンセル') return;
     if (!monthSet.has(getYearMonth(r.checkin))) return;
     const prop = findPropByReservation(r);
@@ -7322,6 +7340,7 @@ function computePmBmDetail(months, area) {
 
   // BM: checkout-month basis
   reservations.forEach(r => {
+    if (isBlockedStatus(r.status)) return;
     if (r.status === 'システムキャンセル' || r.status === 'キャンセル') return;
     if (!monthSet.has(getYearMonth(r.checkout))) return;
     const prop = findPropByReservation(r);
@@ -8929,6 +8948,7 @@ function countFyNightsForProperty(propName, fyStart, fyEnd) {
   let monthlyCount = 0;
   let monthlyNights = 0;
   reservations.forEach(r => {
+    if (isBlockedStatus(r.status)) return;
     if (r.status === 'システムキャンセル' || r.status === 'キャンセル') return;
     if (r.propCode !== propName && r.property !== propName && (!prop || r.property !== prop.propName)) return;
     if (!r.checkin || !r.checkout) return;
