@@ -343,13 +343,18 @@ const STATUS_TO_JA = {
 async function fetchDataApi(path) {
   let resp;
   try {
+    // redirect:'manual' にすると、未認証の 302 は opaqueredirect として「投げずに」返る。
+    // これで「Access のログインが必要」と「Worker 側のエラー(CORSヘッダなしの5xx等で
+    // fetch自体が失敗)」を切り分けられる。以前は後者も requiresAuth に丸めていたため、
+    // 何度ログインし直しても消えない「認証が必要です」が出続けていた。
     resp = await fetch(`${DATA_API_BASE}${path}`, {
       credentials: 'include',
+      redirect: 'manual',
       headers: { 'Accept': 'application/json' },
     });
   } catch (e) {
-    const err = new Error(`API ${path} 通信失敗: ${e.message}`);
-    err.requiresAuth = true;
+    const err = new Error(`API ${path} に到達できません (${e.message})`);
+    err.apiUnreachable = true;
     throw err;
   }
   if (resp.status === 401 || resp.status === 302 || resp.type === 'opaqueredirect') {
@@ -562,6 +567,10 @@ async function loadAllData() {
     overlay.style.display = 'none';
     if (err.requiresAuth) {
       errorBanner.innerHTML = `データ API の認証が必要です。<a href="${DATA_API_BASE}/internal/me" target="_blank" rel="noopener" style="color:#fff;text-decoration:underline;font-weight:600;">こちらをクリック</a>して別タブで認証完了後、ページを再読み込みしてください。`;
+    } else if (err.apiUnreachable) {
+      // 認証は通っているのに API 側が落ちている状態。ログインし直しても直らないので、
+      // 「認証が必要」と混同させないよう別メッセージにする。
+      errorBanner.textContent = `データ API に接続できませんでした（認証の問題ではありません）。${err.message} — 時間をおいて再読み込みしても直らない場合は開発側に連絡してください。`;
     } else {
       errorBanner.textContent = 'データの読み込みに失敗しました: ' + err.message;
     }
@@ -569,13 +578,30 @@ async function loadAllData() {
   }
 }
 
+// 予約/日次を取得する期間の下限（YYYY-MM-01）。
+// 画面が遡る最大は「12ヶ月チャート」と「期間=前年」なので 12ヶ月 + 余裕3ヶ月 = 15ヶ月。
+// これ以上広げると Worker のメモリ上限に当たるので、増やすときは
+// read-data.ts 側のレスポンス軽量化（不要カラムの削減）とセットで行うこと。
+const DATA_WINDOW_MONTHS = 15;
+function dataWindowSince() {
+  const now = new Date();
+  const d = new Date(now.getFullYear(), now.getMonth() - DATA_WINDOW_MONTHS, 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`;
+}
+
 async function fetchAndUpdate() {
   const detail = document.getElementById('loading-detail');
   if (detail) detail.textContent = '最新データを取得中...';
 
+  // D1 に 2023年以降の過去データをバックフィルした結果、無指定だと
+  // reservations.json ≈ 37MB / daily.json ≈ 42MB になり Worker のメモリ上限で
+  // 断続的に落ちるようになった（画面には「認証が必要です」と誤表示されていた）。
+  // ダッシュボードが実際に描画する範囲だけを取りに行く。
+  const since = dataWindowSince();
+
   const [resv, daily, propMaster, ownMaster, seasMaster, settingsRaw, marketRaw, estatRaw, reviewsRaw] = await Promise.all([
-    fetchDataApi('/internal/reservations.json').then(d => d.rows || []),
-    fetchDataApi('/internal/daily.json').then(d => d.rows || []),
+    fetchDataApi(`/internal/reservations.json?since=${since}`).then(d => d.rows || []),
+    fetchDataApi(`/internal/daily.json?since=${since}`).then(d => d.rows || []),
     fetchPropertyMasterApi(),
     fetchOwnerMasterApi(),
     fetchSheet('シーズンマスタ'),
