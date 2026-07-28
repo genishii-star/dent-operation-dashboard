@@ -29,6 +29,13 @@
       <div class="dent-body" id="dent-body">
         <button class="dent-btn" id="dent-sync-btn">🔄 ワンクリック同期</button>
         <div class="dent-info">日次(過去90日) + 予約(過去90日+未来365日)</div>
+        <details class="dent-backfill">
+          <summary>⏳ 過去データ取込（バックフィル）</summary>
+          <div class="dent-info">D1に無い過去期間を一度だけ取り込む。定常同期とは別。</div>
+          <label class="dent-field">開始 <input type="date" id="dent-bf-start" value="2024-01-01" min="2020-01-01" max="2026-12-31"></label>
+          <label class="dent-field">終了 <input type="date" id="dent-bf-end" value="2024-03-31" min="2020-01-01" max="2026-12-31"></label>
+          <button class="dent-btn dent-btn-sub" id="dent-backfill-btn">過去データを取り込む</button>
+        </details>
         <div class="dent-log" id="dent-log"></div>
       </div>
     `;
@@ -39,6 +46,14 @@
 
     syncBtn.addEventListener('click', () => {
       if (!isSyncing) startSync();
+    });
+
+    document.getElementById('dent-backfill-btn').addEventListener('click', () => {
+      if (isSyncing) return;
+      const start = document.getElementById('dent-bf-start').value;
+      const end = document.getElementById('dent-bf-end').value;
+      if (!start || !end || start > end) { log('⚠️ 開始/終了日が不正です'); return; }
+      startBackfill(start, end);
     });
 
     document.getElementById('dent-toggle').addEventListener('click', () => {
@@ -276,40 +291,22 @@
       });
       log('✅ 同期完了！');
 
-      // 新法ステータス計算（民泊新法物件の年度内稼働日数）
-      let shinpouLines = '';
-      let shinpouCalcError = null;
-      try {
-        shinpouLines = await computeShinpouStatus(resRows);
-      } catch (e) {
-        shinpouCalcError = e.message;
-        log('  新法ステータス計算失敗: ' + e.message);
-      }
+      // 最新シートで朝の運営サマリーを発火（イベント駆動）。
+      // 固定9:00トリガーの代わりに、同期完了時＝データが最新の瞬間に投稿させる。
+      // GAS側の冪等ガードで、同日に複数回同期しても本編は1回だけ投稿される。
+      // 民泊新法の営業日数チェックも同じ呼び出しでGAS側が投稿する
+      // （拡張側での計算は 2026-07-27 に廃止。理由は gas/shinpou-report.gs 冒頭を参照）。
+      const triggerResult = await triggerMorningReport();
 
-      // Slack通知（新法ステータス: 別チャネル）— 先に送って結果を取得
-      let shinpouNotifyStatus;
-      if (shinpouCalcError) {
-        shinpouNotifyStatus = { status: 'error', message: '計算失敗: ' + shinpouCalcError };
-      } else if (!shinpouLines) {
-        shinpouNotifyStatus = { status: 'skipped', message: '対象物件なし' };
-      } else {
-        shinpouNotifyStatus = await sendShinpouSlackNotification(shinpouLines);
-      }
-
-      // Slack通知（同期完了）— 新法通知も含める
+      // Slack通知（同期完了）— 新法通知の結果も添える
       const startTime = new Date(today);
       const elapsed = Math.round((Date.now() - startTime.getTime()) / 60000);
       await sendSlackNotification(true, {
         dailyRows: dailyRows.length,
         resRows: resRows.length,
         elapsed: elapsed,
-        shinpouNotifyStatus: shinpouNotifyStatus,
+        shinpouNotifyStatus: triggerResult && triggerResult.shinpou,
       });
-
-      // 最新シートで朝の運営サマリーを発火（イベント駆動）。
-      // 固定9:00トリガーの代わりに、同期完了時＝データが最新の瞬間に投稿させる。
-      // GAS側の冪等ガードで、同日に複数回同期しても本編は1回だけ投稿される。
-      await triggerMorningReport();
 
     } catch (err) {
       log(`❌ エラー: ${err.message}`);
@@ -319,6 +316,137 @@
       isSyncing = false;
       syncBtn.disabled = false;
       syncBtn.textContent = '🔄 ワンクリック同期';
+    }
+  }
+
+  // ======== バックフィル（過去データ一括取込） ========
+  //
+  // 定常同期(過去90日)とは別に、D1に無い過去期間を一度だけ取り込む。
+  // 設計上の要点:
+  //  - Sheetsは直近窓バッファなので、全期間を溜めると溢れる。よって
+  //    「3ヶ月チャンクごとに Sheets を上書き → 即 D1 へ流す」を繰り返し、
+  //    Sheetsには常に1チャンク分しか乗せない。D1はupsertで永続蓄積。
+  //  - D1送信は拡張から直接ではなくGAS(d1SyncOnly)経由。CF-Accessトークンを
+  //    各ブラウザの拡張に持たせないため（GAS側が既に認証を持っている）。
+  //  - 朝レポートは発火しない（過去日のサマリーを投稿されると困る）。
+  async function startBackfill(startStr, endStr) {
+    if (isSyncing) return;
+    isSyncing = true;
+    syncBtn.disabled = true;
+    const bfBtn = document.getElementById('dent-backfill-btn');
+    if (bfBtn) bfBtn.disabled = true;
+    logPanel.innerHTML = '';
+    logPanel.style.display = 'block';
+
+    const start = new Date(startStr + 'T00:00:00');
+    const end = new Date(endStr + 'T00:00:00');
+    // 予約・日次とも3ヶ月チャンク。両タイプを1チャンク内で取ってからD1へ流す。
+    const chunks = getDateChunks(start, end, 3);
+    log(`⏳ バックフィル開始: ${startStr} 〜 ${endStr}（${chunks.length}チャンク）`);
+    log(`  ※ 定常同期(過去90日)とは別。朝レポートは発火しません。`);
+
+    let okChunks = 0, totalDaily = 0, totalRes = 0;
+    try {
+      for (let ci = 0; ci < chunks.length; ci++) {
+        const ch = chunks[ci];
+        log(`━━ [${ci + 1}/${chunks.length}] ${ch.start_date} 〜 ${ch.end_date} ━━`);
+
+        // このチャンクの日次＋予約をAirhostから取得（内部でレート制限待機あり）
+        const dailyRows = await fetchChunk('daily', ch);
+        await new Promise(r => setTimeout(r, 35000));
+        const resRows = await fetchChunk('reservation', ch);
+
+        if (dailyRows.length <= 1 && resRows.length <= 1) {
+          log(`  データなし（この期間はAirhostに無し）— スキップ`);
+          continue;
+        }
+
+        // Sheetsを上書き（ensureAndWriteSheet はヘッダ込みで全置換）
+        if (dailyRows.length > 1) {
+          const r = await sendToBackground('writeToSheet', { sheetName: '日次データ', rows: dailyRows });
+          if (!r.success) throw new Error(`日次書込失敗: ${r.error}`);
+          totalDaily += dailyRows.length - 1;
+        }
+        if (resRows.length > 1) {
+          const r = await sendToBackground('writeToSheet', { sheetName: '予約データ', rows: resRows });
+          if (!r.success) throw new Error(`予約書込失敗: ${r.error}`);
+          totalRes += resRows.length - 1;
+        }
+        log(`  Sheets書込: 日次${Math.max(0, dailyRows.length - 1)} / 予約${Math.max(0, resRows.length - 1)}`);
+
+        // このチャンク分をD1へ流す（朝レポートは出さない専用action）
+        const d1ok = await triggerD1SyncOnly();
+        if (!d1ok) throw new Error('D1同期に失敗（このチャンクを中断）');
+        log(`  D1取込: ✅`);
+        okChunks++;
+
+        if (ci < chunks.length - 1) {
+          log(`  次チャンクまで35秒待機...`);
+          await new Promise(r => setTimeout(r, 35000));
+        }
+      }
+      log(`✅ バックフィル完了: ${okChunks}/${chunks.length}チャンク / 日次${totalDaily}行 予約${totalRes}行 をD1へ`);
+    } catch (err) {
+      log(`❌ 中断: ${err.message}`);
+      log(`  ここまでのチャンクはD1に取込済み。日付を調整して再実行すれば続きから可能。`);
+      console.error('[Dent Backfill]', err);
+    } finally {
+      // Sheetsに過去チャンクが残ったままだと、翌朝の定常同期の前提(直近窓バッファ)が
+      // 崩れる。最後に直近90日で上書きし直して現状復帰する。D1は既に永続化済みなので
+      // これで失われるものは無い。
+      try {
+        log(`🔄 Sheetsを直近窓に復帰中...`);
+        await restoreRecentWindow();
+        log(`  復帰完了`);
+      } catch (e) {
+        log(`  ⚠️ 復帰失敗: ${e.message} — 手動で「ワンクリック同期」を1回押してください`);
+      }
+      isSyncing = false;
+      syncBtn.disabled = false;
+      if (bfBtn) bfBtn.disabled = false;
+    }
+  }
+
+  // 定常同期と同じ直近窓でSheetsを上書きし直す（D1へは流さない＝朝レポートも出さない）
+  async function restoreRecentWindow() {
+    const today = new Date();
+    const windowStart = new Date(today);
+    windowStart.setDate(windowStart.getDate() - 90);
+    const oneYearLater = new Date(today);
+    oneYearLater.setFullYear(oneYearLater.getFullYear() + 1);
+
+    const dailyRows = await fetchAllChunks('daily', windowStart, today);
+    if (dailyRows.length > 1) {
+      await sendToBackground('writeToSheet', { sheetName: '日次データ', rows: dailyRows });
+    }
+    await new Promise(r => setTimeout(r, 35000));
+    const resRows = await fetchAllChunks('reservation', windowStart, oneYearLater);
+    if (resRows.length > 1) {
+      await sendToBackground('writeToSheet', { sheetName: '予約データ', rows: resRows });
+    }
+  }
+
+  // 1チャンク分を取得（fetchAllChunks の単一チャンク版。全期間を溜めない）
+  async function fetchChunk(type, chunk) {
+    const csvText = await sendToPage('exportCSV', { type, dateRange: chunk });
+    const rows = parseCSV(csvText.replace(/^﻿/, ''));
+    return rows;
+  }
+
+  async function triggerD1SyncOnly() {
+    try {
+      const stored = await chrome.storage.local.get(['morningReportUrl']);
+      const baseUrl = stored.morningReportUrl;
+      if (!baseUrl) { log('  D1取込: ❌ URL未設定（朝レポートURLと同じものを設定画面で）'); return false; }
+      const url = baseUrl + (baseUrl.includes('?') ? '&' : '?') +
+        'action=d1SyncOnly&token=' + encodeURIComponent(MORNING_REPORT_TOKEN);
+      const result = await sendToBackground('getUrl', { url });
+      if (result.success && result.data && result.data.ok) return true;
+      log('  D1取込: ❌ ' + JSON.stringify((result.data && result.data.error) || result.error || result).slice(0, 200));
+      return false;
+    } catch (e) {
+      log('  D1取込: ❌ ' + e.message);
+      return false;
     }
   }
 
@@ -377,121 +505,39 @@
     });
   }
 
-  // ======== 新法ステータス計算 ========
+  // 新法ステータスの計算・通知は GAS (gas/shinpou-report.gs) に移管済み (2026-07-27)。
+  // 旧実装はスプシ「物件マスタ」+ 過去90日の予約しか見ておらず、YAML移管後の新規物件
+  // (SKA等) が通知から消え、年度累計も過小になっていた。詳細は shinpou-report.gs 冒頭。
 
-  async function computeShinpouStatus(resRows) {
-    // 物件マスタを取得
-    const masterRes = await sendToBackground('readSheet', { sheetName: '物件マスタ' });
-    if (!masterRes.success) {
-      log('  物件マスタ読み込み失敗: ' + masterRes.error);
-      return '';
-    }
-    const values = masterRes.values;
-    if (!values || values.length < 2) return '';
-    const header = values[0];
-    const rows = values.slice(1);
-    const idxCode = header.indexOf('物件コード');
-    const idxName = header.indexOf('物件名');
-    const idxLicense = header.indexOf('許可種類');
-    const idxLimit = header.indexOf('営業日数上限');
-    if (idxCode < 0 || idxName < 0 || idxLicense < 0 || idxLimit < 0) {
-      log('  物件マスタの必須列が見つかりません');
-      return '';
-    }
-
-    // 民泊新法物件のみ抽出
-    const shinpouProps = rows
-      .filter(r => (r[idxLicense] || '') === '民泊新法')
-      .map(r => ({
-        code: (r[idxCode] || '').trim(),
-        name: (r[idxName] || '').trim(),
-        limit: parseInt(r[idxLimit], 10) || 180,
-      }))
-      .filter(p => p.code);
-    if (shinpouProps.length === 0) return '';
-
-    // コード集合（マッチング用）
-    const codeSet = new Set(shinpouProps.map(p => p.code));
-
-    // 予約データのヘッダーから列インデックスを取得
-    if (!resRows || resRows.length < 2) return '';
-    const rHeader = resRows[0];
-    const rIdxName = rHeader.indexOf('物件名');
-    const rIdxRoom = rHeader.indexOf('部屋番号');
-    const rIdxCheckin = rHeader.indexOf('チェックイン');
-    const rIdxCheckout = rHeader.indexOf('チェックアウト');
-    const rIdxStatus = rHeader.indexOf('状態');
-    const rIdxNights = rHeader.indexOf('合計日数');
-    if (rIdxName < 0 || rIdxCheckin < 0 || rIdxCheckout < 0 || rIdxStatus < 0) {
-      log('  予約データの必須列が見つかりません');
-      return '';
-    }
-
-    // 年度範囲: 4/1 〜 翌3/31
-    const now = new Date();
-    const startYear = now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1;
-    const fyStart = new Date(startYear, 3, 1);
-    const fyEnd = new Date(startYear + 1, 3, 1);
-
-    // 物件コード解決（マスタ全体ではなく shinpou 用の簡易ロジック：連結 → 物件名フォールバック）
-    const resolveCode = (propName, roomNum) => {
-      if (!propName) return '';
-      if (roomNum && propName !== roomNum) {
-        const concat = propName + roomNum;
-        if (codeSet.has(concat)) return concat;
-      }
-      if (codeSet.has(propName)) return propName;
-      return '';
-    };
-
-    // 物件ごとの確定日数を集計
-    const nightsByCode = {};
-    shinpouProps.forEach(p => { nightsByCode[p.code] = 0; });
-
-    for (let i = 1; i < resRows.length; i++) {
-      const row = resRows[i];
-      const status = row[rIdxStatus] || '';
-      if (status === 'システムキャンセル' || status === 'キャンセル') continue;
-      const totalNights = rIdxNights >= 0 ? parseInt(row[rIdxNights], 10) || 0 : 0;
-      if (totalNights >= 30) continue; // マンスリー除外
-      const code = resolveCode((row[rIdxName] || '').trim(), rIdxRoom >= 0 ? (row[rIdxRoom] || '').trim() : '');
-      if (!code || !(code in nightsByCode)) continue;
-
-      const ci = new Date(row[rIdxCheckin]);
-      const co = new Date(row[rIdxCheckout]);
-      if (isNaN(ci) || isNaN(co)) continue;
-      const overlapStart = ci > fyStart ? ci : fyStart;
-      const overlapEnd = co < fyEnd ? co : fyEnd;
-      const ms = overlapEnd - overlapStart;
-      if (ms <= 0) continue;
-      nightsByCode[code] += Math.round(ms / 86400000);
-    }
-
-    // 行を組み立て（物件名/コード順）
-    const lines = shinpouProps
-      .sort((a, b) => a.code.localeCompare(b.code))
-      .map(p => `${p.code}：${nightsByCode[p.code]}/${p.limit}`)
-      .join('\n');
-    return lines;
-  }
 
   // ======== 朝の運営サマリー発火 ========
 
   // GAS morning-report.gs の MORNING_REPORT_CONFIG.TRIGGER_TOKEN と一致させること
   const MORNING_REPORT_TOKEN = 'dent_morning_2026';
 
+  // GAS の doGet(?action=morningReport) は D1同期 → 新法通知 → 朝レポート を実行する。
+  // 戻り値の shinpou を呼び出し側に返して、同期完了通知に結果を載せる。
   async function triggerMorningReport() {
     try {
       const stored = await chrome.storage.local.get(['morningReportUrl']);
       const baseUrl = stored.morningReportUrl;
       if (!baseUrl) {
         log('  朝レポート発火: URL未設定（設定画面から設定してください）');
-        return;
+        return { shinpou: { error: 'GAS URL未設定' } };
       }
       const url = baseUrl +
         (baseUrl.indexOf('?') >= 0 ? '&' : '?') +
         'action=morningReport&token=' + encodeURIComponent(MORNING_REPORT_TOKEN);
       const result = await sendToBackground('getUrl', { url });
+      // ok=false（朝レポート失敗）でも新法通知は独立して成功していることがあるので
+      // shinpou は ok に関わらず拾う。
+      const shinpou = (result.data && result.data.shinpou) || null;
+      if (shinpou) {
+        if (shinpou.posted) log('  新法通知: ✅ 投稿完了（' + shinpou.count + '件）');
+        else if (shinpou.skipped === 'already-posted') log('  新法通知: ⏭ 本日投稿済み');
+        else if (shinpou.skipped === 'no-target') log('  新法通知: ⏭ 対象物件なし');
+        else if (shinpou.error) log('  新法通知: ❌ ' + shinpou.error);
+      }
       if (result.success && result.data && result.data.ok) {
         const r = result.data.result || {};
         if (r.posted) log('  朝レポート発火: ✅ 投稿完了');
@@ -502,8 +548,10 @@
         const msg = (result.data && result.data.error) || result.error || result.raw || '不明なエラー';
         log('  朝レポート発火: ❌ ' + msg);
       }
+      return { shinpou: shinpou };
     } catch (e) {
       log('  朝レポート発火: ❌ ' + e.message);
+      return { shinpou: { error: e.message } };
     }
   }
 
@@ -524,12 +572,12 @@
                `日次データ: ${data.dailyRows.toLocaleString()}行\n` +
                `予約データ: ${data.resRows.toLocaleString()}行\n` +
                `所要時間: 約${data.elapsed}分`;
-        // 新法通知の結果を追記
+        // 新法通知の結果を追記（投稿はGAS shinpou-report.gs 側）
         const sn = data.shinpouNotifyStatus;
         if (sn) {
-          if (sn.status === 'success') text += `\n📋 新法通知: ✅ 送信完了`;
-          else if (sn.status === 'skipped') text += `\n📋 新法通知: ⏭ スキップ（${sn.message}）`;
-          else if (sn.status === 'error') text += `\n📋 新法通知: ❌ ${sn.message}`;
+          if (sn.posted) text += `\n📋 新法通知: ✅ 送信完了（${sn.count}件）`;
+          else if (sn.skipped) text += `\n📋 新法通知: ⏭ スキップ（${sn.skipped}）`;
+          else if (sn.error) text += `\n📋 新法通知: ❌ ${sn.error}`;
         }
       } else {
         text = `❌ Airhost同期失敗\nエラー: ${data.error}`;
@@ -544,32 +592,6 @@
       }
     } catch (e) {
       log('  Slack通知失敗: ' + e.message);
-    }
-  }
-
-  async function sendShinpouSlackNotification(shinpouLines) {
-    try {
-      const stored = await chrome.storage.local.get(['slackWebhookUrlShinpou']);
-      const webhookUrl = stored.slackWebhookUrlShinpou;
-      if (!webhookUrl) {
-        log('  新法Slack通知: Webhook未設定（設定画面から設定してください）');
-        return { status: 'skipped', message: 'Webhook未設定' };
-      }
-      const now = new Date();
-      const dateStr = `${now.getFullYear()}/${now.getMonth() + 1}/${now.getDate()}`;
-      const text = `${dateStr}\n${shinpouLines}`;
-      const result = await sendToBackground('sendSlack', { webhookUrl, text });
-      if (result.success) {
-        log('  新法Slack通知送信完了');
-        return { status: 'success' };
-      } else {
-        const msg = result.error || '不明なエラー';
-        log('  新法Slack通知失敗: ' + msg);
-        return { status: 'error', message: msg };
-      }
-    } catch (e) {
-      log('  新法Slack通知失敗: ' + e.message);
-      return { status: 'error', message: e.message };
     }
   }
 
