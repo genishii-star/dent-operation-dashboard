@@ -192,12 +192,17 @@ curl -H "CF-Access-Client-Id: $CF_AID" \
 
   ```bash
   cd operation/review
-  export CF_ACCESS_CLIENT_ID="<CF-Access-Client-Id>"
-  export CF_ACCESS_CLIENT_SECRET="<CF-Access-Client-Secret>"
+  source ~/.config/dent/review.env   # CF_ACCESS_CLIENT_ID / _SECRET が入っている
   node relogin.mjs X
   # ブラウザが開く → ID/PW自動入力 → 2FA手入力 →「このデバイスを記憶」を必ずチェック
   # → Enter → /hosting 到達を検証 → KVへPOST → 読み戻しでcookie件数確認
   ```
+
+  > `~/.config/dent/review.env` を失った場合、Cloudflare からは再取得できない
+  > (Service Token の Client Secret は作成時にしか表示されない)。GAS「運営アラート」
+  > プロジェクト > プロジェクトの設定 > スクリプト プロパティ に同じ値がある。
+  > **ローテートは避けること** — GAS の Script Property と GitHub Secrets の
+  > 両方を更新しないと、朝報・D1同期・レビュー自動化がまとめて止まる。
 
   復旧後、該当 workflow を再実行:
 

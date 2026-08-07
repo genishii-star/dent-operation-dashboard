@@ -13,10 +13,15 @@
  *   4. Worker (KV) に POST
  *   5. 取得し直して cookie 件数を確認
  *
- * 必要な環境変数:
- *   CF_ACCESS_CLIENT_ID / CF_ACCESS_CLIENT_SECRET
- *     Cloudflare ZeroTrust > Access > サービス資格情報 の値。
- *     GAS「運営アラート」プロジェクトの Script Property と同じもの。
+ * 必要な環境変数 (CF_ACCESS_CLIENT_ID / CF_ACCESS_CLIENT_SECRET) は
+ * ~/.config/dent/review.env にあるので、頭に source を付けて実行するだけでよい:
+ *
+ *   source ~/.config/dent/review.env && node relogin.mjs NAGAI
+ *
+ * このファイルを失った場合の再取得先は Cloudflare ではなく GAS。
+ * Access の Service Token は Client Secret を後から表示できない仕様なので、
+ * GAS「運営アラート」プロジェクト > プロジェクトの設定 > スクリプト プロパティ
+ * から同じ値をコピーする (ローテートすると朝報と D1同期が両方止まる)。
  */
 
 import { chromium } from "playwright";
