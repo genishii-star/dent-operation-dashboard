@@ -188,7 +188,25 @@ curl -H "CF-Access-Client-Id: $CF_AID" \
 ### セッションが切れた
 - `GET /internal/session/X` を叩いて取得 → Playwright で動かしたら 403 や Login wall に飛ぶ
 - **TOTP 登録済みアカウント**: GH Actions が `SESSION_EXPIRED_NO_AUTO_RECOVERY` を出さない限り自動復旧されている (本来そう動くはずだが何度も発火するなら TOTP seed の不一致を疑う)
-- **TOTP 未登録アカウント**: GH Actions が失敗 → `#review-approval` に「session expired」アラート → ローカルで再 `login.mjs X` → セッションを再アップロード → 該当 workflow を `workflow_dispatch` で再実行
+- **TOTP 未登録アカウント**: GH Actions が失敗 → `#review-approval` に「session expired」アラート → **Terminal.app で `relogin.mjs` を実行**（ログイン〜KVアップロード〜検証をワンショット。`login.mjs` + 手動 curl の置き換え）
+
+  ```bash
+  cd operation/review
+  export CF_ACCESS_CLIENT_ID="<CF-Access-Client-Id>"
+  export CF_ACCESS_CLIENT_SECRET="<CF-Access-Client-Secret>"
+  node relogin.mjs X
+  # ブラウザが開く → ID/PW自動入力 → 2FA手入力 →「このデバイスを記憶」を必ずチェック
+  # → Enter → /hosting 到達を検証 → KVへPOST → 読み戻しでcookie件数確認
+  ```
+
+  復旧後、該当 workflow を再実行:
+
+  ```bash
+  gh workflow run review-generate-weekly.yml -f account=X
+  ```
+
+  > 「このデバイスを記憶」を飛ばすとセッションが数日で切れて毎週アラートが鳴る。実績では
+  > チェックあり = 約8週間持つ (NAGAI: 2026-06-02 取得 → 2026-07-27 失効)。
 
 ### 暗号化キーをローテートしたい
 - 旧キーで全 KV エントリを decrypt → 新キーで encrypt → KV に上書き

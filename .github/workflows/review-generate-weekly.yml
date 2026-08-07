@@ -6,7 +6,7 @@ name: Review draft generator (weekly)
 # companion workflow `review-post-weekly.yml` drains approved drafts later in
 # the day.
 #
-# Add new accounts to `accounts` in the matrix below. Each account needs:
+# Add new accounts to `DEFAULT` in the `determine` job below. Each account needs:
 #   - KV entries: airbnb-session:{account}, airbnb-totp:{account}
 #   - Setup: see operation/review/SETUP_AUTOMATION.md
 
@@ -33,25 +33,53 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Decide which account(s) to generate for, based on what triggered the run.
+  #   workflow_dispatch → the manual input account (if given)
+  #   schedule          → the full configured list
+  #
+  # This has to be a separate job: a step-level `exit 0` does NOT skip the rest
+  # of the job (it just marks that step successful and continues), and a
+  # job-level `if:` cannot reference the `matrix` context. Building the matrix
+  # itself is the only way to actually drop an account. Mirrors the same
+  # pattern in review-post-weekly.yml.
+  determine:
+    name: Determine accounts
+    runs-on: ubuntu-latest
+    outputs:
+      accounts: ${{ steps.set.outputs.accounts }}
+    steps:
+      - id: set
+        env:
+          EVENT: ${{ github.event_name }}
+          INPUT_ACCOUNT: ${{ inputs.account }}
+        run: |
+          set -euo pipefail
+          # Edit this list to add/remove accounts from the weekly schedule.
+          #   KUZE = BRIDGE VIEW VILLA (facility code: bvv)
+          #   MIM  = MIMO home
+          DEFAULT='["NAGAI","KUZE","MIM"]'
+          acct=""
+          if [ "$EVENT" = "workflow_dispatch" ] && [ -n "${INPUT_ACCOUNT:-}" ]; then
+            acct="$INPUT_ACCOUNT"
+          fi
+          if [ -n "$acct" ]; then
+            if ! printf '%s' "$acct" | grep -qE '^[A-Za-z0-9_-]{1,32}$'; then
+              echo "invalid account: $acct" >&2; exit 1
+            fi
+            echo "accounts=[\"$acct\"]" >> "$GITHUB_OUTPUT"
+          else
+            echo "accounts=$DEFAULT" >> "$GITHUB_OUTPUT"
+          fi
+
   generate:
     name: Generate drafts (${{ matrix.account }})
+    needs: determine
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        account:
-          # Edit this list to add/remove accounts. Manual-dispatch with a
-          # single account name overrides the matrix via the if: below.
-          - NAGAI
-          - KUZE   # BRIDGE VIEW VILLA (facility code: bvv)
-          - MIM    # MIMO home
+        account: ${{ fromJSON(needs.determine.outputs.accounts) }}
     steps:
-      - name: Skip if manual override targets a different account
-        if: github.event_name == 'workflow_dispatch' && inputs.account != '' && inputs.account != matrix.account
-        run: |
-          echo "Skipping ${{ matrix.account }} (manual run targets ${{ inputs.account }})"
-          exit 0
-
       - uses: actions/checkout@v4
 
       - name: Setup Node
@@ -91,7 +119,7 @@ jobs:
           SLACK_REVIEW_CHANNEL: ${{ secrets.SLACK_REVIEW_CHANNEL }}
         run: |
           if grep -q "SESSION_EXPIRED_NO_AUTO_RECOVERY" run.log; then
-            MSG=":warning: *Airbnb session expired for \`${{ matrix.account }}\`* — TOTP auto-recovery is not available for this account. Re-run \`node login.mjs ${{ matrix.account }}\` locally and re-upload the session blob to the Worker. (See operation/review/SETUP_AUTOMATION.md Step 6–7.)"
+            MSG=":warning: *Airbnb session expired for \`${{ matrix.account }}\`* — TOTP auto-recovery is not available for this account. Terminal.app で \`cd operation/review && node relogin.mjs ${{ matrix.account }}\` を実行 (ログイン→KVアップロード→検証まで自動)。復旧後 \`gh workflow run review-generate-weekly.yml -f account=${{ matrix.account }}\`。詳細は operation/review/SETUP_AUTOMATION.md「トラブルシューティング > セッションが切れた」。"
             curl -fsS -X POST https://slack.com/api/chat.postMessage \
               -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
               -H "Content-Type: application/json; charset=utf-8" \
