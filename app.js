@@ -1479,6 +1479,10 @@ function processData() {
     // 大文字化して 'YUAN' で保持するため名寄せに失敗し予約が丸ごと落ちていた。
     // ここで物件コードに正規化して解決させる。
     'Yuan': 'YUAN',
+    // NNJ: 2026-05〜07 に新旧リスティングが並存し、旧側が 'NNJ(旧)' に
+    // 改名された。同一物件なので寄せないと売上がその期間だけ分散する。
+    'NNJ(旧)': 'NNJ',
+    'NNJ旧': 'NNJ',
   };
   rawReservations.forEach(r => {
     if (PROPERTY_NAME_MERGE[r['物件名']]) r['物件名'] = PROPERTY_NAME_MERGE[r['物件名']];
