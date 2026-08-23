@@ -472,6 +472,30 @@ function ownerYamlToMaster(o) {
   };
 }
 
+// D1 の取り込み鮮度をヘッダに出す。取り込みが動いていても中身が古い
+// (セッション切れで空応答が続く等) 場合に気付けるよう、最新日次日付も添える。
+// 6時間以上更新が無ければ色を変えて目立たせる。
+async function renderLastSynced() {
+  const el = document.getElementById('lastSynced');
+  if (!el) return;
+  try {
+    const f = await fetchDataApi('/internal/data-freshness.json');
+    const iso = f && f.last_ingested_at;
+    if (!iso) { el.textContent = '最終同期: -'; return; }
+    const d = new Date(iso.endsWith('Z') || iso.includes('+') ? iso : iso + 'Z');
+    const pad = n => String(n).padStart(2, '0');
+    const stamp = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ` +
+                  `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    const latestDate = f.daily_revenue && f.daily_revenue.latest_date;
+    el.textContent = '最終同期: ' + stamp + (latestDate ? `（日次 ${latestDate} まで）` : '');
+    const hours = (Date.now() - d.getTime()) / 3600000;
+    el.style.color = hours > 6 ? '#ffcc00' : '';
+    el.title = hours > 6 ? `${Math.floor(hours)}時間 取り込みがありません` : '';
+  } catch (e) {
+    el.textContent = '最終同期: 取得失敗';
+  }
+}
+
 async function fetchPropertyMasterApi() {
   const data = await fetchDataApi('/internal/facilities.json');
   const arr = (data && data.facilities) || [];
@@ -599,13 +623,13 @@ async function fetchAndUpdate() {
   // ダッシュボードが実際に描画する範囲だけを取りに行く。
   const since = dataWindowSince();
 
-  const [resv, daily, propMaster, ownMaster, seasMaster, settingsRaw, marketRaw, estatRaw, reviewsRaw] = await Promise.all([
+  // 設定シート('最終同期'キー)の取得はやめた。表示は D1 実測 (renderLastSynced) に移行。
+  const [resv, daily, propMaster, ownMaster, seasMaster, marketRaw, estatRaw, reviewsRaw] = await Promise.all([
     fetchDataApi(`/internal/reservations.json?since=${since}`).then(d => d.rows || []),
     fetchDataApi(`/internal/daily.json?since=${since}`).then(d => d.rows || []),
     fetchPropertyMasterApi(),
     fetchOwnerMasterApi(),
     fetchSheet('シーズンマスタ'),
-    fetch(sheetApiUrl('設定')).then(r => r.json()).catch(() => ({})),
     fetchAirdnaSheets().catch(() => ({})),
     fetchEstatSheets().catch(() => ({})),
     fetchReviewsApi(),
@@ -620,13 +644,11 @@ async function fetchAndUpdate() {
   window._estatSheets = estatRaw || {};
   window._reviewsApi = reviewsRaw || null;
 
-  // 最終同期タイムスタンプ（設定シートはキー・バリュー形式: [[key, value], ...]）
-  const settingsRows = settingsRaw.values || [];
-  const syncRow = settingsRows.find(r => r[0] === '最終同期');
-  if (syncRow && syncRow[1]) {
-    const el = document.getElementById('lastSynced');
-    if (el) el.textContent = '最終同期: ' + syncRow[1];
-  }
+  // 最終同期タイムスタンプ。
+  // 旧: 設定シートに Chrome拡張が書いた時刻。取得が Buddy → D1 直投入に
+  // 移った結果、拡張を押さなくなった時点で表示が凍り、実際は最新なのに
+  // 「1日以上前」に見えていた（2026-08-23 に発覚）。D1 の実測に切り替える。
+  renderLastSynced();
 
   processData();
   renderAll();
