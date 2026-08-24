@@ -306,6 +306,7 @@
         resRows: resRows.length,
         elapsed: elapsed,
         shinpouNotifyStatus: triggerResult && triggerResult.shinpou,
+        d1Status: triggerResult && triggerResult.d1,
       });
 
     } catch (err) {
@@ -532,6 +533,17 @@
       // ok=false（朝レポート失敗）でも新法通知は独立して成功していることがあるので
       // shinpou は ok に関わらず拾う。
       const shinpou = (result.data && result.data.shinpou) || null;
+      // D1取り込みの結果。stale guard (d1-sync.gs) で見送られると skipped が入る。
+      // 見送り自体は正常な場合もある（Airhost取得がBuddyへ移行済みなら毎回これ）が、
+      // 拡張がまだ動いている＝移行前なら「シートを書いたのに取り込まれていない」
+      // という異常。黙って進むとダッシュボードだけ古くなるので必ず出す。
+      const d1 = (result.data && result.data.d1) || null;
+      if (d1 && d1.skipped) {
+        log('  D1取り込み: ⏭ 見送り (' + d1.skipped +
+            (d1.sheet_age_hours != null ? ' / シート' + d1.sheet_age_hours + '時間前' : '') + ')');
+      } else if (d1 && d1.error) {
+        log('  D1取り込み: ❌ ' + d1.error);
+      }
       if (shinpou) {
         if (shinpou.posted) log('  新法通知: ✅ 投稿完了（' + shinpou.count + '件）');
         else if (shinpou.skipped === 'already-posted') log('  新法通知: ⏭ 本日投稿済み');
@@ -548,10 +560,10 @@
         const msg = (result.data && result.data.error) || result.error || result.raw || '不明なエラー';
         log('  朝レポート発火: ❌ ' + msg);
       }
-      return { shinpou: shinpou };
+      return { shinpou: shinpou, d1: d1 };
     } catch (e) {
       log('  朝レポート発火: ❌ ' + e.message);
-      return { shinpou: { error: e.message } };
+      return { shinpou: { error: e.message }, d1: null };
     }
   }
 
@@ -572,6 +584,16 @@
                `日次データ: ${data.dailyRows.toLocaleString()}行\n` +
                `予約データ: ${data.resRows.toLocaleString()}行\n` +
                `所要時間: 約${data.elapsed}分`;
+        // D1取り込みが見送られた場合は必ず出す。シートは書けているので同期自体は
+        // 「成功」だが、ダッシュボードが古いままになる — ✅だけ見て安心されると困る。
+        const d1 = data.d1Status;
+        if (d1 && d1.skipped) {
+          text += `\n⚠️ D1取り込みを見送りました（${d1.skipped}` +
+                  (d1.sheet_age_hours != null ? ` / シート${d1.sheet_age_hours}時間前` : '') + `）` +
+                  `\n　ダッシュボードは更新されていません。`;
+        } else if (d1 && d1.error) {
+          text += `\n⚠️ D1取り込み失敗: ${d1.error}`;
+        }
         // 新法通知の結果を追記（投稿はGAS shinpou-report.gs 側）
         const sn = data.shinpouNotifyStatus;
         if (sn) {
