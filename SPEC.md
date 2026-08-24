@@ -264,15 +264,15 @@ operation/
 ├─ update_masters.gs     … マスタ更新ユーティリティ
 ├─ gas-feedback-proxy.js … フィードバック→Slack中継GAS
 ├─ gas/                 … ⚠ .gitignore 対象。ローカルとGASプロジェクトにしか存在しない
-│   ├─ alert-anomaly.gs  … 異常検知（+ getProp/parseNum/toDateStr の共通関数を提供）
+│   ├─ alert-anomaly.gs  … 異常検知 + 直前予約通知（+ getProp/parseNum/toDateStr/leadDays を提供）
 │   ├─ morning-report.gs … 朝の運営サマリー（+ fetchDataApiJson / fetchReservationsApi / fetchDailyApi）
 │   ├─ shinpou-report.gs … 民泊新法 営業日数チェック
-│   ├─ d1-sync.gs        … Sheets→D1 取り込み（拡張経路用。古いシートは stale-sheet で見送る）
+│   ├─ d1-sync.gs        … Sheets→D1 取り込み（⚠ 2026-08-24 以降は非常用。定常はBuddy→D1直投入）
 │   ├─ estat-sync.gs     … e-Stat同期
 │   ├─ mlit-sync.gs      … 国土交通省データ同期
 │   └─ meeting_notes.gs  … 議事録
 │   ※上記は**単一のGASプロジェクト**に同居。ファイル間で関数を共有しているため分割不可
-├─ chrome-extension/     … Manifest v3拡張（Airhost/AirDNA/LIB）
+├─ chrome-extension/     … ⚠ 版管理外 (2026-08-24 に追跡を外した)。Manifest v3拡張（Airhost/AirDNA/LIB）
 ├─ review/               … Playwrightレビュー自動化
 └─ *.csv                 … マスタデータ
 ```
@@ -284,8 +284,12 @@ operation/
 - **レビュータブ本番化**: UI完成・自動化本体も稼働済。モックデータを実データ接続に置換する作業が残件。
 - **レビュー自動投稿の段階展開**: DOM事故防止のためリロード+検証フローで安全運用中。対象物件を段階的に拡大予定。
 - **マーケットTOPのインサイト**: ルールベースで生成中。将来的にLLM要約への差替え余地あり。
-- **`gas/` が .gitignore 対象**: 朝レポート・異常検知のロジックが履歴に残らない。2026-08 の修正も
-  ローカルとGASプロジェクトにしか無い。除外理由が特定できないため要判断。
+- **`gas/` と `chrome-extension/` が版管理外**: 朝レポート・異常検知のロジックが履歴に残らない。
+  除外理由は 2026-08-24 に判明した — **このリポジトリは public** (`genishii-star/dent-operation-dashboard`)
+  で、`morning-report.gs` の `TRIGGER_TOKEN` を公開できないため。ただし `chrome-extension/` は
+  ignore 追加より前から追跡されていて ignore が効かず、**同じトークンが平文で公開されていた**
+  (2026-08-24 に追跡を外し、トークンをローテーション)。版管理したいなら private リポジトリへ
+  分離するのが本筋。
 - **LIB清掃同期が手動依存**: 拡張ポップアップのボタン → GAS `syncLibCleaning` を人が押す方式。
   `syncLibCleaning` のソースがリポジトリに無く、転記元が Sheets か D1 かも未確認。
   拡張を止める段階4の前に確認が必要。
