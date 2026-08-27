@@ -154,7 +154,7 @@ Dent Inc.（民泊運営代行）の**業務可視化・意思決定支援ダッ
 |---|---|
 | 物件マスタ書戻し | ダッシュボードの物件詳細編集 → `updatePropertyMaster` dispatcher経由で書込（トークン認証） |
 | フィードバックプロキシ | ダッシュボード右上ボタン → Slack Webhookへ転送 |
-| 異常検知 (`gas/alert-anomaly.gs`) | 30分トリガ。**D1読み**（予約日の直近3日を判定、ADR基準はチェックイン直近90日）。低ADR（**その部屋の過去90日最安を下回る** かつ 平均×0.7未満）・長期連泊（14泊以上）・定員超過（棟/フロア貸切 `ALL`・`2F-ALL` は判定対象外）。定員は facilities.json の `room_types[].details.max_guests` / `amenities.max_guests` から取得 |
+| 異常検知 (`gas/alert-anomaly.gs`) | 30分トリガ。投稿先は `#alert-異常予約検知`（`C0BT143TY82`。2026-08-27 に `#management` から移設。プロパティ `SLACK_WEBHOOK_ANOMALY`）。**D1読み**（予約日の直近3日を判定、ADR基準はチェックイン直近90日）。低ADR（**その部屋の過去90日最安を下回る** かつ 平均×0.7未満）・長期連泊（14泊以上）・定員超過（棟/フロア貸切 `ALL`・`2F-ALL` は判定対象外）。定員は facilities.json の `room_types[].details.max_guests` / `amenities.max_guests` から取得 |
 | 朝の運営サマリー (`gas/morning-report.gs`) | Buddy の全量ジョブ完了フック(`doGet?action=reportOnly`)で 新法通知 → 前日KPI/当月見込みを `#management` に投稿。**D1読み** |
 | 新法通知 (`gas/shinpou-report.gs`) | 民泊新法物件の年度営業日数を facilities.json + D1予約から集計しSlack投稿。ダッシュボード「新法チェック」と同一計算 |
 | e-Stat / MLIT同期 | 政府統計APIから訪日外客数・宿泊統計・CPIをスプシに定期取得 |
