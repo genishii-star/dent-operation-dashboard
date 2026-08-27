@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.dent.all-hands</string>
+
+  <!-- 毎月20日 10:07。JNTO の月次発表(15〜19日ごろ)を待てる日付にしてある。 -->
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Day</key><integer>20</integer>
+    <key>Hour</key><integer>10</integer>
+    <key>Minute</key><integer>7</integer>
+  </dict>
+
+  <!-- Mac がスリープしていて発火を逃した場合、起きたときに1回だけ実行する -->
+  <key>RunAtLoad</key>
+  <false/>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>-lc</string>
+    <string>cd /Users/genishii/Client/_Dent/claude-code/operation &amp;&amp; exec node scripts/all-hands/build-ah.mjs</string>
+  </array>
+
+  <key>StandardOutPath</key>
+  <string>/Users/genishii/.dent/all-hands.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/genishii/.dent/all-hands.log</string>
+</dict>
+</plist>
