@@ -275,6 +275,7 @@ const REPLY_SYSTEM = `あなたは民泊運営会社 Dent Inc. のホストと�
 const OWNER_LANG_LABEL = {
   "ja": { name: "日本語", volume: "日本語で 200〜350字程度" },
   "zh-Hant": { name: "繁體中文 (台灣・香港で使われる正體字)", volume: "繁體中文で 150〜250字程度" },
+  "zh-Hans": { name: "简体中文 (中国大陸・シンガポールで使われる簡体字)", volume: "简体中文で 150〜250字程度" },
 };
 
 function reviewSystemPrompt(ownerLang) {
@@ -420,11 +421,15 @@ function isMostlyChinese(s) {
 const TRANSLATE_SYSTEM = {
   "ja": `あなたは翻訳者です。与えられた Airbnb のレビュー/返信文を自然で読みやすい日本語に訳してください。訳文のみを出力し、説明・注釈・原文の再掲は不要です。`,
   "zh-Hant": `你是翻譯者。請將提供的 Airbnb 評價／回覆翻譯成自然流暢的繁體中文（正體字，台灣用語）。只輸出譯文，不要加說明、註解或重複原文。`,
+  "zh-Hans": `你是翻译者。请将提供的 Airbnb 评价／回复翻译成自然流畅的简体中文（中国大陆用语）。只输出译文，不要加说明、注释或重复原文。`,
 };
 
 // 既にオーナーの言語で書かれていれば訳す必要がない。
 function alreadyInOwnerLang(text, ownerLang) {
-  return ownerLang === "zh-Hant" ? isMostlyChinese(text) : isMostlyJapanese(text);
+  // ⚠ 繁体字と簡体字は文字種で見分けられない（`isMostlyChinese` は漢字の割合しか見ない）。
+  //   どちらも「中国語なら訳さない」で足りる — オーナーが読める言語であることが目的で、
+  //   字体の変換までは求めていない。
+  return ownerLang.startsWith("zh") ? isMostlyChinese(text) : isMostlyJapanese(text);
 }
 
 async function translateForOwner(text, ownerLang) {
