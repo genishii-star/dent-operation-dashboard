@@ -154,9 +154,9 @@ async function main() {
   log(`${MEET}.html を${isNew ? '作成' : '更新'}`);
 
   // 一覧に追加（再実行時は既にあるので触らない）
-  const idxFile = path.join(AH, 'index.html');
-  let idx = fs.readFileSync(idxFile, 'utf8');
-  if (!idx.includes(`href="${MEET}.html"`)) {
+  const addToIndex = (idxFile) => {
+    const idx = fs.readFileSync(idxFile, 'utf8');
+    if (idx.includes(`href="${MEET}.html"`)) return false;
     const anchor = '  <div class="meeting-list">\n';
     if (!idx.includes(anchor)) throw new Error('index.html に meeting-list が見つかりません');
     const card = `\n    <a href="${MEET}.html" class="meeting-card">\n` +
@@ -165,8 +165,9 @@ async function main() {
       `        <div class="desc">KPI / チャネル / 国籍 / エリア別 / JNTO業界アップデート</div>\n` +
       `      </div>\n      <div class="arrow">›</div>\n    </a>\n`;
     fs.writeFileSync(idxFile, idx.replace(anchor, anchor + card));
-    log('index.html に追加');
-  }
+    return true;
+  };
+  if (addToIndex(path.join(AH, 'index.html'))) log('index.html に追加');
 
   // ---------- 検証（復号・描画が本当に通るか） ----------
   log('ヘッドレスで検証中…');
@@ -187,16 +188,28 @@ async function main() {
     return;
   }
 
-  sh('git', ['add', path.relative(ROOT, outFile), path.relative(ROOT, idxFile)], { cwd: ROOT });
-  const staged = sh('git', ['diff', '--cached', '--name-only'], { cwd: ROOT }).trim();
-  if (staged) {
-    sh('git', ['commit', '-q', '-m',
-      `feat(all-hands): ${MEET.split('-')[0]}年${+MEET.split('-')[1]}月会（${curM}月まとめ）を自動生成\n\n` +
-      `build-ah.mjs による定期生成。D1 を現行スコープで全月再集計、JNTO は ${pub} 発表版。`], { cwd: ROOT });
-    sh('git', ['push', '-q', 'origin', 'HEAD'], { cwd: ROOT });
-    log('push 完了');
-  } else {
-    log('変更なし（内容が同一）');
+  // op.dent-inc.com は main から配信される。作業ツリーが別ブランチでも公開されるよう、
+  // origin/main の一時 worktree でコミットして main へ push する（2026-09 会はこれが無くて未公開だった）
+  sh('git', ['fetch', '-q', 'origin', 'main'], { cwd: ROOT });
+  const wt = fs.mkdtempSync(path.join(os.tmpdir(), 'dent-ah-'));
+  sh('git', ['worktree', 'add', '-q', '--detach', wt, 'origin/main'], { cwd: ROOT });
+  try {
+    const wtAH = path.join(wt, path.relative(ROOT, AH));
+    fs.copyFileSync(outFile, path.join(wtAH, `${MEET}.html`));
+    addToIndex(path.join(wtAH, 'index.html'));
+    sh('git', ['add', path.join(wtAH, `${MEET}.html`), path.join(wtAH, 'index.html')], { cwd: wt });
+    const staged = sh('git', ['diff', '--cached', '--name-only'], { cwd: wt }).trim();
+    if (staged) {
+      sh('git', ['commit', '-q', '-m',
+        `feat(all-hands): ${MEET.split('-')[0]}年${+MEET.split('-')[1]}月会（${curM}月まとめ）を自動生成\n\n` +
+        `build-ah.mjs による定期生成。D1 を現行スコープで全月再集計、JNTO は ${pub} 発表版。`], { cwd: wt });
+      sh('git', ['push', '-q', 'origin', 'HEAD:main'], { cwd: wt });
+      log('push 完了（main）');
+    } else {
+      log('変更なし（内容が同一）');
+    }
+  } finally {
+    sh('git', ['worktree', 'remove', '--force', wt], { cwd: ROOT });
   }
 
   const url = `https://op.dent-inc.com/all-hands/${MEET}.html`;
