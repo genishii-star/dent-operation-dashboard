@@ -29,6 +29,10 @@ launchctl kickstart -k gui/$(id -u)/com.dent.all-hands   # 手動で即実行
 launchctl bootout gui/$(id -u)/com.dent.all-hands        # 停止
 ```
 
+launchd からは **常に `origin/main` の最新コードで動く**（`~/.dent/ah-main` に一時 worktree を作って実行し、終わったら消す）。
+作業フォルダが別ブランチでも古いスクリプトで走ることはなく、生成物も必ず `main` に push される（op.dent-inc.com は main 配信）。
+plist を変えたら上の `cp` → `bootout` → `bootstrap` で入れ直すこと。
+
 ログは `~/.dent/all-hands.log`。Mac がスリープしていて20日を跨いだ場合、launchd は起床時に1回だけ遅れて実行する。
 
 ## 設定（git に入れない）

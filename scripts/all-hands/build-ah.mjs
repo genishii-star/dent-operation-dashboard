@@ -22,7 +22,7 @@ import { aggregate, getDaysInMonth } from './lib/aggregate.mjs';
 
 const ROOT = path.resolve(new URL('../..', import.meta.url).pathname);      // operation/
 const AH = path.join(ROOT, 'all-hands');
-const WIKI = path.resolve(ROOT, '../wiki');
+const WIKI = process.env.DENT_WIKI || path.resolve(ROOT, '../wiki');   // launchd は ~/.dent/ah-main から動くので明示される
 const API_DIR = path.join(WIKI, 'workers/dent-data-api');
 const HERE = path.dirname(new URL(import.meta.url).pathname);
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'ah-build-'));
