@@ -1524,6 +1524,23 @@ function processData() {
     return true;
   });
 
+  // Airhost の部屋番号ゼロ埋め吸収: マスタは「CODE+ゼロなし番号」(PHB401) だが
+  // Airhost は room_no を "0401" で返す物件がある。PHB+0401 がマスタに無く
+  // PHB+401 がある場合だけ部屋番号を書き換え、以降の照合 (稼働中フィルタ・
+  // generatePropCode) を全部通るようにする。dent-data-api resolve-property.ts と同じ規則。
+  const _allMasterCodes = new Set(propertyMaster.map(pm => String(pm['物件コード'] ?? '').trim()));
+  const unpadRoom = (name, room) => {
+    if (!name || !room || !/^0\d/.test(room) || _allMasterCodes.has(name + room)) return room;
+    const stripped = room.replace(/^0+/, '');
+    return _allMasterCodes.has(name + stripped) ? stripped : room;
+  };
+  rawReservations.forEach(r => {
+    if (r['部屋番号']) r['部屋番号'] = unpadRoom(r['物件名'] || '', r['部屋番号']);
+  });
+  rawDailyData.forEach(d => {
+    if (d['ルーム番号']) d['ルーム番号'] = unpadRoom(d['物件名'] || '', d['ルーム番号']);
+  });
+
   // 稼働中以外の物件は全画面で非表示（マスタ/予約/日次データから一括除外）
   propertyMaster = propertyMaster.filter(pm => (pm['ステータス'] || '稼働中') === '稼働中');
   const _activePropIds = new Set();
