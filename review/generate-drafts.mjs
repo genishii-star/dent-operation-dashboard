@@ -46,10 +46,11 @@ const ACCOUNT = flag("account");
 const DRY_RUN = flag("dry-run", false);
 
 // Accounts whose host→guest reviews skip owner approval and post right away
-// (NAGAI: 2026-10-09, owner asked for faster posting). Only drafts with a
+// (NAGAI: 2026-10-09, owner asked for faster posting; KUZE: same day, owner
+// never approved any of 34 drafts so all expired). Only drafts with a
 // confirmation code are auto-approved — post-approved.mjs's exclusion gate
 // still checks them. Replies to guest reviews always need approval.
-const AUTO_APPROVE_GUEST_REVIEW = new Set(["NAGAI"]);
+const AUTO_APPROVE_GUEST_REVIEW = new Set(["NAGAI", "KUZE"]);
 const GUI = flag("gui", false);
 
 if (!ACCOUNT || !/^[A-Za-z0-9_-]{1,32}$/.test(ACCOUNT)) {
