@@ -166,7 +166,7 @@ export async function scrapeUnrepliedReviews(page) {
 
 /**
  * Extract pending guest reviews from /hosting (host→guest reviews not yet posted).
- * Returns [{ reservation_id, guest_name, href, raw_text }].
+ * Returns [{ reservation_id, guest_name, days_left, href, raw_text }].
  *
  * reservation_id is extracted from href: /hosting/reviews/{id}/...
  * guest_name is parsed from text like "Leave Yours a review".
@@ -190,7 +190,12 @@ export async function scrapePendingGuestReviews(page) {
     const nameMatch = r.text.match(/Leave\s+(.+?)\s+a review/);
     const guest_name = nameMatch ? nameMatch[1].trim() : null;
     if (!guest_name) continue;
-    results.push({ reservation_id, guest_name, href: r.href, raw_text: r.text });
+    // "4 days left" — Airbnb's countdown to the 14-day review deadline. The
+    // only stay-date signal on this card; used to identify the reservation on
+    // accounts where /hosting/reservations/completed is unavailable.
+    const daysMatch = r.text.match(/(\d+)\s+days?\s+left/i);
+    const days_left = daysMatch ? Number(daysMatch[1]) : null;
+    results.push({ reservation_id, guest_name, days_left, href: r.href, raw_text: r.text });
   }
   return results;
 }

@@ -44,6 +44,12 @@ const flag = (name, def = null) => {
 };
 const ACCOUNT = flag("account");
 const DRY_RUN = flag("dry-run", false);
+
+// Accounts whose host→guest reviews skip owner approval and post right away
+// (NAGAI: 2026-10-09, owner asked for faster posting). Only drafts with a
+// confirmation code are auto-approved — post-approved.mjs's exclusion gate
+// still checks them. Replies to guest reviews always need approval.
+const AUTO_APPROVE_GUEST_REVIEW = new Set(["NAGAI"]);
 const GUI = flag("gui", false);
 
 if (!ACCOUNT || !/^[A-Za-z0-9_-]{1,32}$/.test(ACCOUNT)) {
@@ -133,6 +139,9 @@ async function scrapeWorkItems(page) {
   // each guest review by reservation_id below.
   const reservations = await scrapeReservationsIndex(page);
   console.log(`[scrape] reservations index: ${reservations.length} rows`);
+  // Some accounts (NAGAI) get redirected away from the reservations table, so
+  // the join above finds nothing. Fall back to Airhost data in D1.
+  const fallback = await buildD1Fallback(guest_reviews, reservations);
 
   // Normalize shape for downstream code.
   return {
@@ -146,7 +155,7 @@ async function scrapeWorkItems(page) {
       stay_date: r.date,
     })),
     guest_reviews: guest_reviews.map((r) => {
-      const resv = matchReservation(reservations, r.reservation_id);
+      const resv = matchReservation(reservations, r.reservation_id) ?? fallback.get(r.reservation_id) ?? null;
       if (!resv) {
         // Unidentified stay: no confirmation_code, so nothing downstream can
         // check it against the exclusion list. Surface it rather than letting
@@ -205,6 +214,74 @@ function matchReservation(reservations, reservationId) {
     airbnb_status: hit.status || null,
     expires_soon: /expires soon/i.test(hit.status || ""),
   };
+}
+
+// Fallback join for pending guest reviews the reservations table didn't cover.
+//
+// Airbnb's Today card shows "N days left" until the 14-day review deadline,
+// which pins the checkout date: check_out = today(JST) + N + 1 - 14 (observed:
+// checkout 9/30 showed "4 days left" on 10/9). Combined with the account's
+// listing — only when the account has exactly ONE listing — that identifies
+// the stay in Airhost's reservations (D1), which carries the confirmation code.
+//
+// Fail-closed like matchReservation: no unique candidate → no entry, and the
+// draft stays "unidentified" (Gate 2 then refuses to post it). Exact-date
+// matches win; ±1 day is tolerated only when it is the sole candidate, and a
+// code is never handed to two drafts.
+//
+// Returns Map<reservation_id, enriched row in matchReservation's shape>.
+async function buildD1Fallback(guestReviews, reservations) {
+  const out = new Map();
+  const missing = guestReviews.filter(
+    (r) => r.days_left != null && !reservations.some((x) => x.reservation_id === r.reservation_id),
+  );
+  if (!missing.length) return out;
+
+  const { email } = loadAccountCredentials();
+  const { facilities } = await workerGet("/internal/facilities.json");
+  const mine = (facilities ?? []).filter(
+    (f) => String(f.airbnb?.account_email ?? "").toLowerCase() === String(email).toLowerCase(),
+  );
+  if (mine.length !== 1) {
+    console.warn(`[fallback] ${ACCOUNT} の Airbnb リスティングが ${mine.length} 件 → 日付からの特定はしない`);
+    return out;
+  }
+  const code = String(mine[0].code).toUpperCase();
+
+  const todayJst = new Date(Date.now() + 9 * 3600e3).toISOString().slice(0, 10);
+  const addDays = (iso, n) => new Date(Date.parse(`${iso}T00:00:00Z`) + n * 86400e3).toISOString().slice(0, 10);
+  const { rows } = await workerGet(`/internal/reservations.json?since=${addDays(todayJst, -90)}`);
+  const stays = (rows ?? []).filter(
+    (r) => String(r._propCode ?? "").toUpperCase() === code &&
+      r["予約サイト"] === "Airbnb" && !r["キャンセル"] && r["チャンネル予約ID"],
+  );
+
+  const used = new Set();
+  for (const item of missing) {
+    const expected = addDays(todayJst, item.days_left + 1 - 14);
+    const exact = stays.filter((s) => s["チェックアウト"] === expected);
+    const near = stays.filter((s) =>
+      [addDays(expected, -1), expected, addDays(expected, 1)].includes(s["チェックアウト"]));
+    const pick = exact.length === 1 ? exact[0] : near.length === 1 ? near[0] : null;
+    if (!pick || used.has(pick["チャンネル予約ID"])) {
+      console.warn(`[fallback] ${item.guest_name} (残り${item.days_left}日→CO ${expected}) は一意に特定できず (候補 exact=${exact.length} near=${near.length})`);
+      continue;
+    }
+    used.add(pick["チャンネル予約ID"]);
+    console.log(`[fallback] ${item.guest_name} → ${pick["チャンネル予約ID"]} (CO ${pick["チェックアウト"]})`);
+    out.set(item.reservation_id, {
+      check_in_iso: pick["チェックイン"] || null,
+      check_out_iso: pick["チェックアウト"] || null,
+      nights: pick["合計日数"] || null,
+      guests: pick["ゲスト数"] ?? null,
+      guests_label: null,
+      total_payout: pick["受取金"] ? `¥${Number(pick["受取金"]).toLocaleString("en-US")}` : null,
+      confirmation_code: pick["チャンネル予約ID"],
+      airbnb_status: `${item.days_left} days left`,
+      expires_soon: item.days_left <= 3,
+    });
+  }
+  return out;
 }
 
 // "May 20, 2026" → Date (UTC). Returns null if unparseable.
@@ -530,14 +607,22 @@ async function main() {
       // draft_text is Japanese now (owner-facing). It gets translated to
       // English at post time (post-approved.mjs), so no separate translation_ja.
       const { text } = await generateGuestReviewDraft({ item, facility, ownerLang });
-      if (DRY_RUN) { console.log(`[dry-run review→${item.reservation_id}]`, text); created++; continue; }
-      await createDraft({
+      const autoApprove = AUTO_APPROVE_GUEST_REVIEW.has(ACCOUNT) && !!item.confirmation_code;
+      if (DRY_RUN) { console.log(`[dry-run review→${item.reservation_id}${autoApprove ? " auto-approve" : ""}]`, text); created++; continue; }
+      const { id } = await createDraft({
         account: ACCOUNT, draft_type: "review_of_guest", target_id: item.reservation_id,
         guest_name: item.guest_name, property_code: facility?.code ?? null,
         context: { owner_lang: ownerLang, property_name: item.property_name, room_no: item.room_no, check_in: item.check_in, check_out: item.check_out, nights: item.nights, guests: item.guests, guests_label: item.guests_label, total_payout: item.total_payout, confirmation_code: item.confirmation_code, airbnb_status: item.airbnb_status, expires_soon: item.expires_soon, edit_href: item.edit_href },
         draft_text: text,
       });
       created++;
+      if (autoApprove) {
+        // Approval fires the review-post workflow (dent-data-api → repository_dispatch).
+        await workerPost(`/internal/review-drafts/${id}`, { status: "approved", decided_by: "system:auto-approve" });
+        console.log(`[auto-approve] ${item.guest_name} (${item.confirmation_code})`);
+      } else if (AUTO_APPROVE_GUEST_REVIEW.has(ACCOUNT)) {
+        console.warn(`[auto-approve] ${item.guest_name} は確認コード不明のため承認待ちに残す`);
+      }
     } catch (e) {
       failed++;
       console.error(`[review ${item.reservation_id}] ${e.message}`);
