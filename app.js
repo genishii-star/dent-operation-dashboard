@@ -208,6 +208,7 @@ let currentFilters = {
   marketSubTab: 'top',
   dailyMonthlyArea: '全体', // 月別 OTA売上推移 だけのエリア。上のエリアフィルタを変えるとそれに揃う
   dailyMonthlyLine: 'occ',  // 月別 OTA売上推移 に重ねる線（occ / adr）
+  dailyMonthlyRange: 7,     // 月別 OTA売上推移 の表示月数（7 / 12 / 24）。どれも未来3ヶ月までで、過去を伸ばす
   reservationView: 'all',
 };
 
@@ -228,6 +229,11 @@ function setMarketSubTab(el) {
   syncTabHash();
   renderMarketTab();
   setTimeout(() => initMarketCharts(), 50);
+}
+
+function setDailyMonthlyRange(el) {
+  currentFilters.dailyMonthlyRange = Number(el.dataset.range);
+  initDailyCharts();
 }
 
 function setDailyMonthlyLine(el) {
@@ -5304,9 +5310,9 @@ function initDailyCharts() {
   const monthChannelSales = {};
   chartMonths.forEach(ym => { monthChannelSales[ym] = {}; });
 
-  const aggChannelSales = (aggArea) => {
+  const aggChannelSales = (aggArea, months = chartMonths) => {
     const byMonth = {};
-    chartMonths.forEach(ym => { byMonth[ym] = {}; });
+    months.forEach(ym => { byMonth[ym] = {}; });
     reservations.forEach(r => {
       // カレンダーブロックは売上0のまま凡例にチャネルだけ増やすので除外。
       if (isBlockedStatus(r.status)) return;
@@ -5344,22 +5350,30 @@ function initDailyCharts() {
   }
   const lineKey = currentFilters.dailyMonthlyLine === 'adr' ? 'adr' : 'occ';
   document.querySelectorAll('#daily-monthly-line-pills .pill').forEach(p => p.classList.toggle('active', p.dataset.line === lineKey));
-  if (salesArea !== area) {
-    // チャネルの色と並び順は上のフィルタのエリアで決めたものを使い回し、ピルを切り替えても色が入れ替わらないようにする
-    const sizeBefore = channelSet.size;
-    const salesByMonth = aggChannelSales(salesArea);
-    chartMonths.forEach(ym => { monthChannelSales[ym] = salesByMonth[ym]; });
-    if (channelSet.size > sizeBefore) [...channelSet].forEach(ch => { if (!channels.includes(ch)) channels.push(ch); });
+  const range = [12, 24].includes(currentFilters.dailyMonthlyRange) ? currentFilters.dailyMonthlyRange : 7;
+  document.querySelectorAll('#daily-monthly-range-pills .pill').forEach(p => p.classList.toggle('active', Number(p.dataset.range) === range));
+  const salesMonths = [], salesMonthLabels = [];
+  for (let i = 3 - range + 1; i <= 3; i++) {
+    const d = new Date(now.getFullYear(), now.getMonth() + i, 1);
+    salesMonths.push(d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0'));
+    // 7ヶ月は「10月」、それより長いと年をまたぐので「25/10」
+    salesMonthLabels.push(range === 7 ? `${d.getMonth() + 1}月` : `${String(d.getFullYear()).slice(2)}/${d.getMonth() + 1}`);
   }
-  // 棒の下に出す各月の OCC / ADR（グラフの軸は増やさず、ラベルとして添える）
-  const salesOccAdr = chartMonths.map(ym => computeOverallStats(ym, salesArea, false));
-  const salesLabels = chartLabels.map((l, i) => [l, `OCC ${salesOccAdr[i].occ.toFixed(1)}%`, `ADR ¥${Math.round(salesOccAdr[i].adr).toLocaleString()}`]);
+  // チャネルの色と並び順は上のフィルタのエリア・7ヶ月で決めたものを使い回し、ピルを切り替えても色が入れ替わらないようにする
+  const sizeBefore = channelSet.size;
+  const salesChannelSales = aggChannelSales(salesArea, salesMonths);
+  if (channelSet.size > sizeBefore) [...channelSet].forEach(ch => { if (!channels.includes(ch)) channels.push(ch); });
+  // 棒の下に出す各月の OCC / ADR（グラフの軸は増やさず、ラベルとして添える）。12・24ヶ月は詰まるので月だけにする
+  const salesOccAdr = salesMonths.map(ym => computeOverallStats(ym, salesArea, false));
+  const salesLabels = salesMonthLabels.map((l, i) => range === 7
+    ? [l, `OCC ${salesOccAdr[i].occ.toFixed(1)}%`, `ADR ¥${Math.round(salesOccAdr[i].adr).toLocaleString()}`]
+    : [l]);
   destroyChart('dailyMonthlySales');
   const ctx1 = document.getElementById('chartDailyMonthlySales');
   if (ctx1) {
     const datasets = channels.map((ch, idx) => ({
       label: ch,
-      data: chartMonths.map(ym => monthChannelSales[ym][ch] || 0),
+      data: salesMonths.map(ym => salesChannelSales[ym][ch] || 0),
       backgroundColor: channelColors[idx % channelColors.length] + 'CC',
       hoverBackgroundColor: channelColors[idx % channelColors.length],
       yAxisID: 'y',
@@ -5368,28 +5382,28 @@ function initDailyCharts() {
     datasets.unshift({
       type: 'line', label: lineKey === 'adr' ? 'ADR' : 'OCC', data: salesOccAdr.map(o => lineKey === 'adr' ? Math.round(o.adr) : o.occ), yAxisID: 'y1', stack: 'line',
       borderColor: '#3a3a3c', backgroundColor: '#3a3a3c', borderWidth: 2,
-      pointRadius: 4, pointHoverRadius: 6, tension: 0.3, order: -1,
+      pointRadius: range === 24 ? 2 : 4, pointHoverRadius: 6, tension: 0.3, order: -1,
     });
     // 総額はチャネル合計（バーの高さと同じソース）で計算
-    const monthTotals = chartMonths.map(ym => {
-      return channels.reduce((s, ch) => s + (monthChannelSales[ym][ch] || 0), 0);
+    const monthTotals = salesMonths.map(ym => {
+      return channels.reduce((s, ch) => s + (salesChannelSales[ym][ch] || 0), 0);
     });
     const stackedTotalPlugin = {
       id: 'stackedTotalLabel',
       afterDatasetsDraw(chart) {
         const { ctx: c, scales: { x, y } } = chart;
         c.save();
-        c.font = 'bold 11px -apple-system, sans-serif';
+        c.font = `bold ${range === 24 ? 9 : 11}px -apple-system, sans-serif`;
         c.fillStyle = '#1d1d1f';
         c.textAlign = 'center';
         c.textBaseline = 'bottom';
         monthTotals.forEach((total, i) => {
           if (total <= 0) return;
           const xPos = x.getPixelForValue(i);
-          // 棒グラフの実際の高さ（チャネル合計）を使って位置決め
-          const barTotal = channels.reduce((s, ch) => s + (monthChannelSales[chartMonths[i]][ch] || 0), 0);
-          const yPos = y.getPixelForValue(barTotal);
-          const label = total >= 100000000 ? (total / 100000000).toFixed(1) + '億' : Math.round(total / 10000).toLocaleString() + '万';
+          const yPos = y.getPixelForValue(total);
+          // 24ヶ月は棒が細いので「2,939万」→「2939」（単位は軸の万円）
+          const label = total >= 100000000 ? (total / 100000000).toFixed(1) + '億'
+            : range === 24 ? String(Math.round(total / 10000)) : Math.round(total / 10000).toLocaleString() + '万';
           c.fillText(label, xPos, yPos - 4);
         });
         c.restore();

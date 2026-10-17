@@ -442,6 +442,11 @@
       <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:8px;">
         <h2 style="margin:0;">月別 OTA売上推移</h2>
         <div style="display:flex;gap:12px;flex-wrap:wrap;">
+          <div class="filter-pills" id="daily-monthly-range-pills">
+            <span class="pill active" data-range="7" onclick="setDailyMonthlyRange(this)">7ヶ月</span>
+            <span class="pill" data-range="12" onclick="setDailyMonthlyRange(this)">12ヶ月</span>
+            <span class="pill" data-range="24" onclick="setDailyMonthlyRange(this)">24ヶ月</span>
+          </div>
           <div class="filter-pills" id="daily-monthly-line-pills">
             <span class="pill active" data-line="occ" onclick="setDailyMonthlyLine(this)">OCC</span>
             <span class="pill" data-line="adr" onclick="setDailyMonthlyLine(this)">ADR</span>
@@ -450,7 +455,7 @@
         </div>
       </div>
       <canvas id="chartDailyMonthlySales" height="110"></canvas>
-      <p style="font-size:12px;color:#86868b;margin:10px 0 0;">※ チェックイン月ベースの<strong>確定売上</strong>（状態が「キャンセル」「システムキャンセル」の予約は除外）。Airhostの「OTA毎の売上」はキャンセル分も含む予約総額（gross）のため、数字はAirhostより小さくなります。線は OCC か ADR（右上の OCC・ADR で切替、右の目盛り）。棒の下は各月の OCC / ADR（未来月はいま入っている予約だけの値）。右上のエリアは上のエリアフィルタと連動し、このグラフだけ切り替えることもできる。</p>
+      <p style="font-size:12px;color:#86868b;margin:10px 0 0;">※ チェックイン月ベースの<strong>確定売上</strong>（状態が「キャンセル」「システムキャンセル」の予約は除外）。Airhostの「OTA毎の売上」はキャンセル分も含む予約総額（gross）のため、数字はAirhostより小さくなります。線は OCC か ADR（右上の OCC・ADR で切替、右の目盛り）。棒の下は各月の OCC / ADR（7ヶ月表示のみ。未来月はいま入っている予約だけの値）。期間は 7・12・24ヶ月で切り替え（どれも未来3ヶ月まで）。右上のエリアは上のエリアフィルタと連動し、このグラフだけ切り替えることもできる。</p>
     </div>
 
     <div class="chart-grid">
@@ -1089,7 +1094,7 @@
 </div>
 
 <!-- app.js を変えたら ?v= を上げる（上げないとブラウザが古い app.js を使い続ける） -->
-<script src="app.js?v=20261018d"></script>
+<script src="app.js?v=20261018e"></script>
 
 </body>
 </html>
