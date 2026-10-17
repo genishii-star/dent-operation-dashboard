@@ -207,6 +207,7 @@ let currentFilters = {
   marketCity: '大阪',
   marketSubTab: 'top',
   dailyMonthlyArea: '全体', // 月別 OTA売上推移 だけのエリア。上のエリアフィルタを変えるとそれに揃う
+  dailyMonthlyLine: 'occ',  // 月別 OTA売上推移 に重ねる線（occ / adr）
   reservationView: 'all',
 };
 
@@ -227,6 +228,11 @@ function setMarketSubTab(el) {
   syncTabHash();
   renderMarketTab();
   setTimeout(() => initMarketCharts(), 50);
+}
+
+function setDailyMonthlyLine(el) {
+  currentFilters.dailyMonthlyLine = el.dataset.line;
+  initDailyCharts();
 }
 
 function setDailyMonthlyArea(el) {
@@ -5336,6 +5342,8 @@ function initDailyCharts() {
     pillWrap.innerHTML = ['全体', ...getTopAreas()].map(a =>
       `<span class="pill${a === salesArea ? ' active' : ''}" data-area="${a}" onclick="setDailyMonthlyArea(this)">${a}</span>`).join('');
   }
+  const lineKey = currentFilters.dailyMonthlyLine === 'adr' ? 'adr' : 'occ';
+  document.querySelectorAll('#daily-monthly-line-pills .pill').forEach(p => p.classList.toggle('active', p.dataset.line === lineKey));
   if (salesArea !== area) {
     // チャネルの色と並び順は上のフィルタのエリアで決めたものを使い回し、ピルを切り替えても色が入れ替わらないようにする
     const sizeBefore = channelSet.size;
@@ -5354,7 +5362,14 @@ function initDailyCharts() {
       data: chartMonths.map(ym => monthChannelSales[ym][ch] || 0),
       backgroundColor: channelColors[idx % channelColors.length] + 'CC',
       hoverBackgroundColor: channelColors[idx % channelColors.length],
+      yAxisID: 'y',
     }));
+    // OCC か ADR（ピルで切替）を右軸の線で重ねる。棒（チャネル）と区別するため濃いグレーにする
+    datasets.unshift({
+      type: 'line', label: lineKey === 'adr' ? 'ADR' : 'OCC', data: salesOccAdr.map(o => lineKey === 'adr' ? Math.round(o.adr) : o.occ), yAxisID: 'y1', stack: 'line',
+      borderColor: '#3a3a3c', backgroundColor: '#3a3a3c', borderWidth: 2,
+      pointRadius: 4, pointHoverRadius: 6, tension: 0.3, order: -1,
+    });
     // 総額はチャネル合計（バーの高さと同じソース）で計算
     const monthTotals = chartMonths.map(ym => {
       return channels.reduce((s, ch) => s + (monthChannelSales[ym][ch] || 0), 0);
@@ -5393,14 +5408,19 @@ function initDailyCharts() {
             mode: 'index',
             callbacks: {
               title: items => items.length ? salesLabels[items[0].dataIndex][0] : '',
-              label: ctx => ctx.dataset.label + ': ¥' + Math.round(ctx.parsed.y).toLocaleString(),
+              label: ctx => ctx.dataset.yAxisID === 'y1'
+                ? (lineKey === 'adr' ? 'ADR: ¥' + Math.round(ctx.parsed.y).toLocaleString() : 'OCC: ' + ctx.parsed.y.toFixed(1) + '%')
+                : ctx.dataset.label + ': ¥' + Math.round(ctx.parsed.y).toLocaleString(),
               footer: items => items.length ? salesLabels[items[0].dataIndex].slice(1).join(' / ') : '',
             }
           }
         },
         scales: {
           x: { stacked: true, grid: { display: false }, ticks: { font: { size: 11 } } },
-          y: { stacked: true, beginAtZero: true, grace: '8%', ticks: { callback: v => (v / 10000).toFixed(0) + '万円' } }
+          y: { stacked: true, beginAtZero: true, grace: '8%', ticks: { callback: v => (v / 10000).toFixed(0) + '万円' } },
+          y1: lineKey === 'adr'
+            ? { position: 'right', beginAtZero: true, grace: '8%', grid: { drawOnChartArea: false }, ticks: { callback: v => '¥' + v.toLocaleString() } }
+            : { position: 'right', min: 0, max: 100, grid: { drawOnChartArea: false }, ticks: { callback: v => v + '%' } }
         }
       }
     });
