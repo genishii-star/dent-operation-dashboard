@@ -206,6 +206,7 @@ let currentFilters = {
   marketPeriod: 'last3',
   marketCity: '大阪',
   marketSubTab: 'top',
+  dailyMonthlyArea: '全体', // 月別 OTA売上推移 だけのエリア。上のエリアフィルタを変えるとそれに揃う
   reservationView: 'all',
 };
 
@@ -226,6 +227,11 @@ function setMarketSubTab(el) {
   syncTabHash();
   renderMarketTab();
   setTimeout(() => initMarketCharts(), 50);
+}
+
+function setDailyMonthlyArea(el) {
+  currentFilters.dailyMonthlyArea = el.dataset.area;
+  initDailyCharts();
 }
 
 function setReservationView(el) {
@@ -2445,6 +2451,7 @@ function setAreaFilter(el, tabId) {
   pills.forEach(p => p.classList.remove('active'));
   el.classList.add('active');
   currentFilters[tabId + 'Area'] = el.dataset.area;
+  if (tabId === 'daily') currentFilters.dailyMonthlyArea = el.dataset.area;
   renderAll();
   setTimeout(() => initChartsForTab(tabId), 50);
 }
@@ -2742,58 +2749,14 @@ function computeDailyMetrics(months, area) {
   };
 }
 
-// TOP のエリア別 売上 / OCC / ADR。エリアフィルタに関係なく全エリアを並べ、選択中エリアの行を強調する。
-// エリアはマスタの値（兵庫・沖縄 等も来る）をそのまま行にするので、行の合計が「全体」と一致する。
+// TOP の月別 OTA売上推移 のエリア切替ピル。エリアはマスタの値（兵庫・沖縄 等も来る）をそのまま使う。
 const TOP_AREA_ORDER = ['大阪', '京都', '東京'];
 
-function computeAreaKpis(months, area) {
-  const sales = checkinMonthResvs(months, area).reduce((s, r) => s + (r.sales || 0), 0);
-  const overall = computeOverallStatsMulti(months, area, false);
-  const propCount = filterPropertiesByArea(area).filter(p => p.status === '稼働中').length;
-  return { sales, adr: overall.adr, occ: overall.occ, propCount };
-}
-
-function renderDailyAreaTable(months) {
-  const tbody = document.getElementById('daily-area-tbody');
-  if (!tbody) return;
-  const pyMonths = shiftMonths(months, -12);
-  const yoy = (cur, prev) => {
-    if (!prev) return '<span style="color:#aaa;">-</span>';
-    const pct = (cur - prev) / prev * 100;
-    return `<span class="${pct >= 0 ? 'positive' : 'negative'}">${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%</span>`;
-  };
-  const yoyPt = (cur, prev, hasPrev) => {
-    if (!hasPrev) return '<span style="color:#aaa;">-</span>';
-    const d = cur - prev;
-    return `<span class="${d >= 0 ? 'positive' : 'negative'}">${d >= 0 ? '+' : ''}${d.toFixed(1)}pt</span>`;
-  };
-  const areas = [...new Set(properties.map(p => p.area).filter(Boolean))].sort((a, b) => {
+function getTopAreas() {
+  return [...new Set(properties.map(p => p.area).filter(Boolean))].sort((a, b) => {
     const ia = TOP_AREA_ORDER.indexOf(a), ib = TOP_AREA_ORDER.indexOf(b);
     return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib) || a.localeCompare(b, 'ja');
   });
-  const rows = [...areas, '全体'].map(area => {
-    const cur = computeAreaKpis(months, area);
-    const py = computeAreaKpis(pyMonths, area);
-    return { area, cur, py };
-  }).filter(r => r.area === '全体' || r.cur.propCount > 0 || r.cur.sales > 0);
-  const selected = currentFilters.dailyArea;
-  tbody.innerHTML = rows.map(({ area, cur, py }) => {
-    const isTotal = area === '全体';
-    const style = [
-      isTotal ? 'font-weight:700;border-top:2px solid #ddd;' : '',
-      area === selected && !isTotal ? 'background:#eef4ff;' : '',
-    ].join('');
-    return `<tr style="${style}">
-      <td>${area}</td>
-      <td class="text-right">${cur.propCount}</td>
-      <td class="text-right">${fmtYen(cur.sales)}</td>
-      <td class="text-right">${yoy(cur.sales, py.sales)}</td>
-      <td class="text-right">${fmtPct(cur.occ)}</td>
-      <td class="text-right">${yoyPt(cur.occ, py.occ, py.sales > 0)}</td>
-      <td class="text-right">${fmtYenFull(Math.round(cur.adr))}</td>
-      <td class="text-right">${yoy(cur.adr, py.adr)}</td>
-    </tr>`;
-  }).join('');
 }
 
 // 直近N日の新規予約数（予約日ベース）
@@ -2906,8 +2869,6 @@ function renderDailyTab() {
     };
     return `${fmtOne('YoY', prevYearWeekCount)} / ${fmtOne('WoW', prevWeekCount)}`;
   })();
-
-  renderDailyAreaTable(months);
 
   // Charts
   initDailyCharts();
@@ -5337,22 +5298,28 @@ function initDailyCharts() {
   const monthChannelSales = {};
   chartMonths.forEach(ym => { monthChannelSales[ym] = {}; });
 
-  reservations.forEach(r => {
-    // カレンダーブロックは売上0のまま凡例にチャネルだけ増やすので除外。
-    if (isBlockedStatus(r.status)) return;
-    // 非返金キャンセル（状態はキャンセルだが販売額が残る=請求対象）は売上に計上する。
-    // 純キャンセル（販売額なし）のみ除外。請求集計シートのG列と基準を揃える。
-    if (isCancelStatus(r.status) && !(r.sales > 0)) return;
-    const ciYm = getYearMonth(r.checkin);
-    if (!monthChannelSales[ciYm]) return;
-    if (area !== '全体') {
-      const prop = findPropByReservation(r);
-      if (!prop || prop.area !== area) return;
-    }
-    const ch = r.channel || 'その他';
-    channelSet.add(ch);
-    monthChannelSales[ciYm][ch] = (monthChannelSales[ciYm][ch] || 0) + (r.sales || 0);
-  });
+  const aggChannelSales = (aggArea) => {
+    const byMonth = {};
+    chartMonths.forEach(ym => { byMonth[ym] = {}; });
+    reservations.forEach(r => {
+      // カレンダーブロックは売上0のまま凡例にチャネルだけ増やすので除外。
+      if (isBlockedStatus(r.status)) return;
+      // 非返金キャンセル（状態はキャンセルだが販売額が残る=請求対象）は売上に計上する。
+      // 純キャンセル（販売額なし）のみ除外。請求集計シートのG列と基準を揃える。
+      if (isCancelStatus(r.status) && !(r.sales > 0)) return;
+      const ciYm = getYearMonth(r.checkin);
+      if (!byMonth[ciYm]) return;
+      if (aggArea !== '全体') {
+        const prop = findPropByReservation(r);
+        if (!prop || prop.area !== aggArea) return;
+      }
+      const ch = r.channel || 'その他';
+      channelSet.add(ch);
+      byMonth[ciYm][ch] = (byMonth[ciYm][ch] || 0) + (r.sales || 0);
+    });
+    return byMonth;
+  };
+  Object.assign(monthChannelSales, aggChannelSales(area));
 
   const channels = [...channelSet].sort((a, b) => {
     const totalA = chartMonths.reduce((s, ym) => s + (monthChannelSales[ym][a] || 0), 0);
@@ -5362,7 +5329,23 @@ function initDailyCharts() {
 
   const channelColors = PALETTE;
 
-  // Chart 1: Stacked bar - monthly sales by channel
+  // Chart 1: Stacked bar - monthly sales by channel（右上のピルでこのグラフだけエリアを切り替えられる）
+  const salesArea = currentFilters.dailyMonthlyArea || area;
+  const pillWrap = document.getElementById('daily-monthly-area-pills');
+  if (pillWrap) {
+    pillWrap.innerHTML = ['全体', ...getTopAreas()].map(a =>
+      `<span class="pill${a === salesArea ? ' active' : ''}" data-area="${a}" onclick="setDailyMonthlyArea(this)">${a}</span>`).join('');
+  }
+  if (salesArea !== area) {
+    // チャネルの色と並び順は上のフィルタのエリアで決めたものを使い回し、ピルを切り替えても色が入れ替わらないようにする
+    const sizeBefore = channelSet.size;
+    const salesByMonth = aggChannelSales(salesArea);
+    chartMonths.forEach(ym => { monthChannelSales[ym] = salesByMonth[ym]; });
+    if (channelSet.size > sizeBefore) [...channelSet].forEach(ch => { if (!channels.includes(ch)) channels.push(ch); });
+  }
+  // 棒の下に出す各月の OCC / ADR（グラフの軸は増やさず、ラベルとして添える）
+  const salesOccAdr = chartMonths.map(ym => computeOverallStats(ym, salesArea, false));
+  const salesLabels = chartLabels.map((l, i) => [l, `OCC ${salesOccAdr[i].occ.toFixed(1)}%`, `ADR ¥${Math.round(salesOccAdr[i].adr).toLocaleString()}`]);
   destroyChart('dailyMonthlySales');
   const ctx1 = document.getElementById('chartDailyMonthlySales');
   if (ctx1) {
@@ -5399,7 +5382,7 @@ function initDailyCharts() {
     };
     allCharts['dailyMonthlySales'] = new Chart(ctx1, {
       type: 'bar',
-      data: { labels: chartLabels, datasets },
+      data: { labels: salesLabels, datasets },
       plugins: [stackedTotalPlugin],
       options: {
         responsive: true,
@@ -5408,12 +5391,16 @@ function initDailyCharts() {
           legend: { position: 'top', labels: { font: { size: 11 }, padding: 20 } },
           tooltip: {
             mode: 'index',
-            callbacks: { label: ctx => ctx.dataset.label + ': ¥' + Math.round(ctx.parsed.y).toLocaleString() }
+            callbacks: {
+              title: items => items.length ? salesLabels[items[0].dataIndex][0] : '',
+              label: ctx => ctx.dataset.label + ': ¥' + Math.round(ctx.parsed.y).toLocaleString(),
+              footer: items => items.length ? salesLabels[items[0].dataIndex].slice(1).join(' / ') : '',
+            }
           }
         },
         scales: {
-          x: { stacked: true, grid: { display: false } },
-          y: { stacked: true, beginAtZero: true, ticks: { callback: v => (v / 10000).toFixed(0) + '万円' } }
+          x: { stacked: true, grid: { display: false }, ticks: { font: { size: 11 } } },
+          y: { stacked: true, beginAtZero: true, grace: '8%', ticks: { callback: v => (v / 10000).toFixed(0) + '万円' } }
         }
       }
     });
