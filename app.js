@@ -209,13 +209,21 @@ let currentFilters = {
   reservationView: 'all',
 };
 
-function setMarketSubTab(el) {
+function showMarketSubTab(sub) {
+  const el = document.querySelector(`.pill[data-subtab="${sub}"]`);
+  if (!el) return false;
   el.parentElement.querySelectorAll('.pill').forEach(p => p.classList.remove('active'));
   el.classList.add('active');
-  currentFilters.marketSubTab = el.dataset.subtab;
+  currentFilters.marketSubTab = sub;
   document.querySelectorAll('.market-subtab').forEach(d => { d.style.display = 'none'; });
-  const target = document.getElementById('market-sub-' + el.dataset.subtab);
+  const target = document.getElementById('market-sub-' + sub);
   if (target) target.style.display = '';
+  return true;
+}
+
+function setMarketSubTab(el) {
+  showMarketSubTab(el.dataset.subtab);
+  syncTabHash();
   renderMarketTab();
   setTimeout(() => initMarketCharts(), 50);
 }
@@ -2404,7 +2412,7 @@ function fmtPct(n) {
 // ============================================================
 // Tab switching
 // ============================================================
-function switchTab(id) {
+function showTab(id) {
   currentTabId = id;
   document.querySelectorAll('.tab-btn').forEach((btn, i) => {
     const tabIds = ['daily','owner','property','reservation','revenue','review','watchlist','shinpou','pmbm','market'];
@@ -2412,6 +2420,11 @@ function switchTab(id) {
   });
   document.querySelectorAll('.tab-content').forEach(tc => tc.classList.remove('active'));
   document.getElementById('tab-' + id).classList.add('active');
+}
+
+function switchTab(id) {
+  showTab(id);
+  syncTabHash();
   // If this tab is dirty (data/filters changed since last render), re-render now
   if (dirtyTabs.has(id)) {
     const fn = tabRenderers[id];
@@ -2592,6 +2605,12 @@ function renderAll() {
   if (fn) {
     try { fn(); } catch (e) { console.error('[render]', currentTabId, e); }
   }
+  // URL で TOP 以外を開いたとき、そのタブのグラフは誰も描かないので初回だけここで描く
+  if (initialChartsTab) {
+    const t = initialChartsTab;
+    initialChartsTab = null;
+    setTimeout(() => initChartsForTab(t), 50);
+  }
   // 2. Mark all others dirty so they re-render on activation
   ALL_TAB_IDS.forEach(id => { if (id !== currentTabId) dirtyTabs.add(id); });
   setTimeout(initSortableHeaders, 50);
@@ -2636,12 +2655,10 @@ function shiftMonths(months, deltaMonths) {
   });
 }
 
-function computeDailyMetrics(months, area) {
+// チェックイン月ベース予約（売上の母集団）
+function checkinMonthResvs(months, area) {
   const monthSet = new Set(months);
-  const totalDays = months.reduce((s, ym) => s + getDaysInMonth(ym), 0);
-
-  // チェックイン月ベース予約
-  const monthResvs = reservations.filter(r => {
+  return reservations.filter(r => {
     if (isBlockedStatus(r.status)) return false;   // カレンダーブロックは予約ではない
     // 純キャンセル（販売額0）のみ除外。非返金キャンセル（販売額>0=請求対象）は売上に計上。
     if (isCancelStatus(r.status) && !(r.sales > 0)) return false;
@@ -2652,6 +2669,13 @@ function computeDailyMetrics(months, area) {
     }
     return true;
   });
+}
+
+function computeDailyMetrics(months, area) {
+  const monthSet = new Set(months);
+  const totalDays = months.reduce((s, ym) => s + getDaysInMonth(ym), 0);
+
+  const monthResvs = checkinMonthResvs(months, area);
   // 売上・受取は非返金キャンセルを含む monthResvs。予約数・泊数（稼働量）は確定のみ。
   const monthConfirmed = monthResvs.filter(r => !isCancelStatus(r.status));
   const sales = monthResvs.reduce((s, r) => s + (r.sales || 0), 0);
@@ -2716,6 +2740,60 @@ function computeDailyMetrics(months, area) {
     hitCount, totalProps: filteredProps.length,
     ownerHit, totalOwners: Object.keys(ownerAgg).length,
   };
+}
+
+// TOP のエリア別 売上 / OCC / ADR。エリアフィルタに関係なく全エリアを並べ、選択中エリアの行を強調する。
+// エリアはマスタの値（兵庫・沖縄 等も来る）をそのまま行にするので、行の合計が「全体」と一致する。
+const TOP_AREA_ORDER = ['大阪', '京都', '東京'];
+
+function computeAreaKpis(months, area) {
+  const sales = checkinMonthResvs(months, area).reduce((s, r) => s + (r.sales || 0), 0);
+  const overall = computeOverallStatsMulti(months, area, false);
+  const propCount = filterPropertiesByArea(area).filter(p => p.status === '稼働中').length;
+  return { sales, adr: overall.adr, occ: overall.occ, propCount };
+}
+
+function renderDailyAreaTable(months) {
+  const tbody = document.getElementById('daily-area-tbody');
+  if (!tbody) return;
+  const pyMonths = shiftMonths(months, -12);
+  const yoy = (cur, prev) => {
+    if (!prev) return '<span style="color:#aaa;">-</span>';
+    const pct = (cur - prev) / prev * 100;
+    return `<span class="${pct >= 0 ? 'positive' : 'negative'}">${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%</span>`;
+  };
+  const yoyPt = (cur, prev, hasPrev) => {
+    if (!hasPrev) return '<span style="color:#aaa;">-</span>';
+    const d = cur - prev;
+    return `<span class="${d >= 0 ? 'positive' : 'negative'}">${d >= 0 ? '+' : ''}${d.toFixed(1)}pt</span>`;
+  };
+  const areas = [...new Set(properties.map(p => p.area).filter(Boolean))].sort((a, b) => {
+    const ia = TOP_AREA_ORDER.indexOf(a), ib = TOP_AREA_ORDER.indexOf(b);
+    return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib) || a.localeCompare(b, 'ja');
+  });
+  const rows = [...areas, '全体'].map(area => {
+    const cur = computeAreaKpis(months, area);
+    const py = computeAreaKpis(pyMonths, area);
+    return { area, cur, py };
+  }).filter(r => r.area === '全体' || r.cur.propCount > 0 || r.cur.sales > 0);
+  const selected = currentFilters.dailyArea;
+  tbody.innerHTML = rows.map(({ area, cur, py }) => {
+    const isTotal = area === '全体';
+    const style = [
+      isTotal ? 'font-weight:700;border-top:2px solid #ddd;' : '',
+      area === selected && !isTotal ? 'background:#eef4ff;' : '',
+    ].join('');
+    return `<tr style="${style}">
+      <td>${area}</td>
+      <td class="text-right">${cur.propCount}</td>
+      <td class="text-right">${fmtYen(cur.sales)}</td>
+      <td class="text-right">${yoy(cur.sales, py.sales)}</td>
+      <td class="text-right">${fmtPct(cur.occ)}</td>
+      <td class="text-right">${yoyPt(cur.occ, py.occ, py.sales > 0)}</td>
+      <td class="text-right">${fmtYenFull(Math.round(cur.adr))}</td>
+      <td class="text-right">${yoy(cur.adr, py.adr)}</td>
+    </tr>`;
+  }).join('');
 }
 
 // 直近N日の新規予約数（予約日ベース）
@@ -2828,6 +2906,8 @@ function renderDailyTab() {
     };
     return `${fmtOne('YoY', prevYearWeekCount)} / ${fmtOne('WoW', prevWeekCount)}`;
   })();
+
+  renderDailyAreaTable(months);
 
   // Charts
   initDailyCharts();
@@ -9470,4 +9550,41 @@ function initReviewCharts() {
 }
 
 // Phase 1.14 γ: 認証は Cloudflare Access (op.dent-inc.com) に一元化。独自 password ログインは廃止。
+// ============================================================
+// URL ⇔ タブ: #revenue / #market/airdna のように各タブを URL で開ける（共有・ブックマーク・戻るボタン用）
+// ============================================================
+let initialChartsTab = null;
+
+function routeFromHash() {
+  const [tab, sub] = decodeURIComponent(location.hash.replace(/^#/, '')).split('/');
+  return { tab: tabRenderers[tab] ? tab : 'daily', sub };
+}
+
+function syncTabHash() {
+  const h = currentTabId === 'market' ? `#market/${currentFilters.marketSubTab || 'top'}` : '#' + currentTabId;
+  if (location.hash !== h) location.hash = h;
+}
+
+window.addEventListener('hashchange', () => {
+  const { tab, sub } = routeFromHash();
+  if (tab === 'market' && sub && sub !== currentFilters.marketSubTab && showMarketSubTab(sub)) {
+    if (currentTabId === 'market') {
+      renderMarketTab();
+      setTimeout(() => initMarketCharts(), 50);
+    } else {
+      dirtyTabs.add('market');
+    }
+  }
+  if (tab !== currentTabId) switchTab(tab);
+});
+
+(function applyInitialRoute() {
+  const { tab, sub } = routeFromHash();
+  if (tab === 'market' && sub) showMarketSubTab(sub);
+  if (tab !== 'daily') {
+    showTab(tab);
+    initialChartsTab = tab;
+  }
+})();
+
 loadAllData();
