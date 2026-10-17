@@ -5407,12 +5407,19 @@ function initDailyCharts() {
           tooltip: {
             mode: 'index',
             callbacks: {
+              // OTA ごとの内訳は出さず、月の 売上合計 / OCC / ADR だけ（線の1件に代表させて出す）
               title: items => items.length ? salesLabels[items[0].dataIndex][0] : '',
-              label: ctx => ctx.dataset.yAxisID === 'y1'
-                ? (lineKey === 'adr' ? 'ADR: ¥' + Math.round(ctx.parsed.y).toLocaleString() : 'OCC: ' + ctx.parsed.y.toFixed(1) + '%')
-                : ctx.dataset.label + ': ¥' + Math.round(ctx.parsed.y).toLocaleString(),
-              footer: items => items.length ? salesLabels[items[0].dataIndex].slice(1).join(' / ') : '',
-            }
+              label: ctx => {
+                const i = ctx.dataIndex;
+                return [
+                  '売上: ¥' + Math.round(monthTotals[i]).toLocaleString(),
+                  'OCC: ' + salesOccAdr[i].occ.toFixed(1) + '%',
+                  'ADR: ¥' + Math.round(salesOccAdr[i].adr).toLocaleString(),
+                ];
+              },
+            },
+            filter: item => item.dataset.yAxisID === 'y1',
+            displayColors: false,
           }
         },
         scales: {
