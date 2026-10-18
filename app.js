@@ -5303,7 +5303,6 @@ function initDailyCharts() {
     chartMonths.push(`${y}-${String(m).padStart(2, '0')}`);
     chartLabels.push(`${m}月`);
   }
-  const currentIdx = 3;
 
   // Collect channel sales per month (checkin-based, from reservation data)
   const channelSet = new Set();
@@ -5442,42 +5441,6 @@ function initDailyCharts() {
           y1: lineKey === 'adr'
             ? { position: 'right', beginAtZero: true, grace: '8%', grid: { drawOnChartArea: false }, ticks: { callback: v => '¥' + v.toLocaleString() } }
             : { position: 'right', min: 0, max: 100, grid: { drawOnChartArea: false }, ticks: { callback: v => v + '%' } }
-        }
-      }
-    });
-  }
-
-  // Monthly OCC/ADR data
-  const occArr = [];
-  const adrArr = [];
-  chartMonths.forEach(ym => {
-    const stats = computeOverallStats(ym, area, false);
-    occArr.push(stats.occ);
-    adrArr.push(Math.round(stats.adr));
-  });
-
-  // Chart 2: OCC line + ADR bar
-  destroyChart('dailyOccAdr');
-  const ctx2 = document.getElementById('chartDailyOccAdr');
-  if (ctx2) {
-    const barColors = adrArr.map((_, i) => i < currentIdx ? 'rgba(74,144,217,0.2)' : i === currentIdx ? 'rgba(74,144,217,0.5)' : 'rgba(74,144,217,0.1)');
-    allCharts['dailyOccAdr'] = new Chart(ctx2, {
-      type: 'bar',
-      data: {
-        labels: chartLabels,
-        datasets: [
-          { type: 'line', label: 'OCC (%)', data: occArr, borderColor: CHART_COLORS.blue, backgroundColor: 'rgba(74,144,217,0.08)', fill: true, yAxisID: 'y1', tension: 0.4, pointBorderColor: CHART_COLORS.blue },
-          { type: 'bar', label: 'ADR (¥)', data: adrArr, backgroundColor: barColors, yAxisID: 'y' }
-        ]
-      },
-      options: {
-        responsive: true,
-        animation: { duration: 600, easing: 'easeOutQuart' },
-        plugins: { legend: { display: true } },
-        scales: {
-          x: { grid: { display: false } },
-          y: { position: 'left', beginAtZero: true, title: { display: true, text: 'ADR (¥)', font: { size: 11 } }, ticks: { callback: v => '¥' + v.toLocaleString() } },
-          y1: { position: 'right', min: 0, max: 110, grid: { drawOnChartArea: false }, title: { display: true, text: 'OCC (%)', font: { size: 11 } } }
         }
       }
     });
