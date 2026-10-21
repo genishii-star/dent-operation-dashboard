@@ -44,7 +44,7 @@ jobs:
   # pattern in review-post-weekly.yml.
   determine:
     name: Determine accounts
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04  # Playwright が ubuntu-latest(26.04) 未対応 (2026-10-21)
     outputs:
       accounts: ${{ steps.set.outputs.accounts }}
     steps:
@@ -74,7 +74,7 @@ jobs:
   generate:
     name: Generate drafts (${{ matrix.account }})
     needs: determine
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04  # Playwright が ubuntu-latest(26.04) 未対応 (2026-10-21)
     strategy:
       fail-fast: false
       matrix:
