@@ -19,25 +19,31 @@ JNTO の発表を待って作り直したいときは、そのまま同じコマ
 
 ## スケジュール
 
-`com.dent.all-hands.plist` = **毎月20日 10:07**（このMacの launchd）。
+`com.dent.all-hands.plist` = **毎月20日 10:07**（Mac mini `dent-mac` の launchd。2026-10-17 に MacBook Air から移した）。
 JNTO 訪日外客統計の発表が月によって 15日〜19日とズレるため、20日なら前月分が出揃っている。
 
+gen ユーザーは画面からログインしないので、LaunchAgent ではなく **LaunchDaemon（`UserName`=gen）** で動かす。登録・変更には `dent` の管理者権限が要る（`buddy` で入って実行）:
+
 ```bash
-cp scripts/all-hands/com.dent.all-hands.plist ~/Library/LaunchAgents/
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.dent.all-hands.plist
-launchctl kickstart -k gui/$(id -u)/com.dent.all-hands   # 手動で即実行
-launchctl bootout gui/$(id -u)/com.dent.all-hands        # 停止
+sudo cp /Users/gen/Client/_Dent/claude-code/operation/scripts/all-hands/com.dent.all-hands.plist /Library/LaunchDaemons/
+sudo chown root:wheel /Library/LaunchDaemons/com.dent.all-hands.plist
+sudo launchctl bootstrap system /Library/LaunchDaemons/com.dent.all-hands.plist
+sudo launchctl kickstart -k system/com.dent.all-hands    # 手動で即実行
+sudo launchctl bootout system/com.dent.all-hands         # 停止
 ```
+
+gen のままで手動実行するなら `node scripts/all-hands/build-ah.mjs`（下の「動かし方」）でよい。
+Mac mini で入れたもの: `review/` の `npm install`、Playwright の Chrome Headless Shell（Node 26 だと `npx playwright install` の解凍が固まるので、zip を `~/Library/Caches/ms-playwright/chromium_headless_shell-1217/` に手で展開）、`openpyxl`（`/usr/bin/python3` と Homebrew の両方に `--user`）。
 
 launchd からは **常に `origin/main` の最新コードで動く**（`~/.dent/ah-main` に一時 worktree を作って実行し、終わったら消す）。
 作業フォルダが別ブランチでも古いスクリプトで走ることはなく、生成物も必ず `main` に push される（op.dent-inc.com は main 配信）。
 plist を変えたら上の `cp` → `bootout` → `bootstrap` で入れ直すこと。
 
-ログは `~/.dent/all-hands.log`。Mac がスリープしていて20日を跨いだ場合、launchd は起床時に1回だけ遅れて実行する。
+ログは Mac mini gen の `~/.dent/all-hands.log`。
 
 ## 設定（git に入れない）
 
-`~/.dent/ah.env`（`chmod 600`）:
+Mac mini gen の `~/.dent/ah.env`（`chmod 600`）:
 
 ```
 DECK_PASSWORD=...    デッキの復号パスワード（ダッシュボードと同じ）
@@ -46,7 +52,8 @@ NOTIFY_TOKEN=...     同エンドポイントの Bearer トークン
 ```
 
 D1 は wrangler のローカル OAuth、push は `gh` の認証をそのまま使うので追加の資格情報は要らない。
-逆に言うと **このMacでしか動かない**。CI やクラウドに移すなら D1 のサービストークンと push 用 PAT を別途用意すること。
+ただし gen の `gh` は Tide のアカウント（genshimizu-tide）が既定で、このリポジトリに push できない。plist の中で `GH_TOKEN=$(gh auth token --user genishii-star)` を渡している。手で実行するときも同じものを付けること。
+逆に言うと **Mac mini（gen）でしか動かない**。CI やクラウドに移すなら D1 のサービストークンと push 用 PAT を別途用意すること。
 
 ## データの出どころ
 

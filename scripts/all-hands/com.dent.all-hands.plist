@@ -5,6 +5,16 @@
   <key>Label</key>
   <string>com.dent.all-hands</string>
 
+  <!-- Mac mini（dent-mac）の /Library/LaunchDaemons に置く。gen は画面からログインしないので LaunchAgent は使えない -->
+  <key>UserName</key>
+  <string>gen</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>HOME</key><string>/Users/gen</string>
+    <key>USER</key><string>gen</string>
+    <key>PATH</key><string>/opt/homebrew/bin:/Users/gen/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+
   <!-- 毎月20日 10:07。JNTO の月次発表(15〜19日ごろ)を待てる日付にしてある。 -->
   <key>StartCalendarInterval</key>
   <dict>
@@ -13,7 +23,6 @@
     <key>Minute</key><integer>7</integer>
   </dict>
 
-  <!-- Mac がスリープしていて発火を逃した場合、起きたときに1回だけ実行する -->
   <key>RunAtLoad</key>
   <false/>
 
@@ -24,9 +33,11 @@
     <!-- 作業フォルダは古いブランチのことがあるので、origin/main の一時 worktree で最新のスクリプトを動かす。
          worktree が作れないとき（オフライン等）は作業フォルダのスクリプトで実行する。 -->
     <string>
-OP=/Users/genishii/Client/_Dent/claude-code/operation
+OP=/Users/gen/Client/_Dent/claude-code/operation
 WT="$HOME/.dent/ah-main"
-export DENT_WIKI=/Users/genishii/Client/_Dent/claude-code/wiki
+export DENT_WIKI=/Users/gen/Client/_Dent/claude-code/wiki
+# gen の gh は Tide のアカウントが既定なので、push だけ genishii-star の権限で行う
+export GH_TOKEN=$(gh auth token --user genishii-star)
 cd "$OP"
 git worktree remove --force "$WT" 2>/dev/null; rm -rf "$WT"; git worktree prune
 if git fetch -q origin main &amp;&amp; git worktree add -q --detach "$WT" origin/main &amp;&amp; ln -s "$OP/review/node_modules" "$WT/review/node_modules"; then
@@ -40,8 +51,8 @@ exec node scripts/all-hands/build-ah.mjs
   </array>
 
   <key>StandardOutPath</key>
-  <string>/Users/genishii/.dent/all-hands.log</string>
+  <string>/Users/gen/.dent/all-hands.log</string>
   <key>StandardErrorPath</key>
-  <string>/Users/genishii/.dent/all-hands.log</string>
+  <string>/Users/gen/.dent/all-hands.log</string>
 </dict>
 </plist>
