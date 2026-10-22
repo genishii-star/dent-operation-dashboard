@@ -55,7 +55,13 @@ D1 は wrangler のローカル OAuth、push は `gh` の認証をそのまま�
 | 売上・予約組数・ゲスト数・チャネル・国籍 | D1 `reservations`（チェックイン月） | 純キャンセル(販売額0)と「ブロックされた」を除外 |
 | 室泊数・ADR・稼働率・物件数 | D1 `daily_revenue` | ユニーク prop-day、清掃料のみの行を除外 |
 | 物件マスタ | wiki の `origin/main:site/data/facilities` | 作業ツリーは他人のブランチのことがあるので必ず origin/main から |
+| Tide 活動実績（清掃件数・物件・当日ターン・スタッフ数など） | Tide アカウントの KV `ops-state`（tide-ops-api の清掃ジョブ台帳） | **売上・原価は載せない**。CO日基準・「済」のみ・スポットは別扱い＝`/api/segment` と同じ数え方。下記 |
 | 訪日外客数 | JNTO 公式Excel（`_files/<日付>_1615-5.xlsx`） | 翌月中旬発表。国別も最新月まで揃う |
+
+Tide の KV は Tide の Cloudflare アカウントにあり、gen の wrangler（Dent アカウント）では読めない。
+`_Tide/07-deploy/.env` の `CLOUDFLARE_API_TOKEN` を**読むだけ**で使う（`finance(Tide)/deploy.sh` と同じ扱い。場所を変えるなら `ah.env` に `TIDE_ENV=` を書く）。
+取れなかったときはデッキ全体は止めず、Tide スライドを「取得できませんでした」にして Slack に警告を出す。
+集計は `lib/tide.mjs`。tide-ops-api の数え方（`readState` の差分畳み込み・`isSpotJob`・CO日基準）を変えたらここも直すこと。
 
 **前月・前年も毎回まるごと再集計する**（like-for-like）。過去月の実績は再同期で少しずつ動くので、
 前回デッキの値を据え置くとダッシュボードと食い違う。前月比・前年比は常に同じスコープの比較になる。

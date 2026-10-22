@@ -12,6 +12,7 @@
 //   DECK_PASSWORD=...      デッキの復号パスワード（ダッシュボードと同じもの）
 //   NOTIFY_URL=...         dent-slack-bot の /api/notify
 //   NOTIFY_TOKEN=...       同 Bearer トークン
+//   TIDE_ENV=...           （任意）Tide の Cloudflare トークンを持つ .env。既定 ~/Client/_Tide/07-deploy/.env
 // D1 は wrangler のローカル OAuth、push は gh の認証をそのまま使う（追加の資格情報は不要）。
 import fs from 'fs';
 import os from 'os';
@@ -19,6 +20,7 @@ import path from 'path';
 import { execFileSync } from 'child_process';
 import { encrypt } from './lib/crypt.mjs';
 import { aggregate, getDaysInMonth } from './lib/aggregate.mjs';
+import { aggregateTide } from './lib/tide.mjs';
 
 const ROOT = path.resolve(new URL('../..', import.meta.url).pathname);      // operation/
 const AH = path.join(ROOT, 'all-hands');
@@ -106,6 +108,22 @@ async function main() {
   const drift = Math.abs(agg.data.prv.sales / (c.sales || 1) - 1);
   if (drift > 3) warnings.push(`前月比が ${(drift * 100).toFixed(0)}% と極端です。データ欠損の可能性`);
 
+  // ---------- Tide（清掃パートナー）の活動実績。売上は載せない ----------
+  // 取れなくてもデッキ全体は止めない（Tide スライドだけ空欄にして警告する）
+  log('Tide の清掃実績を取得中…');
+  let tide = null;
+  try {
+    const r = await aggregateTide({
+      envFile: env.TIDE_ENV || path.join(os.homedir(), 'Client/_Tide/07-deploy/.env'),
+      curYm: CUR, prvYm: PRV, names: agg.names,
+    });
+    tide = r.tide;
+    warnings.push(...r.warnings);
+    if (tide) log(`Tide 清掃 ${tide.cur.count}件 / ${tide.cur.props}棟`);
+  } catch (e) {
+    warnings.push(`Tide の実績を取得できませんでした（${e.message}）。Tide スライドは空欄です`);
+  }
+
   // ---------- JNTO ----------
   log('JNTO 訪日外客統計を取得中…');
   const page = await (await fetch('https://www.jnto.go.jp/statistics/data/visitors-statistics/')).text();
@@ -129,6 +147,7 @@ async function main() {
       ...agg.extra,
       jnto: { months: jnto.months, cur: jnto.cur, prev: jnto.prev },
       jntoCountries: { latest: jnto.countriesCur, prevYear: jnto.countriesPrev },
+      tide,
     },
   };
   // 大阪・関西万博（2025/4〜10）の特需は前年比を大きく歪めるので、該当する月だけ注記する
@@ -162,7 +181,7 @@ async function main() {
     const card = `\n    <a href="${MEET}.html" class="meeting-card">\n` +
       `      <div class="date"><span class="y">${MEET.split('-')[0]}</span><span class="m">${+MEET.split('-')[1]}月</span></div>\n` +
       `      <div class="info">\n        <div class="title">${curY}年${curM}月まとめ</div>\n` +
-      `        <div class="desc">KPI / チャネル / 国籍 / エリア別 / JNTO業界アップデート</div>\n` +
+      `        <div class="desc">KPI / チャネル / 国籍 / エリア別 / Tide / JNTO業界アップデート</div>\n` +
       `      </div>\n      <div class="arrow">›</div>\n    </a>\n`;
     fs.writeFileSync(idxFile, idx.replace(anchor, anchor + card));
     return true;
@@ -181,6 +200,7 @@ async function main() {
     `売上 ${(c.sales / 10000).toFixed(0)}万円（前月比 ${fmtPct(c.sales, agg.data.prv.sales)}・前年比 ${fmtPct(c.sales, agg.data.yearAgo.sales)}）`,
     `稼働率 ${(c.occ * 100).toFixed(1)}% / ADR ${Math.round(c.adr).toLocaleString()}円 / 予約 ${c.count}組 / 稼働 ${agg.activeRooms}室`,
   ];
+  if (tide) summary.push(`Tide 清掃 ${tide.cur.count}件（前月 ${tide.prv.count}件）/ ${tide.cur.props}棟・${tide.cur.units}室 / スタッフ ${tide.cur.staff}名`);
   if (DRY) {
     log('--dry-run のため push と Slack 通知はしません');
     log(summary.join('\n'));

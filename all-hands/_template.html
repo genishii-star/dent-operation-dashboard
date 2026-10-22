@@ -73,7 +73,7 @@
   table { width: 100%; border-collapse: collapse; font-size: 14px; }
   th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid #f0f0f0; }
   th { font-size: 12px; color: #666; font-weight: 600; border-bottom: 2px solid #e5e5e5; }
-  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 
   /* Summary block */
   .insight-list { display: flex; flex-direction: column; gap: 14px; margin-top: 8px; }
@@ -223,6 +223,7 @@ window.addEventListener('DOMContentLoaded', async () => {
     <ol class="agenda-list">
       <li>{{CUR_Y}}年{{CUR_M}}月の振り返り（KPI / チャネル / 国籍）</li>
       <li>エリア別パフォーマンス</li>
+      <li>Tide 活動実績（清掃）</li>
       <li>業界アップデート（JNTO 訪日外客数）</li>
       <li>ハイライト・要観察ポイント</li>
       <li>連絡事項</li>
@@ -346,6 +347,52 @@ window.addEventListener('DOMContentLoaded', async () => {
         ※ ADR = (売上合計 − 清掃料) ÷ 室泊数。物件数は物件マスタ「稼働中」の全室（KPI除外9室を含む／ダッシュボードのスコアカードと同一基準）。
       </div>
     </div>
+  </div>
+</section>
+
+<!-- Slide 6b: Tide（清掃パートナー）。件数・物件・人数だけで、売上は載せない -->
+<section class="slide">
+  <h2>Tide 活動実績</h2>
+  <div class="h2-sub">{{CUR_YM_SLASH}} ・ 清掃パートナー Tide の現場実績（チェックアウト日基準・完了分）</div>
+  <div id="tideEmpty" class="card" style="display:none; flex:1; align-items:center; justify-content:center; color:#999; font-size:16px;">Tide の実績を取得できませんでした</div>
+  <div id="tideBody" style="display:flex; flex-direction:column; flex:1; min-height:0;">
+    <div class="kpi-grid" style="grid-template-columns: repeat(4, 1fr); margin-bottom: 20px;">
+      <div class="kpi-card">
+        <div class="label">清掃件数</div>
+        <div class="value" id="tide-count">—</div>
+        <div class="delta"><span id="tide-count-mom">—</span></div>
+      </div>
+      <div class="kpi-card">
+        <div class="label">対象物件</div>
+        <div class="value" id="tide-props">—</div>
+        <div class="delta"><span id="tide-props-mom">—</span></div>
+      </div>
+      <div class="kpi-card">
+        <div class="label">当日ターン（清掃日に次のIN）</div>
+        <div class="value" id="tide-sameday">—</div>
+        <div class="delta"><span id="tide-sameday-sub">—</span></div>
+      </div>
+      <div class="kpi-card">
+        <div class="label">稼働スタッフ</div>
+        <div class="value" id="tide-staff">—</div>
+        <div class="delta"><span id="tide-staff-mom">—</span></div>
+      </div>
+    </div>
+    <div class="row-3">
+      <div class="card">
+        <h3>月次 清掃件数の推移（エリア別）</h3>
+        <div class="chart-wrap"><canvas id="tideTrendChart"></canvas></div>
+      </div>
+      <div class="card">
+        <h3>エリア別</h3>
+        <table id="tideAreaTable">
+          <thead><tr><th>エリア</th><th class="num">清掃</th><th class="num">物件</th><th class="num">当日ターン</th></tr></thead>
+          <tbody></tbody>
+        </table>
+        <div id="tideNotes" style="margin-top: 18px; font-size: 13px; line-height: 1.8; color: #1d1d1f; overflow:auto; min-height:0;"></div>
+      </div>
+    </div>
+    <div class="footer-note">※ 出典: Tide 運用ダッシュボード（清掃ジョブの台帳）。セットアップ・共用部などのスポット対応は清掃件数に含めない。対象物件＝当月に清掃した棟数。</div>
   </div>
 </section>
 
@@ -653,6 +700,68 @@ buildCountryChart('countryPrvChart', p.byCountry);
       <td class="num">${cur.properties}</td>
     </tr>`;
   });
+})();
+
+// === Tide slide ===
+(function renderTide() {
+  const t = EXTRA.tide;
+  if (!t) {
+    document.getElementById('tideBody').style.display = 'none';
+    document.getElementById('tideEmpty').style.display = 'flex';
+    return;
+  }
+  const c = t.cur, p = t.prv;
+  const unit = u => '<span class="unit">' + u + '</span>';
+  const mom = (id, cur, prv, suffix) => {
+    const el = document.getElementById(id);
+    el.textContent = diffText(cur, prv, suffix, '前月差', 0);
+    el.className = cur >= prv ? 'positive' : 'negative';
+  };
+  document.getElementById('tide-count').innerHTML = c.count.toLocaleString() + unit('件');
+  mom('tide-count-mom', c.count, p.count, '件');
+  document.getElementById('tide-props').innerHTML = c.props + unit('棟') + ' ' + c.units + unit('室');
+  mom('tide-props-mom', c.props, p.props, '棟');
+  document.getElementById('tide-sameday').innerHTML = c.sameDay + unit('件');
+  const sd = document.getElementById('tide-sameday-sub');
+  sd.textContent = c.count ? '清掃の ' + Math.round(c.sameDay / c.count * 100) + '%' : '—';
+  sd.className = 'neutral';
+  document.getElementById('tide-staff').innerHTML = c.staff + unit('名');
+  mom('tide-staff-mom', c.staff, p.staff, '名');
+
+  const colors = { '大阪':'#007aff','京都':'#af52de','東京':'#34c759' };
+  new Chart(document.getElementById('tideTrendChart'), {
+    type: 'bar',
+    data: {
+      labels: t.trend.months.map(m => +m.split('-')[1] + '月'),
+      datasets: t.trend.areas.map(a => ({ label: a, data: t.trend.data.map(o => o[a] || 0), backgroundColor: colors[a] || '#999', borderRadius: 4 })),
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: {
+        legend: { position: 'bottom', labels: { font: {size: 12}, padding: 10 } },
+        tooltip: { callbacks: { label: x => x.dataset.label + ': ' + x.parsed.y + '件' } },
+      },
+      scales: { x: { stacked: true }, y: { stacked: true, beginAtZero: true, ticks: { precision: 0 } } },
+    },
+  });
+
+  const tbody = document.querySelector('#tideAreaTable tbody');
+  ['大阪','京都','東京'].filter(a => c.byArea[a]).forEach(a => {
+    const v = c.byArea[a];
+    tbody.innerHTML += `<tr><td><strong>${a}</strong></td><td class="num">${v.count}</td><td class="num">${v.props}</td><td class="num">${v.sameDay}</td></tr>`;
+  });
+
+  const esc = s => String(s).replace(/[&<>"]/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[ch]));
+  const notes = [];
+  if (c.newProps.length) notes.push('<strong>新規立ち上げ ' + c.newProps.length + '棟</strong>：' + c.newProps.map(x => esc(x.name)).join('、'));
+  if (c.spots.length) {
+    const byTitle = {};
+    c.spots.forEach(x => { byTitle[x.title] = (byTitle[x.title] || 0) + 1; });
+    notes.push('<strong>スポット対応 ' + c.spots.length + '件</strong>：' + Object.entries(byTitle).map(([k, n]) => esc(k) + (n > 1 ? '×' + n : '')).join('、'));
+  }
+  if (c.count) notes.push('<strong>清掃報告</strong>：' + c.reports + '/' + c.count + '件（写真 ' + c.photos.toLocaleString() + '枚）');
+  if (t.next) notes.push('<strong>{{MEET_M}}月の予定</strong>：' + t.next + '件（資料作成時点で台帳に入っている分）');
+  document.getElementById('tideNotes').innerHTML = notes.map(n => '<div>' + n + '</div>').join('');
 })();
 
 // === JNTO slide ===

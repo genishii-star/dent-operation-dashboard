@@ -28,6 +28,9 @@ try {
     insights: document.querySelectorAll('.insight-item').length,
     areaRows: document.querySelectorAll('#areaTable tbody tr').length,
     jntoRows: document.querySelectorAll('#jntoCountryTable tbody tr').length,
+    // Tide は取れない月があり得る（build 側で警告済み）。取れているのに描けていないときだけ落とす
+    tideShown: document.getElementById('tideBody')?.style.display !== 'none',
+    tideCount: document.getElementById('tide-count')?.textContent?.trim(),
   }));
   await b.close();
 
@@ -35,6 +38,7 @@ try {
   if (r.charts < r.canvases) errors.push(`グラフが ${r.canvases} 個中 ${r.charts} 個しか生成されていません`);
   if (r.insights < 4) errors.push(`インサイトが ${r.insights} 件しかありません`);
   if (r.areaRows < 1) errors.push('エリア別テーブルが空です');
+  if (r.tideShown && (!r.tideCount || r.tideCount === '—')) errors.push('Tide スライドが描画されていません');
   if (r.jntoRows < 5) errors.push(`JNTO 国別テーブルが ${r.jntoRows} 行しかありません`);
   result = { ok: errors.length === 0, errors, ...r };
 } catch (e) {
