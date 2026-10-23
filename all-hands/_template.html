@@ -223,7 +223,7 @@ window.addEventListener('DOMContentLoaded', async () => {
     <ol class="agenda-list">
       <li>{{CUR_Y}}年{{CUR_M}}月の振り返り（KPI / チャネル / 国籍）</li>
       <li>エリア別パフォーマンス</li>
-      <li>Tide 活動実績（清掃）</li>
+      <li>Tide 活動実績（清掃・内製化率）</li>
       <li>業界アップデート（JNTO 訪日外客数）</li>
       <li>ハイライト・要観察ポイント</li>
       <li>連絡事項</li>
@@ -386,13 +386,13 @@ window.addEventListener('DOMContentLoaded', async () => {
       <div class="card">
         <h3>エリア別</h3>
         <table id="tideAreaTable">
-          <thead><tr><th>エリア</th><th class="num">清掃</th><th class="num">物件</th><th class="num">当日ターン</th></tr></thead>
+          <thead><tr><th>エリア</th><th class="num">清掃</th><th class="num">物件</th><th class="num">当日ターン</th><th class="num">内製化率</th></tr></thead>
           <tbody></tbody>
         </table>
         <div id="tideNotes" style="margin-top: 18px; font-size: 13px; line-height: 1.8; color: #1d1d1f; overflow:auto; min-height:0;"></div>
       </div>
     </div>
-    <div class="footer-note">※ 出典: Tide 運用ダッシュボード（清掃ジョブの台帳）。セットアップ・共用部などのスポット対応は清掃件数に含めない。対象物件＝当月に清掃した棟数。</div>
+    <div class="footer-note">※ 出典: Tide 運用ダッシュボード（清掃ジョブの台帳）。セットアップ・共用部などのスポット対応は清掃件数に含めない。対象物件＝当月に清掃した棟数。<br>内製化率＝Tide が当月に清掃した棟数 ÷ 物件マスタ「稼働中」のうちオーナー清掃（清掃をオーナーが手配）を除いた棟数。</div>
   </div>
 </section>
 
@@ -746,9 +746,12 @@ buildCountryChart('countryPrvChart', p.byCountry);
   });
 
   const tbody = document.querySelector('#tideAreaTable tbody');
-  ['大阪','京都','東京'].filter(a => c.byArea[a]).forEach(a => {
-    const v = c.byArea[a];
-    tbody.innerHTML += `<tr><td><strong>${a}</strong></td><td class="num">${v.count}</td><td class="num">${v.props}</td><td class="num">${v.sameDay}</td></tr>`;
+  const ins = t.insource || {};
+  ['大阪','京都','東京'].filter(a => c.byArea[a] || ins[a]).forEach(a => {
+    const v = c.byArea[a] || { count: 0, props: 0, sameDay: 0 };
+    const r = ins[a];
+    const rate = r && r.base ? `<strong>${Math.round(r.tide / r.base * 100)}%</strong> <span style="font-size:11px;color:#999;">${r.tide}/${r.base}</span>` : '—';
+    tbody.innerHTML += `<tr><td><strong>${a}</strong></td><td class="num">${v.count}</td><td class="num">${v.props}</td><td class="num">${v.sameDay}</td><td class="num">${rate}</td></tr>`;
   });
 
   const esc = s => String(s).replace(/[&<>"]/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[ch]));

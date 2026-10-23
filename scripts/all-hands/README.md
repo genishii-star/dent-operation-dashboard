@@ -70,6 +70,8 @@ Tide の KV は Tide の Cloudflare アカウントにあり、gen の wrangler�
 取れなかったときはデッキ全体は止めず、Tide スライドを「取得できませんでした」にして Slack に警告を出す。
 集計は `lib/tide.mjs`。tide-ops-api の数え方（`readState` の差分畳み込み・`isSpotJob`・CO日基準）を変えたらここも直すこと。
 
+**内製化率**（エリア別）＝当月に Tide が清掃した棟 ÷ 物件マスタ「稼働中」の棟のうちオーナー清掃を除いたもの。オーナー清掃の判定は facilities YAML の `cleaning_arranged_by: owner` だけを見る（2026-10-23 石井さん）。マスタ上オーナー手配でも Tide が清掃していれば分母に残す（ETB）。**オーナー清掃の物件が増えたら YAML に `cleaning_arranged_by: owner` を付けること**（付け忘れると分母が膨らんで率が下がる）。
+
 **前月・前年も毎回まるごと再集計する**（like-for-like）。過去月の実績は再同期で少しずつ動くので、
 前回デッキの値を据え置くとダッシュボードと食い違う。前月比・前年比は常に同じスコープの比較になる。
 

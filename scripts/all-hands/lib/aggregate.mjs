@@ -223,6 +223,11 @@ export function aggregate(opts) {
     activeRooms: properties.length,
     // 物件コード → 表示名（Tide スライドで新規立ち上げ物件を名前で出すため）
     names: Object.fromEntries(facilities.filter(f => f.code && f.name).map(f => [String(f.code).toUpperCase(), String(f.name)])),
+    // 稼働中の施設（棟単位）とオーナー清掃の印（Tide の内製化率の分母に使う）
+    facilities: facilities.filter(f => f.code && (f.status || 'active') === 'active').map(f => ({
+      code: String(f.code).toUpperCase(), area: REGION_TO_AREA[(f.region || '').toLowerCase()] || '',
+      ownerClean: f.cleaning_arranged_by === 'owner',
+    })),
     excludedRooms: properties.filter(p => p.excludeKpi).length,
     data: {
       cur: monthBlock(opts.curYm), prv: monthBlock(opts.prvYm), yearAgo: monthBlock(opts.yaYm),

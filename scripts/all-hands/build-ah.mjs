@@ -115,7 +115,7 @@ async function main() {
   try {
     const r = await aggregateTide({
       envFile: env.TIDE_ENV || path.join(os.homedir(), 'Client/_Tide/07-deploy/.env'),
-      curYm: CUR, prvYm: PRV, names: agg.names,
+      curYm: CUR, prvYm: PRV, names: agg.names, facilities: agg.facilities,
     });
     tide = r.tide;
     warnings.push(...r.warnings);

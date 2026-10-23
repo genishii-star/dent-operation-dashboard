@@ -7,6 +7,9 @@
 // 月の基準は CO日（checkout||date）。tide-ops-api の /api/segment（地域別の月次）と同じ＝あちらと件数が揃う。
 // スポット（kind="spot"＝セットアップ・共用部など清掃以外の対応）は清掃件数に混ぜない（同じく /api/segment と同じ）。
 //
+// 内製化率 = 当月に Tide が清掃した棟 ÷ 稼働中の棟のうちオーナー清掃（cleaning_arranged_by: owner）を除いたもの。
+// マスタ上オーナー手配でも Tide が清掃していれば分母に残す（例: ETB）。エリアは Dent の物件マスタの region。
+//
 // 認証は Tide の Cloudflare API トークン（_Tide/07-deploy/.env）。gen の wrangler は Dent アカウントなので使えない。
 // ここでは読むだけで、トークンを複製しない（finance(Tide)/deploy.sh と同じ扱い）。
 import fs from 'fs';
@@ -59,9 +62,10 @@ const shift = (ym, n) => {
  * @param {string} opts.envFile   Tide の Cloudflare トークンを持つ .env
  * @param {string} opts.curYm, opts.prvYm
  * @param {object} opts.names     物件コード → 表示名（Dent の物件マスタ）
+ * @param {Array}  opts.facilities 稼働中の施設 [{code, area, ownerClean}]（内製化率の分母）
  * @returns {{ tide: object|null, warnings: string[] }}
  */
-export async function aggregateTide({ envFile, curYm, prvYm, names = {} }) {
+export async function aggregateTide({ envFile, curYm, prvYm, names = {}, facilities = [] }) {
   const warnings = [];
   if (!fs.existsSync(envFile)) return { tide: null, warnings: [`Tide の認証ファイルがありません（${envFile}）。Tide スライドは空欄です`] };
   const env = readEnvFile(envFile);
@@ -111,6 +115,17 @@ export async function aggregateTide({ envFile, curYm, prvYm, names = {} }) {
   }
 
   const cur = month(curYm), prv = month(prvYm);
+
+  const cleanedNow = new Set(cleans.filter(j => j.status === '済' && coOf(j).startsWith(curYm)).map(j => j.prop));
+  const known = new Set(facilities.map(f => f.code));
+  const unknown = [...cleanedNow].filter(p => !known.has(p));
+  if (facilities.length && unknown.length) warnings.push(`Tide: 物件マスタの稼働中に無い施設を清掃しています（内製化率に入れていません）: ${unknown.join(', ')}`);
+  const insource = {};
+  AREAS.forEach(a => {
+    const base = facilities.filter(f => f.area === a && (!f.ownerClean || cleanedNow.has(f.code)));
+    if (base.length) insource[a] = { tide: base.filter(f => cleanedNow.has(f.code)).length, base: base.length };
+  });
+
   if (cur.undone) warnings.push(`Tide: ${curYm} の清掃のうち ${cur.undone} 件が「済」になっていません（件数に入れていません）`);
 
   // 推移は立ち上げ月から最大12ヶ月
@@ -130,5 +145,5 @@ export async function aggregateTide({ envFile, curYm, prvYm, names = {} }) {
   const nextYm = shift(curYm, 1);
   const next = cleans.filter(j => coOf(j).startsWith(nextYm)).length;
 
-  return { tide: { cur, prv, trend, next, nextYm, since: start }, warnings };
+  return { tide: { cur, prv, trend, next, nextYm, since: start, insource }, warnings };
 }
